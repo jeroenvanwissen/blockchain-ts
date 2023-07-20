@@ -1,0 +1,26 @@
+{
+  "name": "blockchain-js",
+  "version": "0.0.1",
+  "description": "A simple blockchain network application built on NodeJS",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeroenvanwissen/blockchain-js.git"
+  },
+  "author": "Jeroen van Wissen",
+  "license": "CC0-1.0",
+  "bugs": {
+    "url": "https://github.com/jeroenvanwissen/blockchain-js/issues"
+  },
+  "homepage": "https://github.com/jeroenvanwissen/blockchain-js#readme",
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "dependencies": {
+    "winston": "^3.10.0"
+  }
+}
