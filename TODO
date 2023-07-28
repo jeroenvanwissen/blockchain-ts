@@ -1,0 +1,20 @@
+Blockchain JS TODOs
+-------------------
+
+Networking:
+  [ ] Store connected peers info to data file
+  [ ] Add logic to sync peer information to all peers, so each peer can connect to available peers.
+  [ ] Add logic to limit max amount of reconnects to a peer
+  [ ] Add logic to broadcast to all peers ( relaying )
+  [ ] Research how to prevent a client connecting to itself
+
+Blockchain:
+  [ ] Write base block structure & logic
+  [ ] Write base blockchain structure & logic
+  [ ] Write blockchain mining (PoW / PoS) logic
+  [ ] Write blockchain consensus / validation logic
+  [ ] Write blockchain transactions logic
+
+API:
+  [ ] Write API to interact with blockchain
+  [ ] Write API to interact with transactions
