@@ -21,6 +21,6 @@
     "nodemon": "^3.0.1"
   },
   "dependencies": {
-    "winston": "^3.10.0"
+    "winston": "^3.11.0"
   }
 }
