@@ -18,7 +18,7 @@
   },
   "homepage": "https://github.com/jeroenvanwissen/blockchain-js#readme",
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.2"
   },
   "dependencies": {
     "winston": "^3.10.0"
