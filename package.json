@@ -1,26 +1,46 @@
 {
-  "name": "blockchain-js",
-  "version": "0.0.1",
-  "description": "A simple blockchain network application built on NodeJS",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/jeroenvanwissen/blockchain-js.git"
-  },
-  "author": "Jeroen van Wissen",
-  "license": "CC0-1.0",
-  "bugs": {
-    "url": "https://github.com/jeroenvanwissen/blockchain-js/issues"
-  },
-  "homepage": "https://github.com/jeroenvanwissen/blockchain-js#readme",
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
-  "dependencies": {
-    "winston": "^3.10.0"
-  }
+	"name": "blockchain-js",
+	"version": "0.0.1",
+	"description": "A simple blockchain network application built on NodeJS",
+	"main": "index.js",
+	"scripts": {
+		"start": "node dist/index.js",
+		"dev": "nodemon src/index.ts",
+		"mine": "nodemon src/mine.ts",
+		"lint": "eslint .",
+		"lint:fix": "eslint . --fix",
+		"test": "jest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jeroenvanwissen/blockchain-js.git"
+	},
+	"author": "Jeroen van Wissen",
+	"license": "CC0-1.0",
+	"bugs": {
+		"url": "https://github.com/jeroenvanwissen/blockchain-js/issues"
+	},
+	"homepage": "https://github.com/jeroenvanwissen/blockchain-js#readme",
+	"devDependencies": {
+		"@types/crypto-js": "^4.2.2",
+		"@types/jest": "^29.5.14",
+		"@types/node": "^22.7.5",
+		"@types/secp256k1": "^4.0.6",
+		"@typescript-eslint/eslint-plugin": "^8.13.0",
+		"@typescript-eslint/parser": "^8.13.0",
+		"eslint-plugin-jest": "^28.9.0",
+		"jest": "^29.7.0",
+		"nodemon": "^3.1.7",
+		"secp256k1": "^5.0.1",
+		"ts-jest": "^29.2.5",
+		"ts-node": "^10.9.2",
+		"typescript": "^5.6.3"
+	},
+	"dependencies": {
+		"@fastone/eslint-config": "^1.0.12",
+		"@types/ws": "^8.5.12",
+		"crypto-js": "^4.2.0",
+		"winston": "^3.15.0",
+		"ws": "^8.18.0"
+	}
 }
