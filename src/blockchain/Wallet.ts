@@ -1,8 +1,8 @@
 import * as crypto from 'crypto';
-import * as secp256k1 from 'secp256k1';
+import secp256k1 from 'secp256k1';
 import * as fs from 'fs';
 import * as path from 'path';
-import { RIPEMD160 } from 'crypto-js';
+import CryptoJS from 'crypto-js';
 import { Transaction } from './Transaction';
 
 interface WalletData {
@@ -64,19 +64,31 @@ export class Wallet {
 		} while (!secp256k1.privateKeyVerify(this.privateKey));
 
 		// Generate public key
-		this.publicKey = Buffer.from(secp256k1.publicKeyCreate(this.privateKey));
+		this.publicKey = Buffer.from(
+			secp256k1.publicKeyCreate(this.privateKey)
+		);
 
-		// Generate address (Bitcoin-style)
+		// Rest of the method remains the same
 		const sha256Hash = Buffer.from(
 			crypto.createHash('sha256').update(this.publicKey).digest()
 		);
-		const ripemdHash = RIPEMD160(sha256Hash.toString('hex')).toString();
-		// Ensure ripemdHash is a valid hex string before creating Buffer
+		const ripemdHash = CryptoJS.RIPEMD160(sha256Hash.toString('hex')).toString();
 		const ripemdBuffer = Buffer.from(ripemdHash.replace('0x', ''), 'hex');
 		this.address = this.encodeAddress(ripemdBuffer);
 
 		this.saveWallet();
 	}
+
+	signTransaction(tx: Transaction): void {
+        tx.inputs.forEach((input) => {
+            const msgHash = Buffer.from(
+                crypto.createHash('sha256').update(tx.calculateHash()).digest()
+            );
+
+            const signatureObj = secp256k1.ecdsaSign(msgHash, this.privateKey);
+            input.signature = Buffer.from(signatureObj.signature).toString('hex');
+        });
+    }
 
 	private loadWallet(): void {
 		const data: WalletData = JSON.parse(
@@ -176,6 +188,10 @@ export class Wallet {
 		return this.utxos.reduce((sum, utxo) => sum + utxo.amount, 0);
 	}
 
+	getAddress(): string {
+		return this.address;
+	}
+
 	getSpendableOutputs(amount: number): { outputs: UTXO[]; total: number } {
 		let total = 0;
 		const outputs: UTXO[] = [];
@@ -239,16 +255,15 @@ export class Wallet {
 	}
 
 	signTransaction(tx: Transaction): void {
-		tx.inputs.forEach((input) => {
-			const msgHash = Buffer.from(
-				crypto.createHash('sha256').update(tx.calculateHash()).digest()
-			);
+        tx.inputs.forEach((input) => {
+            const msgHash = Buffer.from(
+                crypto.createHash('sha256').update(tx.calculateHash()).digest()
+            );
 
-			const signature = secp256k1.ecdsaSign(msgHash, this.privateKey);
-			input.signature = Buffer.from(signature.signature).toString('hex');
-			// Removed input.publicKey = this.publicKey.toString('hex'); // Ensure public key is set
-		});
-	}
+            const signature = secp256k1.sign(msgHash, this.privateKey);
+            input.signature = Buffer.from(signature.signature).toString('hex');
+        });
+    }
 
 	// Add base58 encoding (simplified version)
 	private base58Encode(buffer: Buffer): string {

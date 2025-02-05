@@ -13,26 +13,27 @@ export interface TxOutput {
 }
 
 export class Transaction {
-	public timestamp: number;
-	public inputs: TxInput[];
-	public outputs: TxOutput[];
+    public inputs: TxInput[];
+    public outputs: TxOutput[];
+    public timestamp: number;
+    private nonce: number;
 
-	constructor(inputs: TxInput[], outputs: TxOutput[], timestamp?: number) {
-		this.inputs = inputs;
-		this.outputs = outputs.map((output) => ({
-			...output,
-			address: this.hashAddress(output.address),
-		}));
-		this.timestamp = timestamp || Date.now();
-	}
+    constructor(inputs: TxInput[], outputs: TxOutput[], timestamp?: number) {
+        this.inputs = inputs;
+        this.outputs = outputs;
+        this.timestamp = timestamp || Date.now();
+        this.nonce = Math.floor(Math.random() * 1000000);  // Initialize nonce with random value
+    }
 
-	calculateHash(): string {
-		const data =
-			JSON.stringify(this.inputs) +
-			JSON.stringify(this.outputs) +
-			this.timestamp;
-		return crypto.createHash('sha256').update(data).digest('hex');
-	}
+    calculateHash(): string {
+        const data = JSON.stringify({
+            inputs: this.inputs,
+            outputs: this.outputs,
+            timestamp: this.timestamp,
+            nonce: this.nonce
+        });
+        return crypto.createHash('sha256').update(data).digest('hex');
+    }
 
 	signTransaction(privateKey: string): void {
 		this.inputs.forEach((input) => {

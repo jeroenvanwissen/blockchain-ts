@@ -29,10 +29,16 @@ export class StakingService {
 	}
 
 	private tryGenerateStakeBlock(): void {
-		const block = this.blockchain.generateStakeBlock(this.stakeholderAddress);
-		if (block) {
-			this.blockchain.addMinedBlock(block);
-			console.log(`Generated PoS block at height ${block.index}`);
+		try {
+			const block = this.blockchain.generateStakeBlock(this.stakeholderAddress);
+			if (block) {
+				this.blockchain.addMinedBlock(block);
+				console.log(`Generated PoS block at height ${block.index}`);
+			}
+		} catch (error) {
+			console.error('Failed to generate stake block:', error);
+			// Retry after a short delay
+			setTimeout(() => this.tryGenerateStakeBlock(), 5000);
 		}
 	}
 }

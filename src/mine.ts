@@ -76,48 +76,48 @@ const connectToPeer = async (peer: string) => {
 		console.log(`Connected to peer: ${peer}`);
 		connectedToPeer = true;
 
-		// // Set up message handling
-		// socket.on('message', (data: WebSocket.Data) => {
-		// 	try {
-		// 		const message = JSON.parse(data.toString());
+		// Set up message handling
+		socket.on('message', (data: WebSocket.Data) => {
+			try {
+				const message = JSON.parse(data.toString());
 
-		// 		switch (message.type) {
-		// 			case 'CHAIN':
-		// 				blockchain.replaceChain(message.data);
-		// 				break;
-		// 			case 'TRANSACTION':
-		// 				blockchain.addTransaction(message.data);
-		// 				break;
-		// 			case 'NEW_BLOCK':
-		// 				const blockData = message.data;
-		// 				// Reconstruct the Block instance
-		// 				const block = new Block(
-		// 					blockData.index,
-		// 					blockData.timestamp,
-		// 					blockData.transactions,
-		// 					blockData.previousHash,
-		// 					blockData.miner,
-		// 					blockData.consensusType,
-		// 					blockData.validatorStake,
-		// 					blockData.hash
-		// 				);
-		// 				block.nonce = blockData.nonce;
+				switch (message.type) {
+					case 'CHAIN':
+						blockchain.replaceChain(message.data);
+						break;
+					case 'TRANSACTION':
+						blockchain.addTransaction(message.data);
+						break;
+					case 'NEW_BLOCK':
+						const blockData = message.data;
+						// Reconstruct the Block instance
+						const block = new Block(
+							blockData.index,
+							blockData.timestamp,
+							blockData.transactions,
+							blockData.previousHash,
+							blockData.miner,
+							blockData.consensusType,
+							blockData.validatorStake,
+							blockData.hash
+						);
+						block.nonce = blockData.nonce;
 
-		// 				const latestBlock = blockchain.getLatestBlock();
-		// 				if (block.previousHash === latestBlock.hash) {
-		// 					try {
-		// 						const newChain = [...blockchain.getChain(), block];
-		// 						blockchain.replaceChain(newChain);
-		// 					} catch (error) {
-		// 						console.log('Error adding new block:', error);
-		// 					}
-		// 				}
-		// 				break;
-		// 		}
-		// 	} catch (error) {
-		// 		console.log('Error parsing message:', error);
-		// 	}
-		// });
+						const latestBlock = blockchain.getLatestBlock();
+						if (block.previousHash === latestBlock.hash) {
+							try {
+								const newChain = [...blockchain.getChain(), block];
+								blockchain.replaceChain(newChain);
+							} catch (error) {
+								console.log('Error adding new block:', error);
+							}
+						}
+						break;
+				}
+			} catch (error) {
+				console.log('Error parsing message:', error);
+			}
+		});
 
 		// Set the socket in the miner for broadcasting new blocks
 		miner.setSocket(socket);

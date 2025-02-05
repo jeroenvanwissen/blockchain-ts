@@ -31,8 +31,8 @@ export const P2P_PORT = process.env.P2P_PORT
 
 // Consensus configuration
 export const POW_CUTOFF_BLOCK = 100;
-export const POS_START_BLOCK = 80;
-export const MIXED_MODE_START_BLOCK = 80; // New constant for mixed mode
+export const POS_START_BLOCK = 90;  // Changed from 80 to 90
+export const MIXED_MODE_START_BLOCK = 80;  // Keep at 80
 
 // Coin configuration
 export const COIN_MATURITY = 10; // Coins must be at least 10 blocks old
