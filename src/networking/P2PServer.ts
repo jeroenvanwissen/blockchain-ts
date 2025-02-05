@@ -363,31 +363,47 @@ private handleGetLatestBlockMessage(socket: WebSocket): void {
 		}
 	}
 
-	private handleBlockMessage(blockData: Block): void {
-		try {
-			const transactions = blockData.transactions.map(
-				(txData) => new Transaction(txData.inputs, txData.outputs, txData.timestamp, txData.nonce)
-			);
-
-			console.log('transactions:', transactions);
-
-			const block = new Block(
-				blockData.timestamp,
-				transactions,
-				blockData.previousHash,
-				blockData.nonce,
-				blockData.powDifficulty,
-				blockData.index
-			);
-
-			this.blockchain.addMinedBlock(block);
-			this.broadcast({
-				type: MessageType.BLOCK,
-				data: block,
-			});
-		} catch (error) {
-			console.error('Error handling block message:', error);
-		}
+	private async handleBlockMessage(blockData: Block): Promise<void> {
+	    try {
+	        const transactions = blockData.transactions.map(
+	            (txData) => new Transaction(txData.inputs, txData.outputs, txData.timestamp, txData.nonce)
+	        );
+	
+	        const block = new Block(
+	            blockData.timestamp,
+	            transactions,
+	            blockData.previousHash,
+	            blockData.nonce,
+	            blockData.powDifficulty,
+	            blockData.index
+	        );
+	
+	        // Check if we need to sync first
+	        const currentChainLength = this.blockchain.getChain().length;
+	        if (block.index > currentChainLength) {
+	            // Request the full chain from peers
+	            this.broadcast({
+	                type: MessageType.GET_LATEST_BLOCK,
+	                data: null,
+	            });
+	            return;
+	        }
+	
+	        // If the block index matches our current chain length, try to add it
+	        await this.blockchain.replaceLock.acquire();
+	        try {
+	            this.blockchain.addMinedBlock(block);
+	            // Only broadcast if we successfully added the block
+	            this.broadcast({
+	                type: MessageType.BLOCK,
+	                data: block,
+	            });
+	        } finally {
+	            this.blockchain.replaceLock.release();
+	        }
+	    } catch (error) {
+	        console.error('Error handling block message:', error);
+	    }
 	}
 
 	private handleStakeMessage(stakeData: {
