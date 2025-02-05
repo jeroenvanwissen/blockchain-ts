@@ -18,11 +18,11 @@ export class Transaction {
     public timestamp: number;
     private nonce: number;
 
-    constructor(inputs: TxInput[], outputs: TxOutput[], timestamp?: number) {
+    constructor(inputs: TxInput[], outputs: TxOutput[], timestamp?: number, nonce?: number) {
         this.inputs = inputs;
         this.outputs = outputs;
         this.timestamp = timestamp || Date.now();
-        this.nonce = Math.floor(Math.random() * 1000000);  // Initialize nonce with random value
+        this.nonce = nonce || Math.floor(Math.random() * 1000000);  // Initialize nonce with random value
     }
 
     calculateHash(): string {

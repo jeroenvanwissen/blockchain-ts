@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import WebSocket from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,6 +24,7 @@ interface MinedBlock {
 		inputs: TxInput[];
 		outputs: TxOutput[];
 		timestamp?: number;
+        nonce?: number;
 	}[];
 	previousHash: string;
 	nonce: number;
@@ -54,14 +56,14 @@ export class Miner {
     private difficulty = 4;
     private miningTimeout: NodeJS.Timeout | null = null;
     private minerAddress: string;
+    private wsClient: WebSocket | null = null;
 
     constructor(private blockchain: Blockchain) {
         this.targetBlockTime = blockchain.BLOCK_TIME * 1000;
         this.minerAddress = this.getMinerAddressFromWallet();
+        this.connectToNode();
     }
 
-    // Remove setSocket method and socket-related code
-    
     private getMinerAddressFromWallet(): string {
         try {
             const walletData = fs.readFileSync('data/wallet.json', 'utf-8');
@@ -73,27 +75,73 @@ export class Miner {
         }
     }
 
-    private scheduleMining(): void {
-        if (this.miningTimeout) {
-            clearTimeout(this.miningTimeout);
-        }
+    private connectToNode(): void {
+        this.wsClient = new WebSocket('ws://localhost:5001');
         
-        // Schedule next mining attempt after target block time
-        this.miningTimeout = setTimeout(() => {
-            this.startMining();
-        }, this.targetBlockTime);
+        this.wsClient.on('open', () => {
+            console.log('Connected to blockchain node');
+            this.startMining(); // Start mining when connected
+        });
+
+        this.wsClient.on('error', (error) => {
+            console.error('WebSocket error:', error);
+        });
+
+        this.wsClient.on('close', () => {
+            console.log('Disconnected from blockchain node, attempting to reconnect...');
+            this.mining = false; // Stop mining when disconnected
+            setTimeout(() => this.connectToNode(), 5000);
+        });
     }
 
     public startMining(minerAddress?: string): void {
         if (this.mining) return;
         
+        // Check WebSocket connection first
+        if (!this.wsClient || this.wsClient.readyState !== WebSocket.OPEN) {
+            console.log('No connection to blockchain node, skipping mining');
+            return;
+        }
+        
+        // First, request the latest block from the node
+        this.wsClient.send(JSON.stringify({
+            type: 'GET_LATEST_BLOCK'
+        }));
+
+        // Add handler for the latest block response
+        this.wsClient.once('message', (data) => {
+            const response = JSON.parse(data.toString());
+            console.log('Received response:', response);
+            
+            if (response.type === 'LATEST_BLOCK') {
+                const lastBlock = response.data;
+                console.log('Using previous hash:', lastBlock.hash);
+                this.startMiningWithLastBlock(lastBlock, minerAddress);
+            } else if (response.type === 'CHAIN') {
+                // If we receive the full chain, use the last block
+                const chain = response.data;
+                if (chain && chain.length > 0) {
+                    const lastBlock = chain[chain.length - 1];
+                    console.log('Using previous hash from chain:', lastBlock.hash);
+                    this.startMiningWithLastBlock(lastBlock, minerAddress);
+                } else {
+                    console.log('Received empty chain');
+                    this.mining = false;
+                }
+            } else {
+                console.log('Unexpected response type:', response.type);
+                this.mining = false;
+            }
+        });
+    }
+
+    private startMiningWithLastBlock(lastBlock: any, minerAddress?: string): void {
         // Check if PoW is still allowed
         if (!this.blockchain.canAcceptPowBlock()) {
             console.log('PoW mining no longer accepted after block 100');
             return;
         }
-    
-        const lastBlock = this.blockchain.getLatestBlock();
+
         const timeSinceLastBlock = Date.now() - lastBlock.timestamp;
         
         // Check if enough time has passed since the last block
@@ -103,29 +151,39 @@ export class Miner {
             setTimeout(() => this.startMining(minerAddress), delay);
             return;
         }
-    
+
         this.mining = true;
         const addressToUse = minerAddress || this.minerAddress;
 
         // Create coinbase transaction with 100 coin reward
+        const now = Date.now();
         const coinbaseTransaction = new Transaction(
-            [], // No inputs for coinbase transaction
-            [{ address: addressToUse, amount: 100 }] // 100 coin mining reward
+            [],
+            [{ address: addressToUse, amount: 100 }],
+            now
         );
-    
+
         try {
             console.log('Starting mining process with address:', addressToUse);
-            // Create worker for mining
+            const currentDifficulty = this.blockchain.calculateNewDifficulty();
+            
+            // Ensure we have the hash from the last block
+            if (!lastBlock.hash) {
+                throw new Error('Invalid last block: missing hash');
+            }
+            
+            console.log('Mining with previous hash:', lastBlock.hash);
+            
             this.worker = new Worker(path.join(__dirname, 'miningWorker.cjs'), {
                 workerData: {
                     minerAddress: addressToUse,
-                    difficulty: this.blockchain.calculateNewDifficulty(),
-                    previousHash: this.blockchain.getLatestBlock().hash,
-                    pendingTransactions: [coinbaseTransaction, ...this.blockchain.getPendingTransactions()], // Add coinbase first
+                    difficulty: currentDifficulty,
+                    previousHash: lastBlock.hash, // Use the hash from the latest block
+                    pendingTransactions: [coinbaseTransaction, ...this.blockchain.getPendingTransactions()],
                     minTimestamp: lastBlock.timestamp + this.targetBlockTime,
                 },
             });
-    
+
             // Handle worker messages
             this.worker.on('message', (message: WorkerMessage) => {
                 try {
@@ -138,11 +196,34 @@ export class Miner {
                         const minedBlock = message.data;
                         console.log('Block mined:', minedBlock);
     
+                        // Create transactions with exact data from mined block
+                        const transactions = minedBlock.transactions.map(tx => {
+                            // Create a new Transaction instance with the exact data
+                            const transaction = new Transaction(
+                                tx.inputs,
+                                tx.outputs,
+                                tx.timestamp,
+                                tx.nonce // Pass the original timestamp
+                            );
+
+                            // Ensure the transaction properties match exactly
+                            transaction.timestamp = tx.timestamp;
+                            if (tx.nonce !== undefined) {
+                                transaction.nonce = tx.nonce;
+                            }
+
+                            // Make it immutable after setting all properties
+                            Object.freeze(transaction);
+                            
+                            return transaction;
+                        });
+
+                        console.log('Reconstructed transactions:', JSON.stringify(transactions, null, 2));
+                        console.log('block transactions:', transactions);
+
                         const block = new Block(
                             Number(minedBlock.timestamp),
-                            minedBlock.transactions.map(
-                                (tx) => new Transaction(tx.inputs, tx.outputs, tx.timestamp)
-                            ),
+                            transactions,
                             String(minedBlock.previousHash),
                             Number(minedBlock.nonce),
                             Number(minedBlock.difficulty),
@@ -151,16 +232,19 @@ export class Miner {
     
                         // Set hash manually to avoid recalculation
                         block.hash = minedBlock.hash;
+
+                        console.log('block tx.Nonce:', block.transactions[0].nonce);
+                        console.log('block tx.Timestamp:', block.transactions[0].timestamp);
     
-                        this.blockchain.addMinedBlock(block);
-    
-                        if (this.socket) {
-                            this.socket.send(
-                                JSON.stringify({
-                                    type: 'BLOCK',
-                                    data: block,
-                                })
-                            );
+                        // Instead of adding to blockchain directly, send through WebSocket
+                        if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
+                            this.wsClient.send(JSON.stringify({
+                                type: 'BLOCK',
+                                data: block
+                            }));
+                            console.log('Block sent to blockchain node');
+                        } else {
+                            console.error('WebSocket not connected, cannot send block');
                         }
     
                         this.mining = false;
@@ -185,25 +269,32 @@ export class Miner {
             this.mining = false;
         }
     }
+    private scheduleMining(): void {
+        if (this.miningTimeout) {
+            clearTimeout(this.miningTimeout);
+        }
+        
+        // Only schedule next mining if we have a connection
+        if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
+            this.miningTimeout = setTimeout(() => {
+                this.startMining();
+            }, this.targetBlockTime);
+        }
+    }
 
     public stopMining(): void {
         this.mining = false;
         if (this.worker) {
-            void this.worker.terminate();
+            this.worker.terminate();
             this.worker = null;
         }
         if (this.miningTimeout) {
             clearTimeout(this.miningTimeout);
             this.miningTimeout = null;
         }
-    }
-
-    private adjustDifficulty(lastBlockTime: number): void {
-        const timeElapsed = Date.now() - lastBlockTime;
-        if (timeElapsed < this.targetBlockTime / 2) {
-            this.difficulty++;
-        } else if (timeElapsed > this.targetBlockTime * 2) {
-            this.difficulty = Math.max(1, this.difficulty - 1);
+        if (this.wsClient) {
+            this.wsClient.close();
+            this.wsClient = null;
         }
     }
 }

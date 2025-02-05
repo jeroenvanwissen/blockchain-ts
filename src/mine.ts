@@ -27,11 +27,11 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
     },
 });
 
-// Create blockchain instance
-const blockchain = new Blockchain();
+// Remove blockchain instance as it's not needed in the miner process
+// const blockchain = new Blockchain();
 
-// Create miner instance
-const miner = new Miner(blockchain);
+// Create miner instance with empty blockchain (it won't be used)
+const miner = new Miner(new Blockchain());
 
 // Start mining
 console.log('Starting mining operations...');
@@ -44,5 +44,5 @@ process.on('SIGINT', () => {
     process.exit(0);
 });
 
-// Export for testing
-export { blockchain, miner };
+// Export only miner for testing
+export { miner };

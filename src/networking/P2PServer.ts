@@ -11,6 +11,8 @@ export enum MessageType {
 	TRANSACTION = 'TRANSACTION',
 	STAKE = 'STAKE',
 	UNSTAKE = 'UNSTAKE',
+	GET_LATEST_BLOCK = 'GET_LATEST_BLOCK',
+	LATEST_BLOCK = 'LATEST_BLOCK'
 }
 
 interface ChainMessage {
@@ -44,7 +46,17 @@ interface UnstakeMessage {
 	};
 }
 
-export type Message = ChainMessage | TransactionMessage | BlockMessage | StakeMessage | UnstakeMessage;
+interface GetLatestBlockMessage {
+	type: MessageType.GET_LATEST_BLOCK;
+}
+
+interface LatestBlockMessage {
+	type: MessageType.LATEST_BLOCK;
+	data: Block;
+}
+
+export type Message = ChainMessage | TransactionMessage | BlockMessage | 
+    StakeMessage | UnstakeMessage | GetLatestBlockMessage | LatestBlockMessage;
 
 export class P2PServer {
     private sockets: WebSocket[];
@@ -129,17 +141,17 @@ export class P2PServer {
         });
     }
 
-    // Update reconnectToPeer method
-    private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> {
-        const normalizedPeer = this.normalizePeerUrl(peer);
+    // // Update reconnectToPeer method
+    // private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> {
+    //     const normalizedPeer = this.normalizePeerUrl(peer);
         
-        // Don't attempt to reconnect if already connected or connecting
-        if (this.connectedPeers.has(normalizedPeer)) {
-            return;
-        }
+    //     // Don't attempt to reconnect if already connected or connecting
+    //     if (this.connectedPeers.has(normalizedPeer)) {
+    //         return;
+    //     }
 
-        // Rest of the reconnectToPeer method remains the same...
-    }
+    //     // Rest of the reconnectToPeer method remains the same...
+    // }
 
 	private connectSocket(socket: WebSocket): void {
     this.sockets.push(socket);
@@ -252,37 +264,53 @@ private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> 
 	}
 
 	private messageHandler(socket: WebSocket): void {
-    socket.on('message', (message: Buffer | string) => {
-        try {
-            // Convert Buffer to string if necessary
-            const messageStr = message instanceof Buffer ? message.toString() : message;
-            const data: Message = JSON.parse(messageStr);
-            
-            switch (data.type) {
-                case MessageType.CHAIN:
-                    this.handleChainMessage(data.data);
-                    break;
+		socket.on('message', (message: Buffer | string) => {
+				try {
+						const messageStr = message instanceof Buffer ? message.toString() : message;
+						const data: Message = JSON.parse(messageStr);
+						
+						switch (data.type) {
+								case MessageType.CHAIN:
+										this.handleChainMessage(data.data);
+										break;
 
-                case MessageType.BLOCK:
-                    this.handleBlockMessage(data.data);
-                    break;
+								case MessageType.BLOCK:
+										this.handleBlockMessage(data.data);
+										break;
 
-                case MessageType.TRANSACTION:
-                    this.handleTransactionMessage(data.data);
-                    break;
+								case MessageType.TRANSACTION:
+										this.handleTransactionMessage(data.data);
+										break;
 
-                case MessageType.STAKE:
-                    this.handleStakeMessage(data.data);
-                    break;
+								case MessageType.STAKE:
+										this.handleStakeMessage(data.data);
+										break;
 
-                case MessageType.UNSTAKE:
-                    this.handleUnstakeMessage(data.data);
-                    break;
-            }
-        } catch (error) {
-            console.error('Error parsing message:', error);
-        }
-    });
+								case MessageType.UNSTAKE:
+										this.handleUnstakeMessage(data.data);
+										break;
+
+								case MessageType.GET_LATEST_BLOCK:
+										this.handleGetLatestBlockMessage(socket);
+										break;
+						}
+				} catch (error) {
+						console.error('Error parsing message:', error);
+				}
+		});
+}
+
+private handleGetLatestBlockMessage(socket: WebSocket): void {
+		try {
+				const latestBlock = this.blockchain.getLatestBlock();
+				const message: LatestBlockMessage = {
+						type: MessageType.LATEST_BLOCK,
+						data: latestBlock
+				};
+				socket.send(JSON.stringify(message));
+		} catch (error) {
+				console.error('Error handling get latest block message:', error);
+		}
 }
 
 	private async handleChainMessage(chain: Block[]): Promise<void> {
@@ -338,8 +366,10 @@ private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> 
 	private handleBlockMessage(blockData: Block): void {
 		try {
 			const transactions = blockData.transactions.map(
-				(txData) => new Transaction(txData.inputs, txData.outputs)
+				(txData) => new Transaction(txData.inputs, txData.outputs, txData.timestamp, txData.nonce)
 			);
+
+			console.log('transactions:', transactions);
 
 			const block = new Block(
 				blockData.timestamp,
