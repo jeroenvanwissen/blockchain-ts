@@ -47,42 +47,102 @@ interface UnstakeMessage {
 export type Message = ChainMessage | TransactionMessage | BlockMessage | StakeMessage | UnstakeMessage;
 
 export class P2PServer {
-	private sockets: WebSocket[];
+    private sockets: WebSocket[];
+    private connectedPeers: Set<string>;
 
-	constructor(
-		private blockchain: Blockchain,
-		private p2pPort: number,
-		private peerDataPath: string
-	) {
-		this.sockets = [];
-	}
+    constructor(
+        private blockchain: Blockchain,
+        private p2pPort: number,
+        private peerDataPath: string
+    ) {
+        this.sockets = [];
+        this.connectedPeers = new Set();
+    }
 
-	listen(): void {
-		const server = new WebSocketServer({ port: this.p2pPort });
-		server.on('connection', (socket) => this.connectSocket(socket));
-		console.log(
-			`Listening for peer-to-peer connections on port ${this.p2pPort}`
-		);
-	}
+    private normalizePeerUrl(url: string): string {
+        // Ensure protocol
+        if (!/^wss?:\/\//.test(url)) {
+            url = `ws://${url}`;
+        }
+        // Remove trailing slash
+        return url.replace(/\/$/, '');
+    }
 
-	connectToPeers(newPeers: string[]): void {
-		newPeers.forEach((peer) => {
-			// Ensure the peer address includes a protocol
-			if (!/^wss?:\/\//.test(peer)) {
-				peer = `ws://${peer}`;
-			}
-			const socket = new WebSocket(peer);
-			socket.on('open', () => this.connectSocket(socket));
-			socket.on('error', (error) => {
-				console.log(`Connection failed to peer: ${peer}`);
-				console.error(error);
-			});
-		});
-	}
+    public listen(): void {
+        const server = new WebSocketServer({ 
+            port: this.p2pPort,
+            host: '0.0.0.0',
+            clientTracking: true,
+            perMessageDeflate: false
+        });
+
+        server.on('connection', (socket, request) => {
+            console.log(`New connection from ${request.socket.remoteAddress}`);
+            this.connectSocket(socket);
+        });
+
+        server.on('error', (error) => {
+            console.error('WebSocket Server error:', error);
+        });
+
+        server.on('listening', () => {
+            console.log(`P2P Server listening on ${server.address().address}:${this.p2pPort}`);
+        });
+    }
+
+    // Update connectToPeers method
+    connectToPeers(newPeers: string[]): void {
+        newPeers.forEach((peer) => {
+            const normalizedPeer = this.normalizePeerUrl(peer);
+            
+            // Check if we're already connected or connecting to this peer
+            if (this.connectedPeers.has(normalizedPeer)) {
+                return;
+            }
+
+            // Mark as connecting before attempting connection
+            this.connectedPeers.add(normalizedPeer);
+            
+            console.log(`Attempting to connect to peer: ${normalizedPeer}`);
+            
+            const socket = new WebSocket(normalizedPeer, {
+                handshakeTimeout: 5000,
+                headers: {
+                    'User-Agent': 'BlockchainClient'
+                }
+            });
+
+            socket.on('open', () => {
+                console.log(`Successfully connected to peer: ${normalizedPeer}`);
+                this.connectSocket(socket);
+            });
+
+            socket.on('error', (error) => {
+                console.log(`Connection failed to peer: ${normalizedPeer}`);
+                console.error('Error details:', error.message);
+                this.connectedPeers.delete(normalizedPeer); // Remove from tracking on error
+            });
+
+            socket.on('close', () => {
+                this.connectedPeers.delete(normalizedPeer); // Remove from tracking on close
+            });
+        });
+    }
+
+    // Update reconnectToPeer method
+    private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> {
+        const normalizedPeer = this.normalizePeerUrl(peer);
+        
+        // Don't attempt to reconnect if already connected or connecting
+        if (this.connectedPeers.has(normalizedPeer)) {
+            return;
+        }
+
+        // Rest of the reconnectToPeer method remains the same...
+    }
 
 	private connectSocket(socket: WebSocket): void {
     this.sockets.push(socket);
-    console.log('Socket connected');
     
     // Add error handler
     socket.on('error', (error) => {
@@ -100,13 +160,50 @@ export class P2PServer {
             this.sockets.splice(index, 1);
         }
         if (socket.url) {
-            this.reconnectToPeer(socket.url);
+            // Only attempt reconnection if socket is not already reconnecting
+            if (!socket.reconnecting) {
+                this.reconnectToPeer(socket.url);
+            }
         }
     });
     
     this.logPeerConnection(socket);
     this.messageHandler(socket);
     this.sendChain(socket);
+}
+
+private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> {
+    const normalizedPeer = this.normalizePeerUrl(peer);
+    const maxAttempts = 10;
+    const baseDelay = 1000;
+    
+    if (attempt > maxAttempts) {
+        console.log(`Max reconnection attempts reached for peer: ${peer}`);
+        return;
+    }
+
+    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000);
+    
+    try {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        const socket = new WebSocket(peer);
+        
+        // Mark socket as reconnecting
+        (socket as any).reconnecting = true;
+        
+        socket.on('open', () => {
+            (socket as any).reconnecting = false;
+            this.connectSocket(socket);
+        });
+        
+        socket.on('error', () => {
+            console.log(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
+            this.reconnectToPeer(peer, attempt + 1);
+        });
+    } catch (error) {
+        console.error(`Error reconnecting to peer: ${peer}`, error);
+        this.reconnectToPeer(peer, attempt + 1);
+    }
 }
 
 	private logPeerConnection(socket: WebSocket): void {
@@ -187,36 +284,6 @@ export class P2PServer {
         }
     });
 }
-
-		private async reconnectToPeer(peer: string, attempt: number = 1): Promise<void> {
-			const maxAttempts = 10;
-			const baseDelay = 1000;
-			
-			if (attempt > maxAttempts) {
-					console.log(`Max reconnection attempts reached for peer: ${peer}`);
-					return;
-			}
-	
-			const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000);
-			
-			try {
-					await new Promise(resolve => setTimeout(resolve, delay));
-					const socket = new WebSocket(peer);
-					
-					socket.on('open', () => {
-							console.log(`Reconnected to peer: ${peer}`);
-							this.connectSocket(socket);
-					});
-					
-					socket.on('error', () => {
-							console.log(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
-							this.reconnectToPeer(peer, attempt + 1);
-					});
-			} catch (error) {
-					console.error(`Error reconnecting to peer: ${peer}`, error);
-					this.reconnectToPeer(peer, attempt + 1);
-			}
-	}
 
 	private async handleChainMessage(chain: Block[]): Promise<void> {
 	    try {

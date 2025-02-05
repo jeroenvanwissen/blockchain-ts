@@ -894,4 +894,75 @@ public minePendingTransactions(minerAddress: string): Block {
 
 		return newDifficulty;
 	}
+
+	// Add this method to your Blockchain class
+public async replaceChain(newChain: Block[]): Promise<void> {
+	// Use the mutex to prevent concurrent chain replacements
+	await this.replaceLock.acquire();
+	
+	try {
+			// Validate chain length
+			if (newChain.length <= this.chain.length) {
+					throw new Error('Received chain is not longer than current chain');
+			}
+
+			// Validate chain integrity
+			for (let i = 1; i < newChain.length; i++) {
+					const block = newChain[i];
+					const previousBlock = newChain[i - 1];
+
+					// Validate block linkage
+					if (block.previousHash !== previousBlock.hash) {
+							throw new Error('Invalid chain: broken link');
+					}
+
+					// Validate block transactions
+					if (!block.hasValidTransactions()) {
+							throw new Error('Invalid chain: invalid transactions');
+					}
+
+					// Validate PoW blocks
+					if (block.isProofOfWork()) {
+							if (!block.isValid()) {
+									throw new Error('Invalid chain: invalid proof of work');
+							}
+							if (i >= POW_CUTOFF_BLOCK) {
+									throw new Error('Invalid chain: PoW block after cutoff');
+							}
+					}
+
+					// Validate PoS blocks
+					if (block.isProofOfStake() && i >= POW_CUTOFF_BLOCK) {
+							const stakeTransaction = block.transactions[1];
+							if (!this.validateStake(stakeTransaction)) {
+									throw new Error('Invalid chain: invalid stake');
+							}
+					}
+			}
+
+			// Replace the chain
+			this.chain = newChain;
+			
+			// Reset and rebuild UTXO set
+			this.utxoSet.clear();
+			for (const block of this.chain) {
+					this.updateUTXOSet(block);
+			}
+
+			// Clear pending transactions that are now in the chain
+			const chainTxHashes = new Set(
+					this.chain.flatMap(block => 
+							block.transactions.map(tx => tx.calculateHash())
+					)
+			);
+			this.pendingTransactions = this.pendingTransactions.filter(
+					tx => !chainTxHashes.has(tx.calculateHash())
+			);
+
+			// Save the new chain
+			this.saveBlockchain();
+	} finally {
+			this.replaceLock.release();
+	}
+}
 }
