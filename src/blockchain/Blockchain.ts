@@ -147,6 +147,8 @@ export class Blockchain {
 		}
 
 		if (block.index !== this.chain.length) {
+			console.log('block.index:', block.index);
+			console.log('this.chain.length:', this.chain.length);
 			throw new Error('Invalid block index');
 		}
 
@@ -242,10 +244,10 @@ export class Blockchain {
 	}
 
 	private createGenesisBlock(): Block {
-		const timestamp = 1609459200000; // Jan 1, 2021, 00:00:00 UTC
+		const timestamp = 1735689600000; // Jan 1, 2025, 00:00:00 UTC
 		const genesisTransaction = new Transaction(
 			[],
-			[{ address: 'genesis', amount: 1000000 }]
+			[{ address: 'genesis', amount: 0 }]
 		);
 		genesisTransaction.timestamp = timestamp;
 		return new Block(timestamp, [genesisTransaction], '0', 0, 4, 0);
