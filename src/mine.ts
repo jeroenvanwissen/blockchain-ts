@@ -11,20 +11,20 @@ const __dirname = dirname(__filename);
 
 // Ensure the data directory exists
 if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+	fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 // Generate a key pair for the miner
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: {
-        type: 'spki',
-        format: 'pem',
-    },
-    privateKeyEncoding: {
-        type: 'pkcs8',
-        format: 'pem',
-    },
+	modulusLength: 2048,
+	publicKeyEncoding: {
+		type: 'spki',
+		format: 'pem',
+	},
+	privateKeyEncoding: {
+		type: 'pkcs8',
+		format: 'pem',
+	},
 });
 
 // Remove blockchain instance as it's not needed in the miner process
@@ -39,9 +39,9 @@ miner.startMining();
 
 // Handle process termination
 process.on('SIGINT', () => {
-    console.log('\nStopping mining...');
-    miner.stopMining();
-    process.exit(0);
+	console.log('\nStopping mining...');
+	miner.stopMining();
+	process.exit(0);
 });
 
 // Export only miner for testing

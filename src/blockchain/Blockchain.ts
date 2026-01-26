@@ -44,10 +44,10 @@ interface SerializedBlock {
 import { Mutex } from 'async-mutex';
 
 export class Blockchain {
-    // Add this property near the other private fields
-    public replaceLock: Mutex = new Mutex();
-    
-    private chain: Block[];
+	// Add this property near the other private fields
+	public replaceLock: Mutex = new Mutex();
+
+	private chain: Block[];
 	private utxoSet: Map<string, UTXO[]> = new Map();
 	private pendingTransactions: Transaction[];
 	// private readonly stakingMinimum: number = 100;
@@ -67,49 +67,50 @@ export class Blockchain {
 		const genesisBlock = this.createGenesisBlock();
 		this.chain = [genesisBlock];
 		this.pendingTransactions = [];
-		
+
 		// Initialize UTXO set with genesis block
 		this.updateUTXOSet(genesisBlock);
-		
+
 		// Load the rest of the blockchain
 		this.loadBlockchain();
 	}
 
 	private updateUTXOSet(block: Block): void {
 		// console.log('Updating UTXO set for block:', block.index);
-		    
-		    for (const tx of block.transactions) {
-		        // Calculate hash once and store it
-		        const txHash = tx.calculateHash();
-		        // console.log('Processing transaction:', txHash);
-		    
-		        // Remove spent outputs
-		        for (const input of tx.inputs) {
-		            const spenderAddress = this.findTransaction(input.previousTx)
-		                ?.outputs[input.outputIndex].address;
-		            
-		            if (spenderAddress) {
-		                // console.log(`Removing spent UTXO for ${spenderAddress}, tx: ${input.previousTx}, index: ${input.outputIndex}`);
-		                const utxos = this.utxoSet.get(spenderAddress) || [];
-		                this.utxoSet.set(
-		                    spenderAddress,
-		                    utxos.filter(
-		                        utxo =>
-		                            utxo.txHash !== input.previousTx ||
-		                            utxo.outputIndex !== input.outputIndex
-		                    )
-		                );
-		            }
-		        }
-		    
-		        // Add new outputs using the stored hash
-		        tx.outputs.forEach((output: TxOutput, index: number) => {
+
+		for (const tx of block.transactions) {
+			// Calculate hash once and store it
+			const txHash = tx.calculateHash();
+			// console.log('Processing transaction:', txHash);
+
+			// Remove spent outputs
+			for (const input of tx.inputs) {
+				const spenderAddress = this.findTransaction(input.previousTx)?.outputs[
+					input.outputIndex
+				].address;
+
+				if (spenderAddress) {
+					// console.log(`Removing spent UTXO for ${spenderAddress}, tx: ${input.previousTx}, index: ${input.outputIndex}`);
+					const utxos = this.utxoSet.get(spenderAddress) || [];
+					this.utxoSet.set(
+						spenderAddress,
+						utxos.filter(
+							(utxo) =>
+								utxo.txHash !== input.previousTx ||
+								utxo.outputIndex !== input.outputIndex
+						)
+					);
+				}
+			}
+
+			// Add new outputs using the stored hash
+			tx.outputs.forEach((output: TxOutput, index: number) => {
 				// console.log(`Adding new UTXO for ${output.address}, tx: ${txHash}, index: ${index}, amount: ${output.amount}`);
 				const utxos = this.utxoSet.get(output.address) || [];
 				utxos.push({
 					txHash,
 					outputIndex: index,
-					output: output
+					output: output,
 				});
 				this.utxoSet.set(output.address, utxos);
 			});
@@ -118,7 +119,9 @@ export class Blockchain {
 
 	private findTransaction(txHash: string): Transaction | undefined {
 		for (const block of this.chain) {
-			const tx = block.transactions.find((t: Transaction) => t.calculateHash() === txHash);
+			const tx = block.transactions.find(
+				(t: Transaction) => t.calculateHash() === txHash
+			);
 			if (tx) return tx;
 		}
 		return undefined;
@@ -149,13 +152,16 @@ export class Blockchain {
 				lastBlockTimestamp: lastBlock.timestamp,
 				blockTime: this.BLOCK_TIME,
 				timeSinceLastBlock: block.timestamp - lastBlock.timestamp,
-				minRequired: this.BLOCK_TIME * 1000
+				minRequired: this.BLOCK_TIME * 1000,
 			});
 		}
 
 		// Enforce minimum block time (skip in tests where time may be simulated arbitrarily)
 		const timeSinceLastBlock = block.timestamp - lastBlock.timestamp;
-		if (process.env.NODE_ENV !== 'test' && timeSinceLastBlock < this.BLOCK_TIME * 1000) {
+		if (
+			process.env.NODE_ENV !== 'test' &&
+			timeSinceLastBlock < this.BLOCK_TIME * 1000
+		) {
 			throw new Error('Block created too quickly');
 		}
 
@@ -200,13 +206,19 @@ export class Blockchain {
 			let stakeAmount: number | null = null;
 
 			// Pattern A: coinstake (marker 0 then stake amount)
-			if (tx.outputs.length >= 2 && tx.outputs[0].amount === 0 && tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT) {
+			if (
+				tx.outputs.length >= 2 &&
+				tx.outputs[0].amount === 0 &&
+				tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
+			) {
 				stakeAddress = tx.outputs[1].address;
 				stakeAmount = tx.outputs[1].amount;
 			} else {
 				// Pattern B: initial stake transaction (all outputs same address, first output >= minimum)
 				const firstAddr = tx.outputs[0].address;
-				const allSame = tx.outputs.every((o: TxOutput) => o.address === firstAddr);
+				const allSame = tx.outputs.every(
+					(o: TxOutput) => o.address === firstAddr
+				);
 				if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
 					stakeAddress = firstAddr;
 					stakeAmount = tx.outputs[0].amount;
@@ -234,66 +246,69 @@ export class Blockchain {
 	}
 
 	private validateStake(stakeTransaction: Transaction): boolean {
-    if (!stakeTransaction.isCoinStake()) {
-        return false;
-    }
+		if (!stakeTransaction.isCoinStake()) {
+			return false;
+		}
 
-    const stakeInputs = stakeTransaction.inputs;
-    const stakeOutput = stakeTransaction.outputs[1];
+		const stakeInputs = stakeTransaction.inputs;
+		const stakeOutput = stakeTransaction.outputs[1];
 
-    // Check minimum stake amount
-    if (stakeOutput.amount < this.MIN_STAKE_AMOUNT) {
-        return false;
-    }
+		// Check minimum stake amount
+		if (stakeOutput.amount < this.MIN_STAKE_AMOUNT) {
+			return false;
+		}
 
-    // Sum input amounts and validate inputs reference existing UTXOs
-    let inputSum = 0;
-    for (const input of stakeInputs) {
-        const prevTx = this.findTransaction(input.previousTx);
-        if (!prevTx) {
-            return false;
-        }
-        const prevOutput = prevTx.outputs[input.outputIndex];
-        if (!prevOutput) {
-            return false;
-        }
-        // Verify stake ownership consistency
-        if (prevOutput.address !== stakeOutput.address) {
-            return false;
-        }
-        inputSum += prevOutput.amount;
+		// Sum input amounts and validate inputs reference existing UTXOs
+		let inputSum = 0;
+		for (const input of stakeInputs) {
+			const prevTx = this.findTransaction(input.previousTx);
+			if (!prevTx) {
+				return false;
+			}
+			const prevOutput = prevTx.outputs[input.outputIndex];
+			if (!prevOutput) {
+				return false;
+			}
+			// Verify stake ownership consistency
+			if (prevOutput.address !== stakeOutput.address) {
+				return false;
+			}
+			inputSum += prevOutput.amount;
 
-        // Verify the referenced UTXO is currently unspent
-        const utxos = this.getUTXOs(prevOutput.address);
-        const exists = utxos.some(
-            utxo => utxo.txHash === input.previousTx && utxo.outputIndex === input.outputIndex
-        );
-        if (!exists) {
-            return false;
-        }
-    }
+			// Verify the referenced UTXO is currently unspent
+			const utxos = this.getUTXOs(prevOutput.address);
+			const exists = utxos.some(
+				(utxo) =>
+					utxo.txHash === input.previousTx &&
+					utxo.outputIndex === input.outputIndex
+			);
+			if (!exists) {
+				return false;
+			}
+		}
 
-    // Inputs must cover the staked amount
-    if (inputSum < stakeOutput.amount) {
-        return false;
-    }
+		// Inputs must cover the staked amount
+		if (inputSum < stakeOutput.amount) {
+			return false;
+		}
 
-    // In tests, skip the stake age requirement to allow faster validation
-    if (process.env.NODE_ENV !== 'test') {
-        // Stake age: ensure at least MIN_STAKE_AGE seconds have passed since earliest input tx
-        let earliestInputTime = Number.MAX_SAFE_INTEGER;
-        for (const input of stakeInputs) {
-            const prevTx = this.findTransaction(input.previousTx)!;
-            if (prevTx.timestamp < earliestInputTime) earliestInputTime = prevTx.timestamp;
-        }
-        const stakeAge = (Date.now() - earliestInputTime) / 1000;
-        if (stakeAge < this.MIN_STAKE_AGE) {
-            return false;
-        }
-    }
+		// In tests, skip the stake age requirement to allow faster validation
+		if (process.env.NODE_ENV !== 'test') {
+			// Stake age: ensure at least MIN_STAKE_AGE seconds have passed since earliest input tx
+			let earliestInputTime = Number.MAX_SAFE_INTEGER;
+			for (const input of stakeInputs) {
+				const prevTx = this.findTransaction(input.previousTx)!;
+				if (prevTx.timestamp < earliestInputTime)
+					earliestInputTime = prevTx.timestamp;
+			}
+			const stakeAge = (Date.now() - earliestInputTime) / 1000;
+			if (stakeAge < this.MIN_STAKE_AGE) {
+				return false;
+			}
+		}
 
-    return true;
-}
+		return true;
+	}
 
 	public clearPendingTransactions(): void {
 		this.pendingTransactions = [];
@@ -323,20 +338,23 @@ export class Blockchain {
 	calculateStakeWeight(address: string): number {
 		const stake = this.stakes.get(address);
 		if (!stake) return 0;
-	
+
 		// Use lastBlockTime instead of Date.now() for weight calculation
 		const elapsedMs = stake.lastBlockTime - stake.timestamp;
-		const elapsedDays = Math.max(0, Math.floor(elapsedMs / (24 * 60 * 60 * 1000)));
-		
+		const elapsedDays = Math.max(
+			0,
+			Math.floor(elapsedMs / (24 * 60 * 60 * 1000))
+		);
+
 		// Base weight is the stake amount
 		let weight = stake.amount;
-		
+
 		// Apply multiplier for each day (10% increase per day)
 		if (elapsedDays > 0) {
 			const multiplier = 1.1;
 			weight = Math.floor(weight * Math.pow(multiplier, elapsedDays));
 		}
-	
+
 		return weight;
 	}
 
@@ -370,56 +388,56 @@ export class Blockchain {
 	}
 
 	stake(address: string, amount: number): void {
-    if (amount < this.MIN_STAKE_AMOUNT) {
-        throw new Error(`Minimum stake amount is ${this.MIN_STAKE_AMOUNT}`);
-    }
+		if (amount < this.MIN_STAKE_AMOUNT) {
+			throw new Error(`Minimum stake amount is ${this.MIN_STAKE_AMOUNT}`);
+		}
 
-    const availableBalance = this.getBalance(address);
-    if (availableBalance < amount) {
-        throw new Error('Insufficient balance for staking');
-    }
+		const availableBalance = this.getBalance(address);
+		if (availableBalance < amount) {
+			throw new Error('Insufficient balance for staking');
+		}
 
-    // Create a staking transaction
-    const utxos = this.getUTXOs(address);
-    let inputSum = 0;
-    const inputs: TxInput[] = [];
+		// Create a staking transaction
+		const utxos = this.getUTXOs(address);
+		let inputSum = 0;
+		const inputs: TxInput[] = [];
 
-    for (const utxo of utxos) {
-        inputSum += utxo.output.amount;
-        inputs.push({
-            previousTx: utxo.txHash,
-            outputIndex: utxo.outputIndex,
-            signature: ''
-        });
-        if (inputSum >= amount) break;
-    }
+		for (const utxo of utxos) {
+			inputSum += utxo.output.amount;
+			inputs.push({
+				previousTx: utxo.txHash,
+				outputIndex: utxo.outputIndex,
+				signature: '',
+			});
+			if (inputSum >= amount) break;
+		}
 
-    const outputs: TxOutput[] = [
-        { address: address, amount: amount }  // Staked amount
-    ];
+		const outputs: TxOutput[] = [
+			{ address: address, amount: amount }, // Staked amount
+		];
 
-    // Add change output if necessary
-    if (inputSum > amount) {
-        outputs.push({ 
-            address: address, 
-            amount: inputSum - amount  // Return change
-        });
-    }
+		// Add change output if necessary
+		if (inputSum > amount) {
+			outputs.push({
+				address: address,
+				amount: inputSum - amount, // Return change
+			});
+		}
 
-	const stakingTx = new Transaction(inputs, outputs);
-	stakingTx.signTransaction(address);
-	// Add the transaction to pending pool
-	this.addTransaction(stakingTx);
-	// Optimistically register the stake so a PoS block can be created in the very next block
-	// (tests stake right at the cutoff and expect immediate eligibility)
-	if (!this.stakes.has(address)) {
-		this.stakes.set(address, {
-			amount,
-			timestamp: Date.now(),
-			lastBlockTime: this.getLatestBlock().timestamp,
-		});
+		const stakingTx = new Transaction(inputs, outputs);
+		stakingTx.signTransaction(address);
+		// Add the transaction to pending pool
+		this.addTransaction(stakingTx);
+		// Optimistically register the stake so a PoS block can be created in the very next block
+		// (tests stake right at the cutoff and expect immediate eligibility)
+		if (!this.stakes.has(address)) {
+			this.stakes.set(address, {
+				amount,
+				timestamp: Date.now(),
+				lastBlockTime: this.getLatestBlock().timestamp,
+			});
+		}
 	}
-}
 
 	unstake(address: string, amount: number): void {
 		const currentStake = this.stakes.get(address);
@@ -447,46 +465,46 @@ export class Blockchain {
 	}
 
 	createTransaction(
-    from: string,
-    to: string,
-    amount: number,
-    wallet: Wallet
-): Transaction {
-    const utxos = this.getUTXOs(from);
-    // console.log('Available UTXOs:', utxos);
-    let inputSum = 0;
-    const inputs: TxInput[] = [];
+		from: string,
+		to: string,
+		amount: number,
+		wallet: Wallet
+	): Transaction {
+		const utxos = this.getUTXOs(from);
+		// console.log('Available UTXOs:', utxos);
+		let inputSum = 0;
+		const inputs: TxInput[] = [];
 
-    for (const utxo of utxos) {
-        inputSum += utxo.output.amount;
-        inputs.push({
-            previousTx: utxo.txHash,
-            outputIndex: utxo.outputIndex,
-            signature: '',
-        });
+		for (const utxo of utxos) {
+			inputSum += utxo.output.amount;
+			inputs.push({
+				previousTx: utxo.txHash,
+				outputIndex: utxo.outputIndex,
+				signature: '',
+			});
 
-        if (inputSum >= amount) break;
-    }
+			if (inputSum >= amount) break;
+		}
 
-    // console.log('Total input sum:', inputSum);
-    // console.log('Required amount:', amount);
+		// console.log('Total input sum:', inputSum);
+		// console.log('Required amount:', amount);
 
-    if (inputSum < amount) {
-        throw new Error('Insufficient funds');
-    }
+		if (inputSum < amount) {
+			throw new Error('Insufficient funds');
+		}
 
-    const outputs: TxOutput[] = [{ address: to, amount }];
+		const outputs: TxOutput[] = [{ address: to, amount }];
 
-    const change = inputSum - amount;
-    if (change > 0) {
-        outputs.push({ address: from, amount: change });
-    }
+		const change = inputSum - amount;
+		if (change > 0) {
+			outputs.push({ address: from, amount: change });
+		}
 
-    const transaction = new Transaction(inputs, outputs);
-    wallet.signTransaction(transaction);
+		const transaction = new Transaction(inputs, outputs);
+		wallet.signTransaction(transaction);
 
-    return transaction;
-}
+		return transaction;
+	}
 
 	validateAddress(address: string): boolean {
 		try {
@@ -537,7 +555,7 @@ export class Blockchain {
 			inputs.push({
 				previousTx: utxo.txHash,
 				outputIndex: utxo.outputIndex,
-				signature: ''
+				signature: '',
 			});
 			if (accumulated >= stake.amount) break;
 		}
@@ -547,7 +565,7 @@ export class Blockchain {
 
 		const outputs: TxOutput[] = [
 			{ address: stakeholderAddress, amount: 0 }, // marker output
-			{ address: stakeholderAddress, amount: stake.amount }
+			{ address: stakeholderAddress, amount: stake.amount },
 		];
 		// Add change if needed
 		const change = accumulated - stake.amount;
@@ -595,123 +613,126 @@ export class Blockchain {
 		const stake = this.stakes.get(address);
 		// console.log('Checking stake for address:', address);
 		// console.log('Current stake:', stake);
-		
+
 		if (!stake) {
-		    console.log('No stake found');
-		    return false;
+			console.log('No stake found');
+			return false;
 		}
-		
+
 		// In test environment, skip all time-related checks
 		if (process.env.NODE_ENV === 'test') {
-		    // const stakeWeight = this.calculateStakeWeight(address);
-		    // const networkWeight = this.getTotalNetworkWeight();
-		    // const probability = stakeWeight / (networkWeight || 1);
-		    
-		    // console.log('Stake weight:', stakeWeight);
-		    // console.log('Network weight:', networkWeight);
-		    // console.log('Probability:', probability);
-		    
-		    return true;
+			// const stakeWeight = this.calculateStakeWeight(address);
+			// const networkWeight = this.getTotalNetworkWeight();
+			// const probability = stakeWeight / (networkWeight || 1);
+
+			// console.log('Stake weight:', stakeWeight);
+			// console.log('Network weight:', networkWeight);
+			// console.log('Probability:', probability);
+
+			return true;
 		}
-		
+
 		// Production checks
 		const stakeAge = (Date.now() - stake.timestamp) / 1000;
 		if (stakeAge < this.MIN_STAKE_AGE) {
-		    // console.log('Stake too young');
-		    return false;
+			// console.log('Stake too young');
+			return false;
 		}
-		
+
 		if (Date.now() - stake.lastBlockTime < this.STAKE_CHECK_INTERVAL) {
-		    // console.log('Too soon since last block');
-		    return false;
+			// console.log('Too soon since last block');
+			return false;
 		}
-		
+
 		const stakeWeight = this.calculateStakeWeight(address);
 		const networkWeight = this.getTotalNetworkWeight();
 		const probability = stakeWeight / (networkWeight || 1);
-		
+
 		// console.log('Stake weight:', stakeWeight);
 		// console.log('Network weight:', networkWeight);
 		// console.log('Probability:', probability);
-		
+
 		// For testing purposes, always return true if other conditions are met
 		return true;
 	}
 
-	private findStakeableOutput(address: string, amount: number): { tx: Transaction; index: number } | null {
-    // console.log('Looking for stakeable output:', { address, amount });
-    
-    // Get all UTXOs for this address
-    const utxos = this.getUTXOs(address);
-    // console.log('Available UTXOs:', utxos);
-    
-    // Find a UTXO with sufficient amount
-    for (const utxo of utxos) {
-        if (utxo.output.amount >= amount) {
-            // Find the transaction in the chain
-            for (const block of [...this.chain].reverse()) {
-                for (const tx of block.transactions) {
-                    if (tx.calculateHash() === utxo.txHash) {
-                        return { tx, index: utxo.outputIndex };
-                    }
-                }
-            }
-        }
-    }
-    
-    console.log('No stakeable output found');
-    return null;
-}
+	private findStakeableOutput(
+		address: string,
+		amount: number
+	): { tx: Transaction; index: number } | null {
+		// console.log('Looking for stakeable output:', { address, amount });
 
-public minePendingTransactions(minerAddress: string): Block {
-	// Switch to PoS only after cutoff block has been added (length > POW_CUTOFF_BLOCK)
-	const isPoSPhase = this.chain.length > POW_CUTOFF_BLOCK;
-	const lastBlock = this.getLatestBlock();
-	
-	// Always use Date.now() for timestamp so tests can control time
-	const timestamp = Date.now();
+		// Get all UTXOs for this address
+		const utxos = this.getUTXOs(address);
+		// console.log('Available UTXOs:', utxos);
 
-	if (isPoSPhase) {
-		const stake = this.stakes.get(minerAddress);
-		if (stake) {
-			const stakeBlock = this.generateStakeBlock(minerAddress);
-			if (!stakeBlock) {
-				throw new Error('Failed to generate stake block');
+		// Find a UTXO with sufficient amount
+		for (const utxo of utxos) {
+			if (utxo.output.amount >= amount) {
+				// Find the transaction in the chain
+				for (const block of [...this.chain].reverse()) {
+					for (const tx of block.transactions) {
+						if (tx.calculateHash() === utxo.txHash) {
+							return { tx, index: utxo.outputIndex };
+						}
+					}
+				}
 			}
-			stakeBlock.timestamp = timestamp;
-			stakeBlock.hash = stakeBlock.calculateHash();
-			this.addMinedBlock(stakeBlock);
-			return stakeBlock;
 		}
-		// Fallback to PoW if miner has no stake (mainly for test scenarios)
+
+		console.log('No stakeable output found');
+		return null;
 	}
 
-	// PoW phase
-	const coinbaseTransaction = new Transaction(
+	public minePendingTransactions(minerAddress: string): Block {
+		// Switch to PoS only after cutoff block has been added (length > POW_CUTOFF_BLOCK)
+		const isPoSPhase = this.chain.length > POW_CUTOFF_BLOCK;
+		const lastBlock = this.getLatestBlock();
+
+		// Always use Date.now() for timestamp so tests can control time
+		const timestamp = Date.now();
+
+		if (isPoSPhase) {
+			const stake = this.stakes.get(minerAddress);
+			if (stake) {
+				const stakeBlock = this.generateStakeBlock(minerAddress);
+				if (!stakeBlock) {
+					throw new Error('Failed to generate stake block');
+				}
+				stakeBlock.timestamp = timestamp;
+				stakeBlock.hash = stakeBlock.calculateHash();
+				this.addMinedBlock(stakeBlock);
+				return stakeBlock;
+			}
+			// Fallback to PoW if miner has no stake (mainly for test scenarios)
+		}
+
+		// PoW phase
+		const coinbaseTransaction = new Transaction(
 			[],
 			[{ address: minerAddress, amount: POW_BLOCK_REWARD }]
-	);
+		);
 
-	const transactions = [coinbaseTransaction, ...this.pendingTransactions];
-	
-	const block = new Block(
+		const transactions = [coinbaseTransaction, ...this.pendingTransactions];
+
+		const block = new Block(
 			timestamp,
 			transactions,
 			lastBlock.hash,
 			0,
 			process.env.NODE_ENV === 'test' ? 1 : this.calculateNewDifficulty(),
 			this.chain.length
-	);
+		);
 
-	while (!block.isValid()) {
+		while (!block.isValid()) {
 			block.nonce++;
 			block.hash = block.calculateHash();
-	}
+		}
 
-	// Use common path for validation/persistence
-	this.addMinedBlock(block);
-	return block;
-}
+		// Use common path for validation/persistence
+		this.addMinedBlock(block);
+		return block;
+	}
 
 	addTransaction(transaction: Transaction): void {
 		if (transaction.inputs.length === 0 || transaction.outputs.length === 0) {
@@ -800,7 +821,12 @@ public minePendingTransactions(minerAddress: string): Block {
 
 			for (const blockData of serializedChain) {
 				const transactions = blockData.transactions.map((txData) => {
-					const tx = new Transaction(txData.inputs, txData.outputs, txData.timestamp, txData.nonce);
+					const tx = new Transaction(
+						txData.inputs,
+						txData.outputs,
+						txData.timestamp,
+						txData.nonce
+					);
 					return tx;
 				});
 
@@ -825,14 +851,17 @@ public minePendingTransactions(minerAddress: string): Block {
 			// Modified genesis block validation
 			const genesisBlock = reconstructedChain[0];
 			const expectedGenesis = this.createGenesisBlock();
-			
+
 			if (
 				genesisBlock.timestamp !== expectedGenesis.timestamp ||
 				genesisBlock.previousHash !== expectedGenesis.previousHash ||
 				genesisBlock.index !== expectedGenesis.index ||
-				genesisBlock.transactions.length !== expectedGenesis.transactions.length ||
-				genesisBlock.transactions[0].outputs[0].address !== expectedGenesis.transactions[0].outputs[0].address ||
-				genesisBlock.transactions[0].outputs[0].amount !== expectedGenesis.transactions[0].outputs[0].amount
+				genesisBlock.transactions.length !==
+					expectedGenesis.transactions.length ||
+				genesisBlock.transactions[0].outputs[0].address !==
+					expectedGenesis.transactions[0].outputs[0].address ||
+				genesisBlock.transactions[0].outputs[0].amount !==
+					expectedGenesis.transactions[0].outputs[0].amount
 			) {
 				throw new Error('Invalid genesis block');
 			}
@@ -975,12 +1004,12 @@ public minePendingTransactions(minerAddress: string): Block {
 
 			// Clear pending transactions that are now in the chain
 			const chainTxHashes = new Set(
-				this.chain.flatMap(block =>
+				this.chain.flatMap((block) =>
 					block.transactions.map((tx: Transaction) => tx.calculateHash())
 				)
 			);
 			this.pendingTransactions = this.pendingTransactions.filter(
-				tx => !chainTxHashes.has(tx.calculateHash())
+				(tx) => !chainTxHashes.has(tx.calculateHash())
 			);
 
 			// Save the new chain

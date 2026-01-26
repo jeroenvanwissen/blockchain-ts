@@ -64,15 +64,15 @@ export class Wallet {
 		} while (!secp256k1.privateKeyVerify(this.privateKey));
 
 		// Generate public key
-		this.publicKey = Buffer.from(
-			secp256k1.publicKeyCreate(this.privateKey)
-		);
+		this.publicKey = Buffer.from(secp256k1.publicKeyCreate(this.privateKey));
 
 		// Rest of the method remains the same
 		const sha256Hash = Buffer.from(
 			crypto.createHash('sha256').update(this.publicKey).digest()
 		);
-		const ripemdHash = CryptoJS.RIPEMD160(sha256Hash.toString('hex')).toString();
+		const ripemdHash = CryptoJS.RIPEMD160(
+			sha256Hash.toString('hex')
+		).toString();
 		const ripemdBuffer = Buffer.from(ripemdHash.replace('0x', ''), 'hex');
 		this.address = this.encodeAddress(ripemdBuffer);
 
@@ -81,14 +81,14 @@ export class Wallet {
 
 	signTransaction(tx: Transaction): void {
 		tx.inputs.forEach((input: TxInput) => {
-            const msgHash = Buffer.from(
-                crypto.createHash('sha256').update(tx.calculateHash()).digest()
-            );
+			const msgHash = Buffer.from(
+				crypto.createHash('sha256').update(tx.calculateHash()).digest()
+			);
 
-            const signatureObj = secp256k1.ecdsaSign(msgHash, this.privateKey);
-            input.signature = Buffer.from(signatureObj.signature).toString('hex');
-        });
-    }
+			const signatureObj = secp256k1.ecdsaSign(msgHash, this.privateKey);
+			input.signature = Buffer.from(signatureObj.signature).toString('hex');
+		});
+	}
 
 	private loadWallet(): void {
 		const data: WalletData = JSON.parse(
@@ -141,12 +141,12 @@ export class Wallet {
 							(sum: number, out: TxOutput) =>
 								out.address !== this.address ? sum + out.amount : sum,
 							0
-					  )
+						)
 					: tx.outputs.reduce(
 							(sum: number, out: TxOutput) =>
 								out.address === this.address ? sum + out.amount : sum,
 							0
-					  ),
+						),
 			otherParty,
 		});
 
@@ -155,7 +155,9 @@ export class Wallet {
 		// Update UTXOs
 		if (type === 'sent') {
 			// Remove spent UTXOs
-			const spentUtxos = new Set(tx.inputs.map((input: TxInput) => input.previousTx));
+			const spentUtxos = new Set(
+				tx.inputs.map((input: TxInput) => input.previousTx)
+			);
 			this.utxos = this.utxos.filter((utxo) => !spentUtxos.has(utxo.txHash));
 
 			// Add change output if any
