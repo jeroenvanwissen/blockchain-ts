@@ -1,7 +1,7 @@
-import { P2PServer, type Message, MessageType } from '../P2PServer';
-import { Blockchain } from '../../blockchain/Blockchain';
-import { Block } from '../../blockchain/Block';
-import { Transaction } from '../../blockchain/Transaction';
+import { P2PServer, type Message, MessageType } from '../P2PServer.js';
+import { Blockchain } from '../../blockchain/Blockchain.js';
+import { Block } from '../../blockchain/Block.js';
+import { Transaction } from '../../blockchain/Transaction.js';
 import WebSocket from 'ws';
 import fs from 'fs';
 import { EventEmitter } from 'events';

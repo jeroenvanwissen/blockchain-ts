@@ -1,5 +1,5 @@
 // In StakingService.ts
-import { Blockchain } from './Blockchain';
+import { Blockchain } from './Blockchain.js';
 
 export class StakingService {
 	private checkInterval: NodeJS.Timeout | null = null;

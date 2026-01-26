@@ -1,9 +1,9 @@
 import * as crypto from 'crypto';
-import secp256k1 from 'secp256k1';
+import * as secp256k1 from 'secp256k1';
 import * as fs from 'fs';
 import * as path from 'path';
 import CryptoJS from 'crypto-js';
-import { Transaction } from './Transaction';
+import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
 
 interface WalletData {
 	privateKey: string;
@@ -80,7 +80,7 @@ export class Wallet {
 	}
 
 	signTransaction(tx: Transaction): void {
-        tx.inputs.forEach((input) => {
+		tx.inputs.forEach((input: TxInput) => {
             const msgHash = Buffer.from(
                 crypto.createHash('sha256').update(tx.calculateHash()).digest()
             );
@@ -138,15 +138,15 @@ export class Wallet {
 			amount:
 				type === 'sent'
 					? tx.outputs.reduce(
-							(sum, out) =>
+							(sum: number, out: TxOutput) =>
 								out.address !== this.address ? sum + out.amount : sum,
 							0
-						)
+					  )
 					: tx.outputs.reduce(
-							(sum, out) =>
+							(sum: number, out: TxOutput) =>
 								out.address === this.address ? sum + out.amount : sum,
 							0
-						),
+					  ),
 			otherParty,
 		});
 
@@ -155,11 +155,11 @@ export class Wallet {
 		// Update UTXOs
 		if (type === 'sent') {
 			// Remove spent UTXOs
-			const spentUtxos = new Set(tx.inputs.map((input) => input.previousTx));
+			const spentUtxos = new Set(tx.inputs.map((input: TxInput) => input.previousTx));
 			this.utxos = this.utxos.filter((utxo) => !spentUtxos.has(utxo.txHash));
 
 			// Add change output if any
-			tx.outputs.forEach((output, index) => {
+			tx.outputs.forEach((output: TxOutput, index: number) => {
 				if (output.address === this.address) {
 					this.utxos.push({
 						txHash,
@@ -170,7 +170,7 @@ export class Wallet {
 			});
 		} else {
 			// Add new UTXOs for received amounts
-			tx.outputs.forEach((output, index) => {
+			tx.outputs.forEach((output: TxOutput, index: number) => {
 				if (output.address === this.address) {
 					this.utxos.push({
 						txHash,
@@ -245,25 +245,14 @@ export class Wallet {
 		// Add version byte (0x00 for mainnet)
 		const versionHash = Buffer.concat([Buffer.from([0x00]), hash]);
 
-		// Add checksum
-		const checksum = Buffer.from(
-			crypto.createHash('sha256').update(versionHash).digest()
-		);
+		// Add checksum (double-SHA256, first 4 bytes)
+		const first = crypto.createHash('sha256').update(versionHash).digest();
+		const second = crypto.createHash('sha256').update(first).digest();
+		const checksum = second.subarray(0, 4);
 
 		// Encode in base58
 		return this.base58Encode(Buffer.concat([versionHash, checksum]));
 	}
-
-	signTransaction(tx: Transaction): void {
-        tx.inputs.forEach((input) => {
-            const msgHash = Buffer.from(
-                crypto.createHash('sha256').update(tx.calculateHash()).digest()
-            );
-
-            const signature = secp256k1.sign(msgHash, this.privateKey);
-            input.signature = Buffer.from(signature.signature).toString('hex');
-        });
-    }
 
 	// Add base58 encoding (simplified version)
 	private base58Encode(buffer: Buffer): string {

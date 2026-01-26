@@ -1,9 +1,9 @@
-import { Blockchain } from './blockchain/Blockchain';
-import { P2PServer } from './networking/P2PServer';
-import { StakingService } from './blockchain/StakingService';
-import { Wallet } from './blockchain/Wallet';
+import { Blockchain } from './blockchain/Blockchain.js';
+import { P2PServer } from './networking/P2PServer.js';
+import { StakingService } from './blockchain/StakingService.js';
+import { Wallet } from './blockchain/Wallet.js';
 import * as fs from 'fs';
-import { DATA_DIR, P2P_PORT, PEER_DATA_PATH } from './config';
+import { DATA_DIR, P2P_PORT, PEER_DATA_PATH } from './config.js';
 
 // Ensure the data directory exists
 if (!fs.existsSync(DATA_DIR)) {

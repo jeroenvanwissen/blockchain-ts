@@ -16,13 +16,13 @@ export class Transaction {
     public inputs: TxInput[];
     public outputs: TxOutput[];
     public timestamp: number;
-    private nonce: number;
+    public nonce: number; // made public for serialization and external access
 
     constructor(inputs: TxInput[], outputs: TxOutput[], timestamp?: number, nonce?: number) {
         this.inputs = inputs;
         this.outputs = outputs;
         this.timestamp = timestamp || Date.now();
-        this.nonce = nonce || Math.floor(Math.random() * 1000000);  // Initialize nonce with random value
+        this.nonce = nonce ?? Math.floor(Math.random() * 1000000);  // Initialize nonce with provided value or random
     }
 
     calculateHash(): string {

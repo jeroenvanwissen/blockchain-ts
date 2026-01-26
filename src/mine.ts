@@ -1,8 +1,8 @@
-import { Blockchain } from './blockchain/Blockchain';
-import { Miner } from './blockchain/Miner';
+import { Blockchain } from './blockchain/Blockchain.js';
+import { Miner } from './blockchain/Miner.js';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import { DATA_DIR } from './config';
+import { DATA_DIR } from './config.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 

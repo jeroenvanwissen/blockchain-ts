@@ -37,4 +37,4 @@ export const MIXED_MODE_START_BLOCK = 80;  // Keep at 80
 // Coin configuration
 export const COIN_MATURITY = 10; // Coins must be at least 10 blocks old
 export const POS_BLOCK_REWARD = 10; // Reward for Proof-of-Stake blocks
-export const POW_BLOCK_REWARD = 12500; // Reward for mined blocks
+export const POW_BLOCK_REWARD = 10; // Reward for mined blocks

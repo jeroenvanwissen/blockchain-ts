@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { Transaction } from './Transaction';
+import { Transaction } from './Transaction.js';
 
 export class Block {
 	public hash: string;

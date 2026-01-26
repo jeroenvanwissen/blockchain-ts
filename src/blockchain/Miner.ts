@@ -1,7 +1,7 @@
 // In Miner.ts
-import { Block } from './Block';
-import { Transaction, TxInput, TxOutput } from './Transaction';
-import { Blockchain } from './Blockchain';
+import { Block } from './Block.js';
+import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
+import { Blockchain } from './Blockchain.js';
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -198,16 +198,18 @@ export class Miner {
     
                         // Create transactions with exact data from mined block
                         const transactions = minedBlock.transactions.map(tx => {
+                            const txTimestamp = tx.timestamp ?? Number(minedBlock.timestamp);
+
                             // Create a new Transaction instance with the exact data
                             const transaction = new Transaction(
                                 tx.inputs,
                                 tx.outputs,
-                                tx.timestamp,
-                                tx.nonce // Pass the original timestamp
+                                txTimestamp,
+                                tx.nonce
                             );
 
                             // Ensure the transaction properties match exactly
-                            transaction.timestamp = tx.timestamp;
+                            transaction.timestamp = txTimestamp;
                             if (tx.nonce !== undefined) {
                                 transaction.nonce = tx.nonce;
                             }
