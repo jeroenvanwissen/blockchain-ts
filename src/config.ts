@@ -42,3 +42,12 @@ export const POW_BLOCK_REWARD = 10; // Reward for mined blocks
 // Transaction limits
 export const MAX_TRANSACTION_INPUTS = 256;
 export const MAX_TRANSACTION_OUTPUTS = 256;
+
+// Block timing
+export const BLOCK_TIME = 30; // Target time between blocks in seconds
+
+// Difficulty adjustment
+export const DIFFICULTY_ADJUSTMENT_INTERVAL = 10; // Adjust difficulty every N blocks
+export const MIN_DIFFICULTY = 4; // Minimum difficulty (same as genesis)
+export const MAX_DIFFICULTY_CHANGE_FACTOR = 4; // Max 4x change per adjustment
+export const MEDIAN_TIME_SPAN = 11; // Number of blocks for median time calculation

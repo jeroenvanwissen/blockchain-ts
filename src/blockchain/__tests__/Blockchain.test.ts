@@ -3,7 +3,15 @@ import { Block } from '../Block.js';
 import { Blockchain } from '../Blockchain.js';
 import { Wallet } from '../Wallet.js';
 import { Transaction } from '../Transaction.js';
-import { POW_CUTOFF_BLOCK, POW_BLOCK_REWARD, COIN_MATURITY } from '../../config.js';
+import {
+	POW_CUTOFF_BLOCK,
+	POW_BLOCK_REWARD,
+	COIN_MATURITY,
+	BLOCK_TIME,
+	DIFFICULTY_ADJUSTMENT_INTERVAL,
+	MIN_DIFFICULTY,
+	MAX_DIFFICULTY_CHANGE_FACTOR,
+} from '../../config.js';
 import * as fs from 'fs';
 
 // Mock the fs module
@@ -953,6 +961,177 @@ describe('Blockchain', () => {
 			// Unstake partially — totalNetworkStake should decrease
 			await blockchain.unstake(minerAddr, 100);
 			expect(blockchain.totalNetworkStake()).toBe(100);
+		});
+	});
+
+	describe('Difficulty Adjustment', () => {
+		let diffBlockchain: Blockchain;
+		let diffMinerAddr: string;
+
+		beforeEach(() => {
+			// Restore real getDifficulty/setDifficulty for difficulty tests
+			(Block.prototype.getDifficulty as jest.Mock).mockRestore();
+			(Block.prototype.setDifficulty as jest.Mock).mockRestore();
+			diffBlockchain = new Blockchain();
+			diffMinerAddr = minerWallet.getAddress();
+		});
+
+		const mineDiffBlocks = async (
+			bc: Blockchain,
+			count: number,
+			miner: string,
+			intervalMs: number,
+		): Promise<void> => {
+			for (let i = 0; i < count; i++) {
+				const lastBlock = bc.getLatestBlock();
+				const blockTime = lastBlock.timestamp + intervalMs;
+				jest.setSystemTime(new Date(blockTime));
+				await bc.minePendingTransactions(miner);
+			}
+		};
+
+		it('should return genesis difficulty when chain is short', () => {
+			// Chain has only genesis block (length 1)
+			expect(diffBlockchain.calculateNewDifficulty()).toBe(4);
+		});
+
+		it('should return genesis difficulty when chain equals adjustment interval', async () => {
+			// Mine exactly DIFFICULTY_ADJUSTMENT_INTERVAL blocks (need > interval)
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL,
+				diffMinerAddr,
+				BLOCK_TIME * 1000,
+			);
+			// Chain length = 11 (genesis + 10), which equals interval + 1
+			// Still returns genesis difficulty because condition is <=
+			expect(diffBlockchain.calculateNewDifficulty()).toBe(4);
+		});
+
+		it('should keep difficulty stable when blocks arrive on target', async () => {
+			// Mine enough blocks to trigger adjustment
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				BLOCK_TIME * 1000,
+			);
+			// Chain length = 12, enough for adjustment
+			const chain = diffBlockchain.getChain();
+			// Set all blocks to a known difficulty for predictable math
+			for (const block of chain) {
+				block.powDifficulty = 8;
+			}
+			// Blocks at exact target interval: ratio ~= 1, difficulty stays same
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBe(8);
+		});
+
+		it('should increase difficulty proportionally when blocks are too fast', async () => {
+			// Mine blocks 2x faster than target (half the target time)
+			const fastInterval = (BLOCK_TIME * 1000) / 2;
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				fastInterval,
+			);
+			const chain = diffBlockchain.getChain();
+			for (const block of chain) {
+				block.powDifficulty = 8;
+			}
+			// Blocks at half target time -> difficulty should roughly double
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBeGreaterThan(8);
+			expect(newDiff).toBe(16); // 8 * (target / (target/2)) = 8 * 2 = 16
+		});
+
+		it('should decrease difficulty proportionally when blocks are too slow', async () => {
+			// Mine blocks 2x slower than target
+			const slowInterval = BLOCK_TIME * 1000 * 2;
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				slowInterval,
+			);
+			const chain = diffBlockchain.getChain();
+			for (const block of chain) {
+				block.powDifficulty = 20;
+			}
+			// Blocks at 2x target time -> difficulty should halve
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBeLessThan(20);
+			expect(newDiff).toBe(10); // 20 * (target / (target*2)) = 20 * 0.5 = 10
+		});
+
+		it('should clamp difficulty increase to 4x maximum', async () => {
+			// Mine blocks extremely fast (1 second apart)
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				1000,
+			);
+			const chain = diffBlockchain.getChain();
+			for (const block of chain) {
+				block.powDifficulty = 8;
+			}
+			// 1s blocks vs 30s target = 30x ratio, but clamped to 4x
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBe(8 * MAX_DIFFICULTY_CHANGE_FACTOR); // 32
+		});
+
+		it('should clamp difficulty decrease to 1/4 minimum', async () => {
+			// Mine blocks extremely slow (10 minutes apart)
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				600_000,
+			);
+			const chain = diffBlockchain.getChain();
+			for (const block of chain) {
+				block.powDifficulty = 20;
+			}
+			// 600s blocks vs 30s target = 0.05 ratio, but clamped to 1/4
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBe(
+				Math.ceil(20 / MAX_DIFFICULTY_CHANGE_FACTOR),
+			); // ceil(5) = 5
+		});
+
+		it('should enforce minimum difficulty floor', async () => {
+			// Mine blocks very slowly with low starting difficulty
+			await mineDiffBlocks(
+				diffBlockchain,
+				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
+				diffMinerAddr,
+				600_000,
+			);
+			const chain = diffBlockchain.getChain();
+			for (const block of chain) {
+				block.powDifficulty = MIN_DIFFICULTY;
+			}
+			// Even with slow blocks, difficulty cannot go below MIN_DIFFICULTY
+			const newDiff = diffBlockchain.calculateNewDifficulty();
+			expect(newDiff).toBeGreaterThanOrEqual(MIN_DIFFICULTY);
+		});
+
+		it('should compute median time past correctly', async () => {
+			// Mine 5 blocks with known timestamps
+			await mineDiffBlocks(diffBlockchain, 5, diffMinerAddr, 10_000);
+			const chain = diffBlockchain.getChain();
+			// Collect actual timestamps
+			const timestamps = chain.map((b) => b.timestamp).sort((a, b) => a - b);
+			const expectedMedian =
+				timestamps[Math.floor(timestamps.length / 2)];
+			expect(diffBlockchain.getMedianTimePast()).toBe(expectedMedian);
+		});
+
+		it('should use config BLOCK_TIME constant', () => {
+			// Verify the blockchain uses the config value
+			expect(diffBlockchain.BLOCK_TIME).toBe(BLOCK_TIME);
 		});
 	});
 });

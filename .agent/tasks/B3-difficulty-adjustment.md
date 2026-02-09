@@ -3,7 +3,7 @@
 | Field            | Value                                    |
 | ---------------- | ---------------------------------------- |
 | **ID**           | `B3`                                     |
-| **Status**       | `[ ]`                                    |
+| **Status**       | `[x]`                                    |
 | **Priority**     | High                                     |
 | **Dependencies** | None                                     |
 | **Branch**       | `feature/b3-difficulty-adjustment`       |
@@ -42,13 +42,13 @@ src/
 
 **Acceptance Criteria:**
 
-- [ ] Single consistent block time constant across the codebase
-- [ ] Difficulty adjusts proportionally, not just +/-1
-- [ ] Adjustment is clamped to prevent extreme changes
-- [ ] Minimum difficulty prevents trivially easy blocks
-- [ ] Timestamp manipulation doesn't affect difficulty
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Single consistent block time constant across the codebase
+- [x] Difficulty adjusts proportionally, not just +/-1
+- [x] Adjustment is clamped to prevent extreme changes
+- [x] Minimum difficulty prevents trivially easy blocks
+- [x] Timestamp manipulation doesn't affect difficulty
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

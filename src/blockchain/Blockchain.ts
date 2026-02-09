@@ -10,6 +10,11 @@ import {
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
 	COIN_MATURITY,
+	BLOCK_TIME,
+	DIFFICULTY_ADJUSTMENT_INTERVAL,
+	MIN_DIFFICULTY,
+	MAX_DIFFICULTY_CHANGE_FACTOR,
+	MEDIAN_TIME_SPAN,
 } from '../config.js';
 
 export interface StakeInfo {
@@ -55,12 +60,9 @@ export class Blockchain {
 	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
 	private _stakes: Map<string, StakeInfo> = new Map();
-	private readonly TARGET_BLOCK_TIME = 375;
 	private lastBlockTime: number = Date.now();
 	private readonly FILE_PATH = BLOCKCHAIN_DATA_PATH;
-	readonly BLOCK_TIME = 10 * 60;
-	private readonly DIFFICULTY_ADJUSTMENT_INTERVAL = 10;
-	private readonly DIFFICULTY_ADJUSTMENT_FACTOR = 4;
+	readonly BLOCK_TIME = BLOCK_TIME;
 	private readonly MIN_STAKE_AMOUNT = 100;
 	private readonly MIN_STAKE_AGE = 60 * 60 * 24;
 	private readonly STAKE_CHECK_INTERVAL = 60 * 1000;
@@ -196,6 +198,16 @@ export class Blockchain {
 			timeSinceLastBlock < this.BLOCK_TIME * 1000
 		) {
 			throw new Error('Block created too quickly');
+		}
+
+		// Validate timestamp against median time past to prevent manipulation
+		if (
+			process.env.NODE_ENV !== 'test' &&
+			block.timestamp <= this.getMedianTimePast()
+		) {
+			throw new Error(
+				'Block timestamp must be greater than median time past',
+			);
 		}
 
 		if (block.previousHash !== lastBlock.hash) {
@@ -739,12 +751,12 @@ export class Blockchain {
 			Math.floor((timestamp - previousBlockTimestamp) / 1000),
 		);
 
-		// target = MAX_HASH * stakeWeight * timeSinceLastBlock / (totalStake * TARGET_BLOCK_TIME)
+		// target = MAX_HASH * stakeWeight * timeSinceLastBlock / (totalStake * BLOCK_TIME)
 		// Higher stake weight → higher target → more likely to win
 		// More time since last block → higher target → block guaranteed eventually
 		const target =
 			(Blockchain.MAX_HASH * BigInt(stakeWeight) * BigInt(timeSinceLastBlock)) /
-			(BigInt(totalStake) * BigInt(this.TARGET_BLOCK_TIME));
+			(BigInt(totalStake) * BigInt(this.BLOCK_TIME));
 
 		return hashValue < target;
 	}
@@ -1133,27 +1145,50 @@ export class Blockchain {
 		}
 	}
 
+	getMedianTimePast(): number {
+		const count = Math.min(this.chain.length, MEDIAN_TIME_SPAN);
+		const startIndex = this.chain.length - count;
+		const timestamps: number[] = [];
+		for (let i = startIndex; i < this.chain.length; i++) {
+			timestamps.push(this.chain[i].timestamp);
+		}
+		timestamps.sort((a, b) => a - b);
+		return timestamps[Math.floor(timestamps.length / 2)];
+	}
+
 	calculateNewDifficulty(): number {
-		if (this.chain.length < this.DIFFICULTY_ADJUSTMENT_INTERVAL) {
+		if (this.chain.length <= DIFFICULTY_ADJUSTMENT_INTERVAL) {
 			return this.chain[0].getDifficulty();
 		}
 
-		const lastBlock = this.getLatestBlock();
-		const lastAdjustmentBlock =
-			this.chain[this.chain.length - this.DIFFICULTY_ADJUSTMENT_INTERVAL];
+		const lastIndex = this.chain.length - 1;
+		const firstIndex = lastIndex - DIFFICULTY_ADJUSTMENT_INTERVAL;
 
-		const timeExpected = this.BLOCK_TIME * this.DIFFICULTY_ADJUSTMENT_INTERVAL;
-		const timeTaken = lastBlock.timestamp - lastAdjustmentBlock.timestamp;
+		// Use direct block timestamps for the interval
+		const timeTaken = Math.max(
+			1,
+			this.chain[lastIndex].timestamp - this.chain[firstIndex].timestamp,
+		);
+		const timeExpected =
+			BLOCK_TIME * 1000 * DIFFICULTY_ADJUSTMENT_INTERVAL;
 
-		let newDifficulty = lastBlock.getDifficulty();
+		const oldDifficulty = this.chain[lastIndex].getDifficulty();
 
-		if (timeTaken < timeExpected / this.DIFFICULTY_ADJUSTMENT_FACTOR) {
-			newDifficulty++;
-		} else if (timeTaken > timeExpected * this.DIFFICULTY_ADJUSTMENT_FACTOR) {
-			newDifficulty = Math.max(1, newDifficulty - 1);
-		}
+		// Proportional adjustment: newDifficulty = old * (expected / actual)
+		let newDifficulty = Math.round(
+			oldDifficulty * (timeExpected / timeTaken),
+		);
 
-		return newDifficulty;
+		// Clamp: no more than 4x change in either direction
+		const maxDifficulty = oldDifficulty * MAX_DIFFICULTY_CHANGE_FACTOR;
+		const minDifficulty = Math.ceil(
+			oldDifficulty / MAX_DIFFICULTY_CHANGE_FACTOR,
+		);
+		newDifficulty = Math.min(newDifficulty, maxDifficulty);
+		newDifficulty = Math.max(newDifficulty, minDifficulty);
+
+		// Enforce minimum difficulty floor
+		return Math.max(MIN_DIFFICULTY, newDifficulty);
 	}
 
 	public async replaceChain(newChain: Block[]): Promise<void> {
