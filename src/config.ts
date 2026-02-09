@@ -46,6 +46,9 @@ export const MAX_TRANSACTION_OUTPUTS = 256;
 // Block timing
 export const BLOCK_TIME = 30; // Target time between blocks in seconds
 
+// Wallet configuration
+export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
+
 // Difficulty adjustment
 export const DIFFICULTY_ADJUSTMENT_INTERVAL = 10; // Adjust difficulty every N blocks
 export const MIN_DIFFICULTY = 4; // Minimum difficulty (same as genesis)

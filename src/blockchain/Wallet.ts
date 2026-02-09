@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import CryptoJS from 'crypto-js';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
+import { MAX_WALLET_BACKUPS } from '../config.js';
 
 interface WalletData {
 	privateKey: string;
@@ -84,14 +85,56 @@ export class Wallet {
 	}
 
 	private loadWallet(): void {
-		const data: WalletData = JSON.parse(
-			fs.readFileSync(this.walletPath, 'utf8')
-		);
-		this.privateKey = Buffer.from(data.privateKey, 'hex');
-		this.publicKey = Buffer.from(data.publicKey, 'hex');
-		this.address = data.address;
-		this.transactions = data.transactions;
-		this.utxos = data.utxos || [];
+		let rawData: string;
+		try {
+			rawData = fs.readFileSync(this.walletPath, 'utf8');
+		} catch (error) {
+			console.error('[Wallet] failed to read wallet file:', error);
+			console.log('[Wallet] generating new wallet');
+			this.generateNewWallet();
+			return;
+		}
+
+		let data: WalletData;
+		try {
+			data = JSON.parse(rawData);
+		} catch (error) {
+			console.error('[Wallet] wallet file is corrupted (invalid JSON):', error);
+			console.log('[Wallet] generating new wallet');
+			this.generateNewWallet();
+			return;
+		}
+
+		if (!data.privateKey || !data.publicKey || !data.address) {
+			console.error('[Wallet] wallet file is missing required fields');
+			console.log('[Wallet] generating new wallet');
+			this.generateNewWallet();
+			return;
+		}
+
+		try {
+			this.privateKey = Buffer.from(data.privateKey, 'hex');
+			this.publicKey = Buffer.from(data.publicKey, 'hex');
+
+			// Validate that private key produces the stored public key
+			if (!secp256k1.privateKeyVerify(this.privateKey)) {
+				throw new Error('invalid private key');
+			}
+			const derivedPublicKey = Buffer.from(
+				secp256k1.publicKeyCreate(this.privateKey)
+			);
+			if (!derivedPublicKey.equals(this.publicKey)) {
+				throw new Error('public key does not match private key');
+			}
+
+			this.address = data.address;
+			this.transactions = data.transactions || [];
+			this.utxos = data.utxos || [];
+		} catch (error) {
+			console.error('[Wallet] wallet file contains invalid key data:', error);
+			console.log('[Wallet] generating new wallet');
+			this.generateNewWallet();
+		}
 	}
 
 	private saveWallet(): void {
@@ -113,9 +156,32 @@ export class Wallet {
 		if (fs.existsSync(this.walletPath)) {
 			const backup = `${this.walletPath}.${Date.now()}.backup`;
 			fs.copyFileSync(this.walletPath, backup);
+			this.pruneBackups();
 		}
 
 		fs.writeFileSync(this.walletPath, JSON.stringify(data, null, 2));
+		try {
+			fs.chmodSync(this.walletPath, 0o600);
+		} catch (error) {
+			console.error('[Wallet] failed to set file permissions:', error);
+		}
+	}
+
+	private pruneBackups(): void {
+		const dir = path.dirname(this.walletPath);
+		const baseName = path.basename(this.walletPath);
+		try {
+			const backups = fs.readdirSync(dir)
+				.filter((f) => f.startsWith(baseName + '.') && f.endsWith('.backup'))
+				.sort();
+
+			while (backups.length > MAX_WALLET_BACKUPS) {
+				const oldest = backups.shift()!;
+				fs.unlinkSync(path.join(dir, oldest));
+			}
+		} catch (error) {
+			console.error('[Wallet] failed to prune backups:', error);
+		}
 	}
 
 	addTransaction(
@@ -216,23 +282,45 @@ export class Wallet {
 
 	exportWallet(exportPath: string): void {
 		fs.copyFileSync(this.walletPath, exportPath);
+		try {
+			fs.chmodSync(exportPath, 0o600);
+		} catch (error) {
+			console.error('[Wallet] failed to set export file permissions:', error);
+		}
 	}
 
 	static importWallet(importPath: string, targetPath?: string): Wallet {
-		const wallet = new Wallet(targetPath);
-		const importedData = JSON.parse(fs.readFileSync(importPath, 'utf8'));
+		let importedData: WalletData;
+		try {
+			importedData = JSON.parse(fs.readFileSync(importPath, 'utf8'));
+		} catch (error) {
+			throw new Error('failed to read or parse import file');
+		}
 
-		// Validate imported data
+		// Validate required fields
 		if (
 			!importedData.privateKey ||
 			!importedData.publicKey ||
 			!importedData.address
 		) {
-			throw new Error('Invalid wallet file');
+			throw new Error('invalid wallet file: missing required fields');
 		}
 
-		fs.copyFileSync(importPath, wallet.walletPath);
-		wallet.loadWallet();
+		// Cryptographically validate that public key matches private key
+		const privateKeyBuf = Buffer.from(importedData.privateKey, 'hex');
+		if (!secp256k1.privateKeyVerify(privateKeyBuf)) {
+			throw new Error('invalid wallet file: invalid private key');
+		}
+		const derivedPublicKey = Buffer.from(
+			secp256k1.publicKeyCreate(privateKeyBuf)
+		);
+		const storedPublicKey = Buffer.from(importedData.publicKey, 'hex');
+		if (!derivedPublicKey.equals(storedPublicKey)) {
+			throw new Error('invalid wallet file: public key does not match private key');
+		}
+
+		fs.copyFileSync(importPath, targetPath || path.join(process.cwd(), 'data', 'wallet.json'));
+		const wallet = new Wallet(targetPath);
 		return wallet;
 	}
 

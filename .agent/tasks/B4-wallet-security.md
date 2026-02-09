@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `B4`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Medium                               |
 | **Dependencies** | None                                 |
 | **Branch**       | `feature/b4-wallet-security`         |
@@ -40,13 +40,13 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] Only last 3 wallet backups are kept
-- [ ] Wallet files have restricted permissions (0600)
-- [ ] Imported wallets are cryptographically validated
-- [ ] Corrupted wallet files are handled gracefully
-- [ ] Empty catch blocks are replaced with proper error handling
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Only last 3 wallet backups are kept
+- [x] Wallet files have restricted permissions (0600)
+- [x] Imported wallets are cryptographically validated
+- [x] Corrupted wallet files are handled gracefully
+- [x] Empty catch blocks are replaced with proper error handling
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 
