@@ -42,7 +42,7 @@ describe('Blockchain', () => {
 
 	beforeEach(() => {
 		process.env.NODE_ENV = 'test';
-		// Mock fs functions
+		// Mock fs functions for BlockStore's chunked storage
 		(fs.existsSync as jest.Mock).mockReturnValue(false);
 		(fs.readFileSync as jest.Mock).mockImplementation(() => {
 			const error = new Error('File not found') as NodeJS.ErrnoException;
@@ -50,6 +50,12 @@ describe('Blockchain', () => {
 			throw error;
 		});
 		(fs.writeFileSync as jest.Mock).mockImplementation(() => {});
+		(fs.mkdirSync as jest.Mock).mockImplementation(() => {});
+		(fs.appendFileSync as jest.Mock).mockImplementation(() => {});
+		(fs.readdirSync as jest.Mock).mockReturnValue([]);
+		(fs.openSync as jest.Mock).mockReturnValue(10);
+		(fs.readSync as jest.Mock).mockReturnValue(0);
+		(fs.closeSync as jest.Mock).mockImplementation(() => {});
 
 		// Mock Block's difficulty methods
 		jest.spyOn(Block.prototype, 'getDifficulty').mockImplementation(() => 1);

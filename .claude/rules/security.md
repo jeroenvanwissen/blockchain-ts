@@ -2,9 +2,9 @@
 
 ## Secrets Management
 
-- Private keys are stored in `data/wallet.json` — currently unencrypted (improvement planned in task B4)
+- Private keys are stored in `data/wallet.dat` (protobuf) — currently unencrypted (improvement planned in task B4)
 - Never log private keys, wallet file contents, or key material
-- Create timestamped backup before overwriting wallet: `wallet.json.{timestamp}.backup`
+- Create timestamped backup before overwriting wallet: `wallet.dat.{timestamp}.backup`
 - Wallet files should have restricted permissions (`0600`) — not currently enforced (task B4)
 - Never include `data/` directory contents in version control (covered by `.gitignore`)
 
@@ -43,7 +43,7 @@
 
 ## Data Protection
 
-- Chain data in `blockchain_data.json` — integrity verified by hash chain
+- Chain data in `blocks/` directory — integrity verified by hash chain
 - Never store sensitive data in log output
 - Verify genesis block hash on chain load from disk
 - Sanitize file paths from user input (data directory argument)

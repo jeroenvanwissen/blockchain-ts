@@ -21,6 +21,7 @@ src/
 ├── blockchain/               # Core consensus and data structures
 │   ├── Block.ts              #   Block creation, hashing, PoW/PoS detection
 │   ├── Blockchain.ts         #   Chain management, UTXO set, validation, staking
+│   ├── BlockStore.ts         #   Chunked block storage with index
 │   ├── Transaction.ts        #   Transaction model, signing, verification
 │   ├── Wallet.ts             #   Key management, address encoding, persistence
 │   ├── Miner.ts              #   PoW mining via worker threads
@@ -34,8 +35,10 @@ src/
 ├── index.ts                  # Node entry point
 └── mine.ts                   # Standalone miner entry point
 data/                         # Runtime data (gitignored)
-├── blockchain_data.json      #   Persisted chain
-├── wallet.json               #   Wallet keys and address
+├── blocks/                   #   Chunked block storage
+│   ├── blk00000.dat          #     Block data files (append-only)
+│   └── index.dat             #     Block index (hash/height → file + offset)
+├── wallet.dat                #   Wallet keys and address (protobuf)
 └── peers.json                #   Known peer addresses
 ```
 
@@ -50,7 +53,7 @@ The system is a single-process blockchain node with optional external miner. `Bl
 - **Worker threads for mining** — `miningWorker.cjs` is CommonJS because `worker_threads` requires it
 - **ES modules** — Project uses `"type": "module"` with explicit `.js` extensions in imports
 - **Single config file** — All constants in `src/config.ts`, environment variables for ports/peers only
-- **JSON persistence** — Chain and wallet stored as JSON in `data/` directory
+- **Chunked block storage** — Blocks in append-only `blk*.dat` files with protobuf index; wallet as protobuf in `data/`
 - **Mutex for concurrency** — `async-mutex` protects chain replacement; other shared state needs protection (see tasks)
 
 ## Rules

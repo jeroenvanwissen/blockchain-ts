@@ -117,8 +117,9 @@ Runtime data is stored in `./data/` (configurable via `--data-dir`):
 
 | File                    | Content                              |
 | ----------------------- | ------------------------------------ |
-| `blockchain_data.json`  | Persisted chain state                |
-| `wallet.json`           | Wallet keys and transaction history  |
+| `blocks/blk*.dat`       | Chunked block data files             |
+| `blocks/index.dat`      | Block index (hash/height lookups)    |
+| `wallet.dat`            | Wallet keys and transaction history  |
 | `peers.json`            | Known peer addresses                 |
 
 ---

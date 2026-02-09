@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `B6`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Medium                               |
 | **Dependencies** | B5                                   |
 | **Branch**       | `feature/b6-chunked-block-storage`   |
@@ -84,18 +84,18 @@ message BlockIndex {
 
 **Acceptance Criteria:**
 
-- [ ] `BlockStore` class created with append, lookup by hash, lookup by height, and load all
-- [ ] Blocks written to `blk*.dat` files with `MAX_BLOCK_FILE_SIZE` rotation
-- [ ] Index file tracks block location `(fileNumber, byteOffset, dataLength)`
-- [ ] Index supports lookup by both block hash and block height
-- [ ] New blocks are appended (not full rewrite) during normal operation
-- [ ] Chain replacement (P2P sync) clears and rewrites store
-- [ ] `rebuildIndex()` can recover index from data files alone
-- [ ] `Blockchain` uses `BlockStore` — no direct file I/O for block persistence
-- [ ] No single-file `blockchain_data.dat` remains in config, source, or tests
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
-- [ ] Lint passes: `npm run lint`
+- [x] `BlockStore` class created with append, lookup by hash, lookup by height, and load all
+- [x] Blocks written to `blk*.dat` files with `MAX_BLOCK_FILE_SIZE` rotation
+- [x] Index file tracks block location `(fileNumber, byteOffset, dataLength)`
+- [x] Index supports lookup by both block hash and block height
+- [x] New blocks are appended (not full rewrite) during normal operation
+- [x] Chain replacement (P2P sync) clears and rewrites store
+- [x] `rebuildIndex()` can recover index from data files alone
+- [x] `Blockchain` uses `BlockStore` — no direct file I/O for block persistence
+- [x] No single-file `blockchain_data.dat` remains in config, source, or tests
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
+- [x] Lint passes: `npm run lint`
 
 **Verification Commands:**
 

@@ -67,7 +67,7 @@ dist/                         # Compiled output (gitignored)
 ## Data Persistence
 
 - All runtime data in `data/` directory (configurable via `--datadir`)
-- Chain: `blockchain_data.json` (array of serialized blocks)
-- Wallet: `wallet.json` (keys and address)
+- Chain: `blocks/` subdirectory with chunked `blk*.dat` files and `index.dat`
+- Wallet: `wallet.dat` (protobuf, keys and address)
 - Peers: `peers.json` (known peer addresses)
-- Create backup before overwriting wallet: `wallet.json.{timestamp}.backup`
+- Create backup before overwriting wallet: `wallet.dat.{timestamp}.backup`

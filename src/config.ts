@@ -20,8 +20,11 @@ const getDataDirectory = (): string => {
 
 // Export configured paths
 export const DATA_DIR = getDataDirectory();
-export const BLOCKCHAIN_DATA_PATH = path.join(DATA_DIR, 'blockchain_data.dat');
+export const BLOCKS_DIR = path.join(DATA_DIR, 'blocks');
 export const PEER_DATA_PATH = path.join(DATA_DIR, 'peers.json');
+
+// Block storage
+export const MAX_BLOCK_FILE_SIZE = 128 * 1024 * 1024; // 128 MB per blk file
 
 // P2P configuration
 export const DEFAULT_P2P_PORT = 5001;
@@ -52,6 +55,7 @@ export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to
 
 // Proto schema paths
 export const BLOCKCHAIN_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockchain.proto');
+export const BLOCK_INDEX_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockindex.proto');
 export const WALLET_PROTO_PATH = path.join(process.cwd(), 'proto', 'wallet.proto');
 
 // Difficulty adjustment

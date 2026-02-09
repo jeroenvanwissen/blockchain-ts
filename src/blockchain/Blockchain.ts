@@ -1,13 +1,10 @@
 import { Block } from './Block.js';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
 import { Wallet } from './Wallet.js';
-import * as fs from 'fs';
+import { BlockStore } from './BlockStore.js';
 import * as crypto from 'crypto';
-import * as path from 'path';
-import protobuf from 'protobufjs';
 import {
-	BLOCKCHAIN_DATA_PATH,
-	BLOCKCHAIN_PROTO_PATH,
+	BLOCKS_DIR,
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
@@ -18,14 +15,6 @@ import {
 	MAX_DIFFICULTY_CHANGE_FACTOR,
 	MEDIAN_TIME_SPAN,
 } from '../config.js';
-
-let _blockchainProtoRoot: protobuf.Root | null = null;
-function getBlockchainProto(): protobuf.Type {
-	if (!_blockchainProtoRoot) {
-		_blockchainProtoRoot = protobuf.loadSync(BLOCKCHAIN_PROTO_PATH);
-	}
-	return _blockchainProtoRoot.lookupType('BlockchainData');
-}
 
 export interface StakeInfo {
 	amount: number;
@@ -41,23 +30,6 @@ interface UTXO {
 	isCoinbase: boolean;
 }
 
-interface SerializedTransaction {
-	inputs: TxInput[];
-	outputs: TxOutput[];
-	timestamp: number;
-	nonce?: number; // ensure nonce is captured when loading
-}
-
-interface SerializedBlock {
-	timestamp: number;
-	transactions: SerializedTransaction[];
-	previousHash: string;
-	nonce: number;
-	powDifficulty: number;
-	index: number;
-	hash: string;
-}
-
 import { Mutex } from 'async-mutex';
 
 export class Blockchain {
@@ -71,7 +43,7 @@ export class Blockchain {
 	private pendingTransactions: Transaction[];
 	private _stakes: Map<string, StakeInfo> = new Map();
 	private lastBlockTime: number = Date.now();
-	private readonly FILE_PATH = BLOCKCHAIN_DATA_PATH;
+	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
 	private readonly MIN_STAKE_AMOUNT = 100;
 	private readonly MIN_STAKE_AGE = 60 * 60 * 24;
@@ -80,6 +52,7 @@ export class Blockchain {
 	private lastStakeCheck: number = 0;
 
 	constructor() {
+		this.blockStore = new BlockStore(BLOCKS_DIR);
 		const genesisBlock = this.createGenesisBlock();
 		this.chain = [genesisBlock];
 		this.pendingTransactions = [];
@@ -308,8 +281,8 @@ export class Blockchain {
 		// Update UTXO set
 		this.updateUTXOSet(block);
 
-		// Save blockchain after adding new block
-		this.saveBlockchain();
+		// Persist new block
+		this.blockStore.appendBlock(block);
 	}
 
 	public async addMinedBlock(block: Block): Promise<void> {
@@ -1024,62 +997,19 @@ export class Blockchain {
 
 	private loadBlockchain(): void {
 		try {
-			if (!fs.existsSync(this.FILE_PATH)) {
-				const dataDir = path.dirname(this.FILE_PATH);
-				if (!fs.existsSync(dataDir)) {
-					fs.mkdirSync(dataDir, { recursive: true });
-				}
+			const blocks = this.blockStore.loadAllBlocks();
 
+			if (blocks.length === 0) {
+				// No stored blocks — persist genesis and return
 				this.chain = [this.createGenesisBlock()];
-				this.saveBlockchain();
+				this.blockStore.appendBlock(this.chain[0]);
+				this.utxoSet.clear();
+				this.updateUTXOSet(this.chain[0]);
 				return;
 			}
 
-			const fileBuffer = fs.readFileSync(this.FILE_PATH);
-			if (!fileBuffer || fileBuffer.length === 0) {
-				this.chain = [this.createGenesisBlock()];
-				this.saveBlockchain();
-				return;
-			}
-
-			const BlockchainData = getBlockchainProto();
-			const decoded = BlockchainData.decode(fileBuffer as Uint8Array);
-			const obj = BlockchainData.toObject(decoded, { longs: Number });
-			const serializedChain = obj.blocks as SerializedBlock[];
-
-			const reconstructedChain: Block[] = [];
-
-			for (const blockData of serializedChain) {
-				const transactions = blockData.transactions.map((txData) => {
-					const tx = new Transaction(
-						txData.inputs,
-						txData.outputs,
-						txData.timestamp,
-						txData.nonce
-					);
-					return tx;
-				});
-
-				const block = new Block(
-					blockData.timestamp,
-					transactions,
-					blockData.previousHash,
-					blockData.nonce,
-					blockData.powDifficulty,
-					blockData.index
-				);
-
-				// Instead of recalculating, use the stored hash
-				block.hash = blockData.hash;
-				reconstructedChain.push(block);
-			}
-
-			if (reconstructedChain.length === 0) {
-				throw new Error('Empty blockchain data');
-			}
-
-			// Modified genesis block validation
-			const genesisBlock = reconstructedChain[0];
+			// Validate genesis block
+			const genesisBlock = blocks[0];
 			const expectedGenesis = this.createGenesisBlock();
 
 			if (
@@ -1096,21 +1026,21 @@ export class Blockchain {
 				throw new Error('Invalid genesis block');
 			}
 
-			for (let i = 1; i < reconstructedChain.length; i++) {
-				const currentBlock = reconstructedChain[i];
-				const previousBlock = reconstructedChain[i - 1];
+			// Validate chain continuity
+			for (let i = 1; i < blocks.length; i++) {
+				const currentBlock = blocks[i];
+				const previousBlock = blocks[i - 1];
 
 				if (currentBlock.previousHash !== previousBlock.hash) {
 					throw new Error(`Invalid chain at block ${i}: broken link`);
 				}
 
-				// Skip hash validation since we're using stored hashes
 				if (!currentBlock.hasValidTransactions()) {
 					throw new Error(`Invalid chain at block ${i}: invalid transactions`);
 				}
 			}
 
-			this.chain = reconstructedChain;
+			this.chain = blocks;
 
 			// Rebuild UTXO set
 			this.utxoSet.clear();
@@ -1119,47 +1049,6 @@ export class Blockchain {
 			}
 		} catch (error) {
 			console.error('Error loading blockchain:', error);
-			// Don't overwrite the file or reset the chain, just throw the error
-			throw error;
-		}
-	}
-
-	private saveBlockchain(): void {
-		try {
-			const dataDir = path.dirname(this.FILE_PATH);
-			if (!fs.existsSync(dataDir)) {
-				fs.mkdirSync(dataDir, { recursive: true });
-			}
-
-			const BlockchainData = getBlockchainProto();
-			const serializedBlocks = this.chain.map((block) => ({
-				timestamp: block.timestamp,
-				transactions: block.transactions.map((tx) => ({
-					inputs: tx.inputs.map((input) => ({
-						previousTx: input.previousTx,
-						outputIndex: input.outputIndex,
-						signature: input.signature,
-					})),
-					outputs: tx.outputs.map((output) => ({
-						address: output.address,
-						amount: output.amount,
-					})),
-					timestamp: tx.timestamp,
-					nonce: tx.nonce,
-				})),
-				previousHash: block.previousHash,
-				nonce: block.nonce,
-				powDifficulty: block.powDifficulty,
-				index: block.index,
-				hash: block.hash,
-			}));
-			const message = BlockchainData.create({ blocks: serializedBlocks });
-			const errMsg = BlockchainData.verify(message);
-			if (errMsg) throw new Error(`invalid blockchain data: ${errMsg}`);
-			const buffer = BlockchainData.encode(message).finish();
-			fs.writeFileSync(this.FILE_PATH, buffer);
-		} catch (error) {
-			console.error('Error saving blockchain:', error);
 			throw error;
 		}
 	}
@@ -1304,8 +1193,8 @@ export class Blockchain {
 				}
 			}
 
-			// Save the new chain
-			this.saveBlockchain();
+			// Persist the new chain
+			this.blockStore.replaceAll(this.chain);
 		} finally {
 			release();
 		}
