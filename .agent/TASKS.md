@@ -41,7 +41,7 @@ _Complete the consensus mechanism and add missing validation._
 | `[x]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                    | Medium   | None         |
 | `[x]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                   | Medium   | None         |
 | `[x]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)       | Medium   | B5           |
-| `[ ]`  | `B7` | [Cross-Platform Storage Paths](tasks/B7-cross-platform-paths.md)            | Medium   | None         |
+| `[x]`  | `B7` | [Cross-Platform Storage Paths](tasks/B7-cross-platform-paths.md)            | Medium   | None         |
 
 ### Wave C — Hardening (depends on Wave B)
 

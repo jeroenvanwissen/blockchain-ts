@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `B7`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Medium                               |
 | **Dependencies** | None                                 |
 | **Branch**       | `feature/b7-cross-platform-paths`    |

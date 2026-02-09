@@ -1,7 +1,20 @@
 import * as path from 'path';
+import * as os from 'os';
 
-// Default data directory
-export const DEFAULT_DATA_DIR = './data';
+// Platform-aware default data directory
+export const getDefaultDataDir = (): string => {
+	const platform = process.platform;
+	if (platform === 'win32') {
+		const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+		return path.join(appData, 'blockchain-ts');
+	} else if (platform === 'darwin') {
+		return path.join(os.homedir(), 'Library', 'Application Support', 'blockchain-ts');
+	} else {
+		return path.join(os.homedir(), '.blockchain-ts');
+	}
+};
+
+export const DEFAULT_DATA_DIR = getDefaultDataDir();
 
 // Get data directory from command line args
 const getDataDirectory = (): string => {
