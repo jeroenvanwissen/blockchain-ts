@@ -73,6 +73,10 @@ export const BLOCKCHAIN_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockcha
 export const BLOCK_INDEX_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockindex.proto');
 export const WALLET_PROTO_PATH = path.join(process.cwd(), 'proto', 'wallet.proto');
 
+// Staking security
+export const UNSTAKE_DELAY = 100; // Blocks before unstaked funds are released
+export const MAX_STAKE_AGE_MULTIPLIER = 4; // Maximum age multiplier for stake weight
+
 // Difficulty adjustment
 export const DIFFICULTY_ADJUSTMENT_INTERVAL = 10; // Adjust difficulty every N blocks
 export const MIN_DIFFICULTY = 4; // Minimum difficulty (same as genesis)

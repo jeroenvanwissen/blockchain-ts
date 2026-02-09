@@ -12,6 +12,8 @@ import {
 	MIN_DIFFICULTY,
 	MAX_DIFFICULTY_CHANGE_FACTOR,
 	MAX_BLOCK_TRANSACTIONS,
+	UNSTAKE_DELAY,
+	MAX_STAKE_AGE_MULTIPLIER,
 } from '../../config.js';
 import * as fs from 'fs';
 
@@ -984,8 +986,12 @@ describe('Blockchain', () => {
 			await blockchain.stake(minerAddr, 200, minerWallet);
 			expect(blockchain.totalNetworkStake()).toBe(200);
 
-			// Unstake partially — totalNetworkStake should decrease
+			// Unstake partially — stake remains active during delay period
 			await blockchain.unstake(minerAddr, 100);
+			expect(blockchain.totalNetworkStake()).toBe(200);
+
+			// After UNSTAKE_DELAY blocks, the unstake is processed
+			await minePowBlocks(UNSTAKE_DELAY, minerAddr);
 			expect(blockchain.totalNetworkStake()).toBe(100);
 		});
 	});
@@ -1669,6 +1675,264 @@ describe('Blockchain', () => {
 			await blockchain.replaceChain(newChain);
 			expect(blockchain.getChain().length).toBe(3);
 			expect(blockchain.getChainWeight()).toBeGreaterThan(0);
+		});
+	});
+
+	describe('Stake Security (C3)', () => {
+		// Mine enough blocks so mature balance covers staking amounts
+		// After 3*COIN_MATURITY blocks: (3*COIN_MATURITY - COIN_MATURITY + 1) mature coinbases
+		const stakeSetupBlocks = 3 * COIN_MATURITY;
+
+		describe('Negative stake weight guard', () => {
+			it('should return base amount when timestamps are corrupted (negative elapsed)', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 100, minerWallet);
+
+				// Corrupt the stake timestamp to be after lastBlockTime
+				const stake = blockchain['_stakes'].get(minerAddr)!;
+				stake.timestamp = stake.lastBlockTime + 999999;
+				blockchain['_stakes'].set(minerAddr, stake);
+
+				// Should return base amount (100), not a negative or zero weight
+				const weight = blockchain.calculateStakeWeight(minerAddr);
+				expect(weight).toBe(100);
+			});
+		});
+
+		describe('Bounded stake weight multiplier', () => {
+			it('should cap multiplier at MAX_STAKE_AGE_MULTIPLIER', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 100, minerWallet);
+
+				// Set stake to be very old (1000 days)
+				const stake = blockchain['_stakes'].get(minerAddr)!;
+				stake.timestamp = 0;
+				stake.lastBlockTime = 1000 * 24 * 60 * 60 * 1000;
+				blockchain['_stakes'].set(minerAddr, stake);
+
+				const weight = blockchain.calculateStakeWeight(minerAddr);
+				// With 1000 days, unbounded 1.1^1000 would be astronomical
+				// But capped at MAX_STAKE_AGE_MULTIPLIER (4x)
+				expect(weight).toBe(Math.floor(100 * MAX_STAKE_AGE_MULTIPLIER));
+			});
+
+			it('should not cap multiplier when below maximum', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 100, minerWallet);
+
+				// Set stake to be 1 day old (multiplier = 1.1, below cap of 4)
+				const stake = blockchain['_stakes'].get(minerAddr)!;
+				stake.timestamp = 0;
+				stake.lastBlockTime = 24 * 60 * 60 * 1000;
+				blockchain['_stakes'].set(minerAddr, stake);
+
+				const weight = blockchain.calculateStakeWeight(minerAddr);
+				expect(weight).toBe(Math.floor(100 * 1.1));
+			});
+		});
+
+		describe('Unstake delay', () => {
+			it('should not remove stake immediately on unstake', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 100, minerWallet);
+
+				await blockchain.unstake(minerAddr, 100);
+
+				// Stake should still be active
+				expect(blockchain.getStake(minerAddr)).toBe(100);
+				// But there should be a pending unstake
+				const pending = blockchain.getPendingUnstakes(minerAddr);
+				expect(pending.length).toBe(1);
+				expect(pending[0].amount).toBe(100);
+			});
+
+			it('should process unstake after UNSTAKE_DELAY blocks', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				await blockchain.unstake(minerAddr, 100);
+
+				// Mine UNSTAKE_DELAY blocks to mature the unstake
+				await minePowBlocks(UNSTAKE_DELAY, minerAddr);
+
+				// Stake should now be reduced
+				expect(blockchain.getStake(minerAddr)).toBe(100);
+				// Pending unstake should be cleared
+				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(0);
+			});
+
+			it('should keep stake active during delay period', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				await blockchain.unstake(minerAddr, 100);
+
+				// Mine only half the delay
+				await minePowBlocks(Math.floor(UNSTAKE_DELAY / 2), minerAddr);
+
+				// Stake should still be full
+				expect(blockchain.getStake(minerAddr)).toBe(200);
+				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(1);
+			});
+
+			it('should reject unstake exceeding available amount (accounting for pending)', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				// First unstake of 150
+				await blockchain.unstake(minerAddr, 150);
+
+				// Second unstake of 100 should fail (only 50 available)
+				await expect(blockchain.unstake(minerAddr, 100))
+					.rejects.toThrow('Insufficient stake amount');
+			});
+		});
+
+		describe('Double-sign slashing', () => {
+			it('should slash stake on double-sign evidence', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				// Generate a PoS block to record the signature
+				const lastBlock = blockchain.getLatestBlock();
+				const nextBlockTime = lastBlock.timestamp + 11 * 60 * 1000;
+				jest.setSystemTime(new Date(nextBlockTime));
+				await blockchain.minePendingTransactions(minerAddr, minerWallet);
+
+				const posBlock = blockchain.getLatestBlock();
+				expect(posBlock.isProofOfStake()).toBe(true);
+
+				// Verify stake exists
+				expect(blockchain.getStake(minerAddr)).toBeGreaterThan(0);
+
+				// Submit double-sign evidence (known hash + a different hash)
+				await blockchain.submitDoubleSignEvidence(
+					posBlock.index,
+					posBlock.hash,
+					'different-block-hash-at-same-height',
+					minerAddr,
+				);
+
+				// Stake should be slashed (removed entirely)
+				expect(blockchain.getStake(minerAddr)).toBe(0);
+			});
+
+			it('should reject evidence with same block hashes', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				const lastBlock = blockchain.getLatestBlock();
+				const nextBlockTime = lastBlock.timestamp + 11 * 60 * 1000;
+				jest.setSystemTime(new Date(nextBlockTime));
+				await blockchain.minePendingTransactions(minerAddr, minerWallet);
+
+				const posBlock = blockchain.getLatestBlock();
+
+				await expect(blockchain.submitDoubleSignEvidence(
+					posBlock.index,
+					posBlock.hash,
+					posBlock.hash,
+					minerAddr,
+				)).rejects.toThrow('block hashes must be different');
+			});
+
+			it('should reject evidence for unknown validator', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(1, minerAddr);
+
+				const unknownWallet = new Wallet();
+				await expect(blockchain.submitDoubleSignEvidence(
+					1,
+					'hash1',
+					'hash2',
+					unknownWallet.getAddress(),
+				)).rejects.toThrow('no known block signature');
+			});
+
+			it('should also remove pending unstakes on slashing', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
+				await blockchain.stake(minerAddr, 200, minerWallet);
+
+				// Queue an unstake
+				await blockchain.unstake(minerAddr, 100);
+				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(1);
+
+				// Generate PoS block
+				const lastBlock = blockchain.getLatestBlock();
+				const nextBlockTime = lastBlock.timestamp + 11 * 60 * 1000;
+				jest.setSystemTime(new Date(nextBlockTime));
+				await blockchain.minePendingTransactions(minerAddr, minerWallet);
+
+				const posBlock = blockchain.getLatestBlock();
+
+				// Slash
+				await blockchain.submitDoubleSignEvidence(
+					posBlock.index,
+					posBlock.hash,
+					'other-hash',
+					minerAddr,
+				);
+
+				// Both stake and pending unstake should be gone
+				expect(blockchain.getStake(minerAddr)).toBe(0);
+				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(0);
+			});
+		});
+
+		describe('Pattern B stake detection fix', () => {
+			it('should not treat normal self-transfers as staking', async () => {
+				const minerAddr = minerWallet.getAddress();
+				// Mine enough blocks for sufficient mature balance
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+
+				// Clear stakes to start fresh
+				blockchain['_stakes'].clear();
+
+				// Create a normal self-transfer >= 100 (all outputs same address)
+				const tx = blockchain.createTransaction(
+					minerAddr,
+					minerAddr,
+					100,
+					minerWallet,
+				);
+				await blockchain.addTransaction(tx);
+
+				// Mine the block containing the self-transfer
+				const lastBlock = blockchain.getLatestBlock();
+				const blockTime = lastBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+				jest.setSystemTime(new Date(blockTime));
+				await blockchain.minePendingTransactions(minerAddr);
+
+				// Stakes map should still be empty — self-transfer is not staking
+				expect(blockchain['_stakes'].size).toBe(0);
+			});
+
+			it('should detect staking via coinstake format (zero marker)', async () => {
+				const minerAddr = minerWallet.getAddress();
+				await minePowBlocks(stakeSetupBlocks, minerAddr);
+
+				// Use stake() which now creates coinstake-format transactions
+				await blockchain.stake(minerAddr, 100, minerWallet);
+
+				// Mine the staking transaction
+				const lastBlock = blockchain.getLatestBlock();
+				const blockTime = lastBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+				jest.setSystemTime(new Date(blockTime));
+				await blockchain.minePendingTransactions(minerAddr);
+
+				// The stake should be registered
+				expect(blockchain.getStake(minerAddr)).toBe(100);
+			});
 		});
 	});
 });

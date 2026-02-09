@@ -22,71 +22,71 @@
 
 _Security vulnerabilities and consensus-breaking bugs. The blockchain does not work correctly without these._
 
-| Status | ID   | Task                                                                    | Priority | Dependencies |
-| ------ | ---- | ----------------------------------------------------------------------- | -------- | ------------ |
-| `[x]`  | `A1` | [Fix Transaction Signing](tasks/A1-fix-transaction-signing.md)          | Critical | None         |
-| `[x]`  | `A2` | [Fix UTXO Double-Spend](tasks/A2-utxo-double-spend.md)                 | Critical | None         |
-| `[x]`  | `A3` | [Fix Concurrency / Race Conditions](tasks/A3-concurrency-locks.md)     | Critical | None         |
-| `[x]`  | `A4` | [Coinbase Transaction Validation](tasks/A4-coinbase-validation.md)     | High     | None         |
+| Status | ID   | Task                                                               | Priority | Dependencies |
+| ------ | ---- | ------------------------------------------------------------------ | -------- | ------------ |
+| `[x]`  | `A1` | [Fix Transaction Signing](tasks/A1-fix-transaction-signing.md)     | Critical | None         |
+| `[x]`  | `A2` | [Fix UTXO Double-Spend](tasks/A2-utxo-double-spend.md)             | Critical | None         |
+| `[x]`  | `A3` | [Fix Concurrency / Race Conditions](tasks/A3-concurrency-locks.md) | Critical | None         |
+| `[x]`  | `A4` | [Coinbase Transaction Validation](tasks/A4-coinbase-validation.md) | High     | None         |
 
 ### Wave B — Consensus & Validation (depends on Wave A)
 
 _Complete the consensus mechanism and add missing validation._
 
-| Status | ID   | Task                                                                        | Priority | Dependencies |
-| ------ | ---- | --------------------------------------------------------------------------- | -------- | ------------ |
-| `[x]`  | `B1` | [Implement PoS Validator Selection](tasks/B1-pos-validator-selection.md)    | Critical | A3           |
-| `[x]`  | `B2` | [Complete Transaction Validation](tasks/B2-transaction-validation.md)       | High     | A1, A2       |
-| `[x]`  | `B3` | [Fix Difficulty Adjustment](tasks/B3-difficulty-adjustment.md)              | High     | None         |
-| `[x]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                    | Medium   | None         |
-| `[x]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                   | Medium   | None         |
-| `[x]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)       | Medium   | B5           |
-| `[x]`  | `B7` | [Cross-Platform Storage Paths](tasks/B7-cross-platform-paths.md)            | Medium   | None         |
+| Status | ID   | Task                                                                     | Priority | Dependencies |
+| ------ | ---- | ------------------------------------------------------------------------ | -------- | ------------ |
+| `[x]`  | `B1` | [Implement PoS Validator Selection](tasks/B1-pos-validator-selection.md) | Critical | A3           |
+| `[x]`  | `B2` | [Complete Transaction Validation](tasks/B2-transaction-validation.md)    | High     | A1, A2       |
+| `[x]`  | `B3` | [Fix Difficulty Adjustment](tasks/B3-difficulty-adjustment.md)           | High     | None         |
+| `[x]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                 | Medium   | None         |
+| `[x]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                | Medium   | None         |
+| `[x]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)    | Medium   | B5           |
+| `[x]`  | `B7` | [Cross-Platform Storage Paths](tasks/B7-cross-platform-paths.md)         | Medium   | None         |
 
 ### Wave C — Hardening (depends on Wave B)
 
 _Fork handling, block validation, stake security, and test cleanup._
 
-| Status | ID   | Task                                                                        | Priority | Dependencies |
-| ------ | ---- | --------------------------------------------------------------------------- | -------- | ------------ |
-| `[x]`  | `C1` | [Implement Fork Resolution](tasks/C1-fork-resolution.md)                   | High     | B1           |
-| `[x]`  | `C2` | [Complete Block Validation](tasks/C2-block-validation.md)                   | High     | A4, B2       |
-| `[ ]`  | `C3` | [Stake Security Improvements](tasks/C3-stake-security.md)                   | Medium   | B1           |
-| `[ ]`  | `C4` | [Remove Test Environment Bypasses](tasks/C4-remove-test-bypasses.md)       | Medium   | B2, C2       |
+| Status | ID   | Task                                                                 | Priority | Dependencies |
+| ------ | ---- | -------------------------------------------------------------------- | -------- | ------------ |
+| `[x]`  | `C1` | [Implement Fork Resolution](tasks/C1-fork-resolution.md)             | High     | B1           |
+| `[x]`  | `C2` | [Complete Block Validation](tasks/C2-block-validation.md)            | High     | A4, B2       |
+| `[x]`  | `C3` | [Stake Security Improvements](tasks/C3-stake-security.md)            | Medium   | B1           |
+| `[ ]`  | `C4` | [Remove Test Environment Bypasses](tasks/C4-remove-test-bypasses.md) | Medium   | B2, C2       |
 
 ### Wave D — Networking & API (after core is solid)
 
 _P2P improvements, REST API, and external interaction._
 
-| Status | ID   | Task                                                            | Priority | Dependencies |
-| ------ | ---- | --------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `D1` | [Peer Discovery Mechanism](tasks/D1-peer-discovery.md)          | High     | None         |
-| `[ ]`  | `D2` | [Message Relaying](tasks/D2-message-relaying.md)                | High     | D1           |
-| `[ ]`  | `D3` | [REST API for Blockchain](tasks/D3-api-blockchain.md)           | High     | None         |
-| `[ ]`  | `D4` | [REST API for Transactions](tasks/D4-api-transactions.md)       | High     | D3           |
+| Status | ID   | Task                                                      | Priority | Dependencies |
+| ------ | ---- | --------------------------------------------------------- | -------- | ------------ |
+| `[ ]`  | `D1` | [Peer Discovery Mechanism](tasks/D1-peer-discovery.md)    | High     | None         |
+| `[ ]`  | `D2` | [Message Relaying](tasks/D2-message-relaying.md)          | High     | D1           |
+| `[ ]`  | `D3` | [REST API for Blockchain](tasks/D3-api-blockchain.md)     | High     | None         |
+| `[ ]`  | `D4` | [REST API for Transactions](tasks/D4-api-transactions.md) | High     | D3           |
 
 ### Wave E — Features & Polish
 
 _Mining improvements, fees, mempool, and remaining networking._
 
-| Status | ID   | Task                                                            | Priority | Dependencies |
-| ------ | ---- | --------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `E1` | [Transaction Fee System](tasks/E1-transaction-fees.md)          | Medium   | None         |
-| `[ ]`  | `E2` | [Transaction Mempool](tasks/E2-mempool.md)                      | Medium   | E1           |
-| `[ ]`  | `E3` | [Improve Miner Integration](tasks/E3-miner-integration.md)     | Medium   | None         |
-| `[ ]`  | `E4` | [Limit Peer Reconnection](tasks/E4-reconnect-limiting.md)       | Medium   | None         |
-| `[ ]`  | `E5` | [Prevent Self-Connection](tasks/E5-self-connection.md)           | Medium   | D1           |
-| `[ ]`  | `E6` | [Improve Test Coverage](tasks/E6-test-coverage.md)              | Medium   | None         |
+| Status | ID   | Task                                                       | Priority | Dependencies |
+| ------ | ---- | ---------------------------------------------------------- | -------- | ------------ |
+| `[ ]`  | `E1` | [Transaction Fee System](tasks/E1-transaction-fees.md)     | Medium   | None         |
+| `[ ]`  | `E2` | [Transaction Mempool](tasks/E2-mempool.md)                 | Medium   | E1           |
+| `[ ]`  | `E3` | [Improve Miner Integration](tasks/E3-miner-integration.md) | Medium   | None         |
+| `[ ]`  | `E4` | [Limit Peer Reconnection](tasks/E4-reconnect-limiting.md)  | Medium   | None         |
+| `[ ]`  | `E5` | [Prevent Self-Connection](tasks/E5-self-connection.md)     | Medium   | D1           |
+| `[ ]`  | `E6` | [Improve Test Coverage](tasks/E6-test-coverage.md)         | Medium   | None         |
 
 ### Wave F — Cleanup & Nice-to-Have
 
 _Final cleanup, logging, data structures._
 
-| Status | ID   | Task                                                            | Priority | Dependencies |
-| ------ | ---- | --------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `F1` | [Clean Up Dead Code and Config](tasks/F1-dead-code-config.md)  | Low      | C2, B3       |
-| `[ ]`  | `F2` | [Logging Cleanup](tasks/F2-logging-cleanup.md)                  | Low      | None         |
-| `[ ]`  | `F3` | [Merkle Tree](tasks/F3-merkle-tree.md)                          | Low      | None         |
+| Status | ID   | Task                                                          | Priority | Dependencies |
+| ------ | ---- | ------------------------------------------------------------- | -------- | ------------ |
+| `[ ]`  | `F1` | [Clean Up Dead Code and Config](tasks/F1-dead-code-config.md) | Low      | C2, B3       |
+| `[ ]`  | `F2` | [Logging Cleanup](tasks/F2-logging-cleanup.md)                | Low      | None         |
+| `[ ]`  | `F3` | [Merkle Tree](tasks/F3-merkle-tree.md)                        | Low      | None         |
 
 ---
 
@@ -140,15 +140,15 @@ npm run mine                # Start standalone miner
 
 ## Guardrails
 
-| Rule                           | Value              | Action                  |
-| ------------------------------ | ------------------ | ----------------------- |
-| Max files changed per PR       | 8                  | Split into subtasks     |
-| Max diff lines (added+removed) | 500                | Split into subtasks     |
-| Compile check                  | `npm run build`    | Must pass before PR     |
-| Test suite                     | `npm test`         | Must pass before PR     |
-| Lint check                     | `npm run lint`     | Must pass before PR     |
-| Code review required           | All PRs            | Required before merge   |
-| Ambiguity detected             | Missing info       | **STOP and ask user**   |
+| Rule                           | Value           | Action                |
+| ------------------------------ | --------------- | --------------------- |
+| Max files changed per PR       | 8               | Split into subtasks   |
+| Max diff lines (added+removed) | 500             | Split into subtasks   |
+| Compile check                  | `npm run build` | Must pass before PR   |
+| Test suite                     | `npm test`      | Must pass before PR   |
+| Lint check                     | `npm run lint`  | Must pass before PR   |
+| Code review required           | All PRs         | Required before merge |
+| Ambiguity detected             | Missing info    | **STOP and ask user** |
 
 ---
 

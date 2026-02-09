@@ -16,12 +16,20 @@ import {
 	MEDIAN_TIME_SPAN,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_FUTURE_BLOCK_TIME,
+	UNSTAKE_DELAY,
+	MAX_STAKE_AGE_MULTIPLIER,
 } from '../config.js';
 
 export interface StakeInfo {
 	amount: number;
 	timestamp: number;
 	lastBlockTime: number;
+}
+
+export interface PendingUnstake {
+	address: string;
+	amount: number;
+	requestHeight: number;
 }
 
 interface UTXO {
@@ -44,6 +52,8 @@ export class Blockchain {
 	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
 	private _stakes: Map<string, StakeInfo> = new Map();
+	private _pendingUnstakes: PendingUnstake[] = [];
+	private _blockSignatures: Map<number, Map<string, string>> = new Map();
 	private lastBlockTime: number = Date.now();
 	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
@@ -271,6 +281,11 @@ export class Blockchain {
 			)) {
 				throw new Error('validator not eligible for this slot');
 			}
+			// Record block signature for double-sign detection
+			if (!this._blockSignatures.has(block.index)) {
+				this._blockSignatures.set(block.index, new Map());
+			}
+			this._blockSignatures.get(block.index)!.set(validatorAddress, block.hash);
 		}
 
 		// Update stakes map for any staking transactions in this block
@@ -281,7 +296,7 @@ export class Blockchain {
 			let stakeAddress: string | null = null;
 			let stakeAmount: number | null = null;
 
-			// Pattern A: coinstake (marker 0 then stake amount)
+			// Coinstake detection: marker output (amount 0) followed by stake amount
 			if (
 				tx.outputs.length >= 2 &&
 				tx.outputs[0].amount === 0 &&
@@ -289,16 +304,6 @@ export class Blockchain {
 			) {
 				stakeAddress = tx.outputs[1].address;
 				stakeAmount = tx.outputs[1].amount;
-			} else {
-				// Pattern B: initial stake transaction (all outputs same address, first output >= minimum)
-				const firstAddr = tx.outputs[0].address;
-				const allSame = tx.outputs.every(
-					(o: TxOutput) => o.address === firstAddr
-				);
-				if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
-					stakeAddress = firstAddr;
-					stakeAmount = tx.outputs[0].amount;
-				}
 			}
 
 			if (stakeAddress && stakeAmount) {
@@ -321,6 +326,26 @@ export class Blockchain {
 
 		// Update UTXO set
 		this.updateUTXOSet(block);
+
+		// Process matured pending unstakes
+		this._pendingUnstakes = this._pendingUnstakes.filter(unstake => {
+			if (this.chain.length - unstake.requestHeight >= UNSTAKE_DELAY) {
+				const stake = this._stakes.get(unstake.address);
+				if (stake) {
+					const remaining = stake.amount - unstake.amount;
+					if (remaining <= 0) {
+						this._stakes.delete(unstake.address);
+					} else {
+						this._stakes.set(unstake.address, {
+							...stake,
+							amount: remaining,
+						});
+					}
+				}
+				return false; // remove from pending list
+			}
+			return true; // keep in pending list
+		});
 
 		// Persist new block
 		this.blockStore.appendBlock(block);
@@ -443,20 +468,18 @@ export class Blockchain {
 		const stake = stakeMap.get(address);
 		if (!stake) return 0;
 
-		// Use lastBlockTime instead of Date.now() for weight calculation
-		const elapsedMs = stake.lastBlockTime - stake.timestamp;
-		const elapsedDays = Math.max(
-			0,
-			Math.floor(elapsedMs / (24 * 60 * 60 * 1000))
-		);
+		// Guard against negative elapsed time from corrupted timestamps
+		const elapsedMs = Math.max(0, stake.lastBlockTime - stake.timestamp);
+		const elapsedDays = Math.floor(elapsedMs / (24 * 60 * 60 * 1000));
 
 		// Base weight is the stake amount
 		let weight = stake.amount;
 
-		// Apply multiplier for each day (10% increase per day)
+		// Apply multiplier for each day (10% increase per day), bounded
 		if (elapsedDays > 0) {
-			const multiplier = 1.1;
-			weight = Math.floor(weight * Math.pow(multiplier, elapsedDays));
+			const rawMultiplier = Math.pow(1.1, elapsedDays);
+			const cappedMultiplier = Math.min(rawMultiplier, MAX_STAKE_AGE_MULTIPLIER);
+			weight = Math.floor(weight * cappedMultiplier);
 		}
 
 		return weight;
@@ -508,7 +531,7 @@ export class Blockchain {
 			}
 
 			if (wallet) {
-				// Create a staking transaction (only when we have a wallet to sign)
+				// Create a staking transaction in coinstake format (zero marker + amount)
 				const utxos = this.getUTXOs(address);
 				let inputSum = 0;
 				const inputs: TxInput[] = [];
@@ -528,7 +551,8 @@ export class Blockchain {
 				}
 
 				const outputs: TxOutput[] = [
-					{ address: address, amount: amount }, // Staked amount
+					{ address: address, amount: 0 },      // Coinstake marker
+					{ address: address, amount: amount },  // Staked amount
 				];
 
 				// Add change output if necessary
@@ -565,20 +589,21 @@ export class Blockchain {
 			if (!currentStake) {
 				throw new Error('No stake found for address');
 			}
-			if (currentStake.amount < amount) {
+
+			// Account for already-pending unstake amounts
+			const pendingAmount = this._pendingUnstakes
+				.filter(u => u.address === address)
+				.reduce((sum, u) => sum + u.amount, 0);
+			if (currentStake.amount - pendingAmount < amount) {
 				throw new Error('Insufficient stake amount');
 			}
 
-			const remainingStake = currentStake.amount - amount;
-			if (remainingStake === 0) {
-				this._stakes.delete(address);
-			} else {
-				this._stakes.set(address, {
-					amount: remainingStake,
-					timestamp: currentStake.timestamp,
-					lastBlockTime: currentStake.lastBlockTime,
-				});
-			}
+			// Queue the unstake — actual removal after UNSTAKE_DELAY blocks
+			this._pendingUnstakes.push({
+				address,
+				amount,
+				requestHeight: this.chain.length,
+			});
 		} finally {
 			release();
 		}
@@ -591,6 +616,44 @@ export class Blockchain {
 	getStakeInfo(address: string): StakeInfo | undefined {
 		const info = this._stakes.get(address);
 		return info ? { ...info } : undefined;
+	}
+
+	getPendingUnstakes(address?: string): PendingUnstake[] {
+		if (address) {
+			return this._pendingUnstakes.filter(u => u.address === address);
+		}
+		return [...this._pendingUnstakes];
+	}
+
+	async submitDoubleSignEvidence(
+		height: number,
+		blockHash1: string,
+		blockHash2: string,
+		validatorAddress: string,
+	): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			if (blockHash1 === blockHash2) {
+				throw new Error('block hashes must be different');
+			}
+			const signatures = this._blockSignatures.get(height);
+			const knownHash = signatures?.get(validatorAddress);
+			if (!knownHash) {
+				throw new Error('no known block signature for validator at this height');
+			}
+			// One of the hashes must match the known signature
+			if (knownHash !== blockHash1 && knownHash !== blockHash2) {
+				throw new Error('neither block hash matches known signature');
+			}
+			// Slash: remove the validator's stake entirely
+			this._stakes.delete(validatorAddress);
+			// Remove any pending unstakes for the slashed validator
+			this._pendingUnstakes = this._pendingUnstakes.filter(
+				u => u.address !== validatorAddress,
+			);
+		} finally {
+			release();
+		}
 	}
 
 	createTransaction(
@@ -992,15 +1055,6 @@ export class Blockchain {
 				) {
 					stakeAddress = tx.outputs[1].address;
 					stakeAmount = tx.outputs[1].amount;
-				} else {
-					const firstAddr = tx.outputs[0].address;
-					const allSame = tx.outputs.every(
-						(o: TxOutput) => o.address === firstAddr
-					);
-					if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
-						stakeAddress = firstAddr;
-						stakeAmount = tx.outputs[0].amount;
-					}
 				}
 
 				if (stakeAddress && stakeAmount) {
@@ -1297,15 +1351,6 @@ export class Blockchain {
 					) {
 						stakeAddress = tx.outputs[1].address;
 						stakeAmount = tx.outputs[1].amount;
-					} else {
-						const firstAddr = tx.outputs[0].address;
-						const allSame = tx.outputs.every(
-							(o: TxOutput) => o.address === firstAddr
-						);
-						if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
-							stakeAddress = firstAddr;
-							stakeAmount = tx.outputs[0].amount;
-						}
 					}
 
 					if (stakeAddress && stakeAmount) {
