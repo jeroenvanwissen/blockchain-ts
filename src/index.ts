@@ -35,7 +35,7 @@ console.log('Wallet initialized with address:', wallet.address);
 // Create P2P server
 const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH);
 
-const stakingService = new StakingService(blockchain, wallet.address);
+const stakingService = new StakingService(blockchain, wallet.address, wallet);
 stakingService.start();
 
 // Start P2P server

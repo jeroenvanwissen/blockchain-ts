@@ -334,15 +334,15 @@ export class P2PServer {
 						break;
 
 					case MessageType.TRANSACTION:
-						this.handleTransactionMessage(data.data);
+						void this.handleTransactionMessage(data.data);
 						break;
 
 					case MessageType.STAKE:
-						this.handleStakeMessage(data.data);
+						void this.handleStakeMessage(data.data);
 						break;
 
 					case MessageType.UNSTAKE:
-						this.handleUnstakeMessage(data.data);
+						void this.handleUnstakeMessage(data.data);
 						break;
 
 					case MessageType.GET_LATEST_BLOCK:
@@ -404,22 +404,8 @@ export class P2PServer {
 				);
 			}
 			if (blocks.length > this.blockchain.getChain().length) {
-				const release = await this.blockchain.replaceLock.acquire();
-				try {
-					// Create temporary blockchain for validation
-					const tempChain = new Blockchain();
-					tempChain.getChain().length = 0;
-					tempChain.getChain().push(...blocks);
-					// Validate the new chain
-					if (await tempChain.isChainValid()) {
-						// Replace the current chain if valid
-						this.blockchain.getChain().length = 0;
-						this.blockchain.getChain().push(...blocks);
-						this.blockchain.clearPendingTransactions();
-					}
-				} finally {
-					release();
-				}
+				// replaceChain handles its own locking and validation
+				await this.blockchain.replaceChain(blocks);
 			}
 		} catch (error) {
 			console.error('Error handling chain message:', error);
@@ -459,47 +445,42 @@ export class P2PServer {
 				this.broadcast(msg as unknown as Message);
 				return;
 			}
-			// If the block index matches our current chain length, try to add it
-			const release = await this.blockchain.replaceLock.acquire();
-			try {
-				this.blockchain.addMinedBlock(block);
-				// Only broadcast if we successfully added the block
-				const out: BlockMessage = { type: MessageType.BLOCK, data: block };
-				this.broadcast(out);
-			} finally {
-				release();
-			}
+			// addMinedBlock handles its own locking
+			await this.blockchain.addMinedBlock(block);
+			// Only broadcast if we successfully added the block
+			const out: BlockMessage = { type: MessageType.BLOCK, data: block };
+			this.broadcast(out);
 		} catch (error) {
 			console.error('Error handling block message:', error);
 		}
 	}
 
-	private handleTransactionMessage(txData: Transaction): void {
+	private async handleTransactionMessage(txData: Transaction): Promise<void> {
 		try {
 			const transaction = new Transaction(txData.inputs, txData.outputs);
-			this.blockchain.addTransaction(transaction);
+			await this.blockchain.addTransaction(transaction);
 		} catch (error) {
 			console.error('Error handling transaction message:', error);
 		}
 	}
 
-	private handleStakeMessage(stakeData: {
+	private async handleStakeMessage(stakeData: {
 		address: string;
 		amount: number;
-	}): void {
+	}): Promise<void> {
 		try {
-			this.blockchain.stake(stakeData.address, stakeData.amount);
+			await this.blockchain.stake(stakeData.address, stakeData.amount);
 		} catch (error) {
 			console.error('Error handling stake message:', error);
 		}
 	}
 
-	private handleUnstakeMessage(unstakeData: {
+	private async handleUnstakeMessage(unstakeData: {
 		address: string;
 		amount: number;
-	}): void {
+	}): Promise<void> {
 		try {
-			this.blockchain.unstake(unstakeData.address, unstakeData.amount);
+			await this.blockchain.unstake(unstakeData.address, unstakeData.amount);
 		} catch (error) {
 			console.error('Error handling unstake message:', error);
 		}

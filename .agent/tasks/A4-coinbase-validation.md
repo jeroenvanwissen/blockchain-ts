@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `A4`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | High                                 |
 | **Dependencies** | None                                 |
 | **Branch**       | `fix/a4-coinbase-validation`         |
@@ -45,13 +45,13 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] Blocks with incorrect reward amounts are rejected
-- [ ] Blocks with multiple coinbase transactions are rejected
-- [ ] Blocks with no coinbase are rejected
-- [ ] PoS coinstake structure is validated
-- [ ] Coinbase maturity is enforced
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Blocks with incorrect reward amounts are rejected
+- [x] Blocks with multiple coinbase transactions are rejected
+- [x] Blocks with no coinbase are rejected
+- [x] PoS coinstake structure is validated
+- [x] Coinbase maturity is enforced
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

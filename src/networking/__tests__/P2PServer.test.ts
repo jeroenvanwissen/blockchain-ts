@@ -5,7 +5,6 @@ import { Transaction } from '../../blockchain/Transaction.js';
 import WebSocket from 'ws';
 import fs from 'fs';
 import { EventEmitter } from 'events';
-import { Mutex } from 'async-mutex';
 
 jest.mock('fs');
 jest.mock('ws');
@@ -81,19 +80,16 @@ describe('P2PServer', () => {
 		expect(writtenData[0]).toBe('valid-peer');
 	});
 
-	it('should handle stake messages correctly', () => {
+	it('should handle stake messages correctly', async () => {
 		const stakeData = {
 			address: 'testAddress',
 			amount: 100,
 		};
 
-		// Mock blockchain methods needed for staking
-		const stakeSpy = jest.spyOn(blockchain, 'stake').mockImplementation(() => {
-			// Don't throw an error, just mock successful staking
-			return;
-		});
+		// Mock blockchain methods needed for staking (now returns Promise)
+		const stakeSpy = jest.spyOn(blockchain, 'stake').mockResolvedValue(undefined);
 
-		p2pServer['handleStakeMessage'](stakeData);
+		await p2pServer['handleStakeMessage'](stakeData);
 
 		expect(stakeSpy).toHaveBeenCalledWith('testAddress', 100);
 		stakeSpy.mockRestore();
@@ -124,54 +120,31 @@ describe('P2PServer', () => {
 		const getChainSpy = jest
 			.spyOn(blockchain, 'getChain')
 			.mockReturnValue([mockBlock1]);
-		const isValidSpy = jest
-			.spyOn(Blockchain.prototype, 'isChainValid')
-			.mockReturnValue(true);
-		const clearTxSpy = jest.spyOn(blockchain, 'clearPendingTransactions');
-
-		// Mock the mutex lock
-		const release = jest.fn();
-		const acquire = jest.fn().mockResolvedValue(release);
-
-		blockchain.replaceLock = {
-			acquire: acquire,
-			release: release,
-			runExclusive: jest.fn(),
-			isLocked: () => false,
-			cancel: () => {},
-			waitForUnlock: jest.fn().mockResolvedValue(undefined),
-		} as unknown as Mutex;
-
-		// Make the incoming chain longer than current chain
-		const currentChain = blockchain.getChain();
-		currentChain.length = 1; // Make current chain shorter
+		const replaceChainSpy = jest
+			.spyOn(blockchain, 'replaceChain')
+			.mockResolvedValue(undefined);
 
 		await p2pServer['handleChainMessage'](mockChain);
 
-		// Verify all the expected calls
-		expect(acquire).toHaveBeenCalled();
-		expect(isValidSpy).toHaveBeenCalled();
-		expect(clearTxSpy).toHaveBeenCalled();
-		expect(release).toHaveBeenCalled();
-		expect(blockchain.getChain().length).toBe(2);
+		// Verify replaceChain was called with the new blocks
+		expect(replaceChainSpy).toHaveBeenCalled();
 
 		// Cleanup
 		getChainSpy.mockRestore();
-		isValidSpy.mockRestore();
-		clearTxSpy.mockRestore();
+		replaceChainSpy.mockRestore();
 	});
 
-	it('should handle errors during stake message processing', () => {
+	it('should handle errors during stake message processing', async () => {
 		const stakeData = {
 			address: 'testAddress',
 			amount: 100,
 		};
-		const spy = jest.spyOn(blockchain, 'stake').mockImplementation(() => {
-			throw new Error('Stake failed');
-		});
+		const spy = jest.spyOn(blockchain, 'stake').mockRejectedValue(
+			new Error('Stake failed')
+		);
 		const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
-		p2pServer['handleStakeMessage'](stakeData);
+		await p2pServer['handleStakeMessage'](stakeData);
 
 		expect(consoleSpy).toHaveBeenCalledWith(
 			'Error handling stake message:',

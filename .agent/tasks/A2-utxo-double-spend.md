@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `A2`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Critical                             |
 | **Dependencies** | None                                 |
 | **Branch**       | `fix/a2-utxo-double-spend`           |
@@ -38,12 +38,12 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] A UTXO cannot be spent by two different pending transactions
-- [ ] Duplicate inputs within a single transaction are rejected
-- [ ] `pendingUTXOSpends` is cleared correctly when blocks are mined
-- [ ] Chain replacement properly rebuilds pending UTXO tracking
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] A UTXO cannot be spent by two different pending transactions
+- [x] Duplicate inputs within a single transaction are rejected
+- [x] `pendingUTXOSpends` is cleared correctly when blocks are mined
+- [x] Chain replacement properly rebuilds pending UTXO tracking
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

@@ -3,7 +3,7 @@
 | Field            | Value                                    |
 | ---------------- | ---------------------------------------- |
 | **ID**           | `B1`                                     |
-| **Status**       | `[ ]`                                    |
+| **Status**       | `[x]`                                    |
 | **Priority**     | Critical                                 |
 | **Dependencies** | A3                                       |
 | **Branch**       | `fix/b1-pos-validator-selection`         |
@@ -41,13 +41,13 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] Validator selection is probabilistic based on stake weight
-- [ ] Selection is deterministic (same result on all nodes given same chain state)
-- [ ] Higher stake weight = higher probability of selection
-- [ ] Only one validator produces a block per time slot
-- [ ] Nodes reject blocks from non-eligible validators
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Validator selection is probabilistic based on stake weight
+- [x] Selection is deterministic (same result on all nodes given same chain state)
+- [x] Higher stake weight = higher probability of selection
+- [x] Only one validator produces a block per time slot
+- [x] Nodes reject blocks from non-eligible validators
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

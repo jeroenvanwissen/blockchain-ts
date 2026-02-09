@@ -1,5 +1,6 @@
 // In StakingService.ts
 import { Blockchain } from './Blockchain.js';
+import { Wallet } from './Wallet.js';
 
 export class StakingService {
 	private checkInterval: NodeJS.Timeout | null = null;
@@ -7,18 +8,19 @@ export class StakingService {
 
 	constructor(
 		private blockchain: Blockchain,
-		private stakeholderAddress: string
+		private stakeholderAddress: string,
+		private wallet: Wallet,
 	) {}
 
 	start(): void {
 		if (this.checkInterval) return;
 
 		this.checkInterval = setInterval(() => {
-			this.tryGenerateStakeBlock();
+			void this.tryGenerateStakeBlock();
 		}, this.CHECK_FREQUENCY);
 
 		// Initial check
-		this.tryGenerateStakeBlock();
+		void this.tryGenerateStakeBlock();
 	}
 
 	stop(): void {
@@ -28,17 +30,17 @@ export class StakingService {
 		}
 	}
 
-	private tryGenerateStakeBlock(): void {
+	private async tryGenerateStakeBlock(): Promise<void> {
 		try {
-			const block = this.blockchain.generateStakeBlock(this.stakeholderAddress);
+			const block = this.blockchain.generateStakeBlock(this.stakeholderAddress, this.wallet);
 			if (block) {
-				this.blockchain.addMinedBlock(block);
+				await this.blockchain.addMinedBlock(block);
 				console.log(`Generated PoS block at height ${block.index}`);
 			}
 		} catch (error) {
 			console.error('Failed to generate stake block:', error);
 			// Retry after a short delay
-			setTimeout(() => this.tryGenerateStakeBlock(), 5000);
+			setTimeout(() => void this.tryGenerateStakeBlock(), 5000);
 		}
 	}
 }

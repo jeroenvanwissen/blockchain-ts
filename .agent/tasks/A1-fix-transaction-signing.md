@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `A1`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Critical                             |
 | **Dependencies** | None                                 |
 | **Branch**       | `fix/a1-transaction-signing`         |
@@ -50,13 +50,13 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] Transaction signing uses proper ECDSA via secp256k1
-- [ ] `signTransaction()` and `verifySignature()` are consistent
-- [ ] Private key never appears in the signature output
-- [ ] Wallet signing and Transaction signing produce identical results
-- [ ] All existing tests pass with updated signing
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Transaction signing uses proper ECDSA via secp256k1
+- [x] `signTransaction()` and `verifySignature()` are consistent
+- [x] Private key never appears in the signature output
+- [x] Wallet signing and Transaction signing produce identical results
+- [x] All existing tests pass with updated signing
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

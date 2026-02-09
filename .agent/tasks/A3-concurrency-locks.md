@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `A3`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Critical                             |
 | **Dependencies** | None                                 |
 | **Branch**       | `fix/a3-concurrency-locks`           |
@@ -43,12 +43,12 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] All shared state modifications go through mutex
-- [ ] `stakes` map is private with protected access methods
-- [ ] No race condition between `addTransaction()` and `addMinedBlock()`
-- [ ] `replaceChain()` length check is inside the lock
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] All shared state modifications go through mutex
+- [x] `stakes` map is private with protected access methods
+- [x] No race condition between `addTransaction()` and `addMinedBlock()`
+- [x] `replaceChain()` length check is inside the lock
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

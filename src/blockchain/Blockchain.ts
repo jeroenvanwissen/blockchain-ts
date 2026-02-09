@@ -9,9 +9,10 @@ import {
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
+	COIN_MATURITY,
 } from '../config.js';
 
-interface StakeInfo {
+export interface StakeInfo {
 	amount: number;
 	timestamp: number;
 	lastBlockTime: number;
@@ -21,6 +22,8 @@ interface UTXO {
 	txHash: string;
 	outputIndex: number;
 	output: TxOutput;
+	blockIndex: number;
+	isCoinbase: boolean;
 }
 
 interface SerializedTransaction {
@@ -40,18 +43,18 @@ interface SerializedBlock {
 	hash: string;
 }
 
-// Add this import at the top
 import { Mutex } from 'async-mutex';
 
 export class Blockchain {
-	// Add this property near the other private fields
-	public replaceLock: Mutex = new Mutex();
+	private _lock: Mutex = new Mutex();
+
+	private static readonly MAX_HASH = BigInt('0x' + 'f'.repeat(64));
 
 	private chain: Block[];
 	private utxoSet: Map<string, UTXO[]> = new Map();
+	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
-	// private readonly stakingMinimum: number = 100;
-	stakes: Map<string, StakeInfo> = new Map();
+	private _stakes: Map<string, StakeInfo> = new Map();
 	private readonly TARGET_BLOCK_TIME = 375;
 	private lastBlockTime: number = Date.now();
 	private readonly FILE_PATH = BLOCKCHAIN_DATA_PATH;
@@ -61,6 +64,7 @@ export class Blockchain {
 	private readonly MIN_STAKE_AMOUNT = 100;
 	private readonly MIN_STAKE_AGE = 60 * 60 * 24;
 	private readonly STAKE_CHECK_INTERVAL = 60 * 1000;
+	private readonly SLOT_DURATION = 60 * 1000;
 	private lastStakeCheck: number = 0;
 
 	constructor() {
@@ -75,13 +79,14 @@ export class Blockchain {
 		this.loadBlockchain();
 	}
 
-	private updateUTXOSet(block: Block): void {
-		// console.log('Updating UTXO set for block:', block.index);
+	private utxoKey(txHash: string, outputIndex: number): string {
+		return `${txHash}:${outputIndex}`;
+	}
 
+	private updateUTXOSet(block: Block): void {
 		for (const tx of block.transactions) {
-			// Calculate hash once and store it
 			const txHash = tx.calculateHash();
-			// console.log('Processing transaction:', txHash);
+			const isCoinbaseTx = tx.isCoinbase();
 
 			// Remove spent outputs
 			for (const input of tx.inputs) {
@@ -90,7 +95,6 @@ export class Blockchain {
 				].address;
 
 				if (spenderAddress) {
-					// console.log(`Removing spent UTXO for ${spenderAddress}, tx: ${input.previousTx}, index: ${input.outputIndex}`);
 					const utxos = this.utxoSet.get(spenderAddress) || [];
 					this.utxoSet.set(
 						spenderAddress,
@@ -105,26 +109,31 @@ export class Blockchain {
 
 			// Add new outputs using the stored hash
 			tx.outputs.forEach((output: TxOutput, index: number) => {
-				// console.log(`Adding new UTXO for ${output.address}, tx: ${txHash}, index: ${index}, amount: ${output.amount}`);
 				const utxos = this.utxoSet.get(output.address) || [];
 				utxos.push({
 					txHash,
 					outputIndex: index,
 					output: output,
+					blockIndex: block.index,
+					isCoinbase: isCoinbaseTx,
 				});
 				this.utxoSet.set(output.address, utxos);
 			});
 		}
 	}
 
-	private findTransaction(txHash: string): Transaction | undefined {
+	private findTransactionBlock(txHash: string): { tx: Transaction; blockIndex: number } | undefined {
 		for (const block of this.chain) {
 			const tx = block.transactions.find(
 				(t: Transaction) => t.calculateHash() === txHash
 			);
-			if (tx) return tx;
+			if (tx) return { tx, blockIndex: block.index };
 		}
 		return undefined;
+	}
+
+	private findTransaction(txHash: string): Transaction | undefined {
+		return this.findTransactionBlock(txHash)?.tx;
 	}
 
 	public getUTXOs(address: string): UTXO[] {
@@ -137,11 +146,35 @@ export class Blockchain {
 		return this.chain.length <= POW_CUTOFF_BLOCK;
 	}
 
-	public addMinedBlock(block: Block): void {
+	private validateBlockCoinbase(block: Block): void {
+		if (block.transactions.length === 0) {
+			throw new Error('block must contain at least one transaction');
+		}
+		const coinbaseTx = block.transactions[0];
+		if (!coinbaseTx.isCoinbase()) {
+			throw new Error('first transaction must be coinbase');
+		}
+		for (let i = 1; i < block.transactions.length; i++) {
+			if (block.transactions[i].isCoinbase()) {
+				throw new Error('block contains multiple coinbase transactions');
+			}
+		}
+		const expectedReward = block.isProofOfStake()
+			? POS_BLOCK_REWARD
+			: POW_BLOCK_REWARD;
+		if (coinbaseTx.outputs[0].amount !== expectedReward) {
+			throw new Error('invalid coinbase reward amount');
+		}
+	}
+
+	private _addMinedBlockInternal(block: Block): void {
 		// Validate block structure and chain continuity
 		if (!block.hasValidTransactions()) {
 			throw new Error('Block contains invalid transactions');
 		}
+
+		// Validate coinbase transaction structure and reward
+		this.validateBlockCoinbase(block);
 
 		const lastBlock = this.getLatestBlock();
 
@@ -195,6 +228,17 @@ export class Blockchain {
 			if (!this.validateStake(stakeTransaction)) {
 				throw new Error('Invalid stake');
 			}
+			// Verify validator was eligible via stake-weighted lottery
+			const validatorAddress = stakeTransaction.outputs[1].address;
+			const previousBlock = this.getLatestBlock();
+			if (!this.isEligibleValidator(
+				validatorAddress,
+				block.timestamp,
+				previousBlock.hash,
+				previousBlock.timestamp,
+			)) {
+				throw new Error('validator not eligible for this slot');
+			}
 		}
 
 		// Update stakes map for any staking transactions in this block
@@ -226,7 +270,7 @@ export class Blockchain {
 			}
 
 			if (stakeAddress && stakeAmount) {
-				this.stakes.set(stakeAddress, {
+				this._stakes.set(stakeAddress, {
 					amount: stakeAmount,
 					timestamp: block.timestamp,
 					lastBlockTime: block.timestamp,
@@ -237,12 +281,22 @@ export class Blockchain {
 		this.chain.push(block);
 		this.lastBlockTime = block.timestamp;
 		this.pendingTransactions = [];
+		this._pendingUTXOSpends.clear();
 
 		// Update UTXO set
 		this.updateUTXOSet(block);
 
 		// Save blockchain after adding new block
 		this.saveBlockchain();
+	}
+
+	public async addMinedBlock(block: Block): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			this._addMinedBlockInternal(block);
+		} finally {
+			release();
+		}
 	}
 
 	private validateStake(stakeTransaction: Transaction): boolean {
@@ -310,8 +364,18 @@ export class Blockchain {
 		return true;
 	}
 
-	public clearPendingTransactions(): void {
+	private _clearPendingTransactionsInternal(): void {
 		this.pendingTransactions = [];
+		this._pendingUTXOSpends.clear();
+	}
+
+	public async clearPendingTransactions(): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			this._clearPendingTransactionsInternal();
+		} finally {
+			release();
+		}
 	}
 
 	private createGenesisBlock(): Block {
@@ -328,15 +392,16 @@ export class Blockchain {
 		return this.chain[this.chain.length - 1];
 	}
 
-	private getTotalNetworkWeight(): number {
-		return Array.from(this.stakes.values()).reduce(
-			(total, stake) => total + stake.amount,
-			0
-		);
+	public totalNetworkStake(): number {
+		let total = 0;
+		for (const [address] of this._stakes) {
+			total += this.calculateStakeWeight(address);
+		}
+		return total;
 	}
 
 	calculateStakeWeight(address: string): number {
-		const stake = this.stakes.get(address);
+		const stake = this._stakes.get(address);
 		if (!stake) return 0;
 
 		// Use lastBlockTime instead of Date.now() for weight calculation
@@ -387,81 +452,106 @@ export class Blockchain {
 		);
 	}
 
-	stake(address: string, amount: number): void {
-		if (amount < this.MIN_STAKE_AMOUNT) {
-			throw new Error(`Minimum stake amount is ${this.MIN_STAKE_AMOUNT}`);
-		}
+	async stake(address: string, amount: number, wallet?: Wallet): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			if (!this.validateAddress(address)) {
+				throw new Error('invalid staking address');
+			}
 
-		const availableBalance = this.getBalance(address);
-		if (availableBalance < amount) {
-			throw new Error('Insufficient balance for staking');
-		}
+			if (amount < this.MIN_STAKE_AMOUNT) {
+				throw new Error(`Minimum stake amount is ${this.MIN_STAKE_AMOUNT}`);
+			}
 
-		// Create a staking transaction
-		const utxos = this.getUTXOs(address);
-		let inputSum = 0;
-		const inputs: TxInput[] = [];
+			const availableBalance = this.getBalance(address);
+			if (availableBalance < amount) {
+				throw new Error('Insufficient balance for staking');
+			}
 
-		for (const utxo of utxos) {
-			inputSum += utxo.output.amount;
-			inputs.push({
-				previousTx: utxo.txHash,
-				outputIndex: utxo.outputIndex,
-				signature: '',
-			});
-			if (inputSum >= amount) break;
-		}
+			if (wallet) {
+				// Create a staking transaction (only when we have a wallet to sign)
+				const utxos = this.getUTXOs(address);
+				let inputSum = 0;
+				const inputs: TxInput[] = [];
 
-		const outputs: TxOutput[] = [
-			{ address: address, amount: amount }, // Staked amount
-		];
+				for (const utxo of utxos) {
+					// Skip immature coinbase UTXOs
+					if (utxo.isCoinbase && this.chain.length - utxo.blockIndex < COIN_MATURITY) {
+						continue;
+					}
+					inputSum += utxo.output.amount;
+					inputs.push({
+						previousTx: utxo.txHash,
+						outputIndex: utxo.outputIndex,
+						signature: '',
+					});
+					if (inputSum >= amount) break;
+				}
 
-		// Add change output if necessary
-		if (inputSum > amount) {
-			outputs.push({
-				address: address,
-				amount: inputSum - amount, // Return change
-			});
-		}
+				const outputs: TxOutput[] = [
+					{ address: address, amount: amount }, // Staked amount
+				];
 
-		const stakingTx = new Transaction(inputs, outputs);
-		stakingTx.signTransaction(address);
-		// Add the transaction to pending pool
-		this.addTransaction(stakingTx);
-		// Optimistically register the stake so a PoS block can be created in the very next block
-		// (tests stake right at the cutoff and expect immediate eligibility)
-		if (!this.stakes.has(address)) {
-			this.stakes.set(address, {
-				amount,
-				timestamp: Date.now(),
-				lastBlockTime: this.getLatestBlock().timestamp,
-			});
+				// Add change output if necessary
+				if (inputSum > amount) {
+					outputs.push({
+						address: address,
+						amount: inputSum - amount, // Return change
+					});
+				}
+
+				const stakingTx = new Transaction(inputs, outputs);
+				wallet.signTransaction(stakingTx);
+				// Add the transaction to pending pool (internal, lock already held)
+				this._addTransactionInternal(stakingTx);
+			}
+
+			// Register the stake so a PoS block can be created
+			if (!this._stakes.has(address)) {
+				this._stakes.set(address, {
+					amount,
+					timestamp: Date.now(),
+					lastBlockTime: this.getLatestBlock().timestamp,
+				});
+			}
+		} finally {
+			release();
 		}
 	}
 
-	unstake(address: string, amount: number): void {
-		const currentStake = this.stakes.get(address);
-		if (!currentStake) {
-			throw new Error('No stake found for address');
-		}
-		if (currentStake.amount < amount) {
-			throw new Error('Insufficient stake amount');
-		}
+	async unstake(address: string, amount: number): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			const currentStake = this._stakes.get(address);
+			if (!currentStake) {
+				throw new Error('No stake found for address');
+			}
+			if (currentStake.amount < amount) {
+				throw new Error('Insufficient stake amount');
+			}
 
-		const remainingStake = currentStake.amount - amount;
-		if (remainingStake === 0) {
-			this.stakes.delete(address);
-		} else {
-			this.stakes.set(address, {
-				amount: remainingStake,
-				timestamp: currentStake.timestamp,
-				lastBlockTime: currentStake.lastBlockTime,
-			});
+			const remainingStake = currentStake.amount - amount;
+			if (remainingStake === 0) {
+				this._stakes.delete(address);
+			} else {
+				this._stakes.set(address, {
+					amount: remainingStake,
+					timestamp: currentStake.timestamp,
+					lastBlockTime: currentStake.lastBlockTime,
+				});
+			}
+		} finally {
+			release();
 		}
 	}
 
 	getStake(address: string): number {
-		return this.stakes.get(address)?.amount || 0;
+		return this._stakes.get(address)?.amount || 0;
+	}
+
+	getStakeInfo(address: string): StakeInfo | undefined {
+		const info = this._stakes.get(address);
+		return info ? { ...info } : undefined;
 	}
 
 	createTransaction(
@@ -470,12 +560,26 @@ export class Blockchain {
 		amount: number,
 		wallet: Wallet
 	): Transaction {
+		if (!this.validateAddress(from)) {
+			throw new Error('invalid sender address');
+		}
+		if (!this.validateAddress(to)) {
+			throw new Error('invalid recipient address');
+		}
+
 		const utxos = this.getUTXOs(from);
-		// console.log('Available UTXOs:', utxos);
 		let inputSum = 0;
 		const inputs: TxInput[] = [];
 
 		for (const utxo of utxos) {
+			// Skip UTXOs already claimed by pending transactions
+			if (this._pendingUTXOSpends.has(this.utxoKey(utxo.txHash, utxo.outputIndex))) {
+				continue;
+			}
+			// Skip immature coinbase UTXOs
+			if (utxo.isCoinbase && this.chain.length - utxo.blockIndex < COIN_MATURITY) {
+				continue;
+			}
 			inputSum += utxo.output.amount;
 			inputs.push({
 				previousTx: utxo.txHash,
@@ -539,18 +643,22 @@ export class Blockchain {
 		return Buffer.from(num.toString(16).padStart(50, '0'), 'hex');
 	}
 
-	public generateStakeBlock(stakeholderAddress: string): Block | null {
+	public generateStakeBlock(stakeholderAddress: string, wallet: Wallet): Block | null {
 		if (!this.canCreateStakeBlock(stakeholderAddress)) {
 			return null;
 		}
 
-		const stake = this.stakes.get(stakeholderAddress)!;
+		const stake = this._stakes.get(stakeholderAddress)!;
 
 		// Gather inputs from UTXOs to cover the stake amount
 		const utxos = this.getUTXOs(stakeholderAddress);
 		let accumulated = 0;
 		const inputs: TxInput[] = [];
 		for (const utxo of utxos) {
+			// Skip immature coinbase UTXOs
+			if (utxo.isCoinbase && this.chain.length - utxo.blockIndex < COIN_MATURITY) {
+				continue;
+			}
 			accumulated += utxo.output.amount;
 			inputs.push({
 				previousTx: utxo.txHash,
@@ -574,7 +682,7 @@ export class Blockchain {
 		}
 
 		const stakeTransaction = new Transaction(inputs, outputs);
-		stakeTransaction.signTransaction(stakeholderAddress);
+		wallet.signTransaction(stakeTransaction);
 
 		const transactions = [
 			new Transaction(
@@ -601,90 +709,75 @@ export class Blockchain {
 
 		block.hash = block.calculateHash();
 
-		this.stakes.set(stakeholderAddress, {
-			...stake,
-			lastBlockTime: Date.now(),
-		});
-
 		return block;
 	}
 
-	private canCreateStakeBlock(address: string): boolean {
-		const stake = this.stakes.get(address);
-		// console.log('Checking stake for address:', address);
-		// console.log('Current stake:', stake);
-
-		if (!stake) {
-			console.log('No stake found');
-			return false;
-		}
-
-		// In test environment, skip all time-related checks
-		if (process.env.NODE_ENV === 'test') {
-			// const stakeWeight = this.calculateStakeWeight(address);
-			// const networkWeight = this.getTotalNetworkWeight();
-			// const probability = stakeWeight / (networkWeight || 1);
-
-			// console.log('Stake weight:', stakeWeight);
-			// console.log('Network weight:', networkWeight);
-			// console.log('Probability:', probability);
-
-			return true;
-		}
-
-		// Production checks
-		const stakeAge = (Date.now() - stake.timestamp) / 1000;
-		if (stakeAge < this.MIN_STAKE_AGE) {
-			// console.log('Stake too young');
-			return false;
-		}
-
-		if (Date.now() - stake.lastBlockTime < this.STAKE_CHECK_INTERVAL) {
-			// console.log('Too soon since last block');
-			return false;
-		}
-
+	public isEligibleValidator(
+		address: string,
+		timestamp: number,
+		previousBlockHash: string,
+		previousBlockTimestamp: number,
+	): boolean {
 		const stakeWeight = this.calculateStakeWeight(address);
-		const networkWeight = this.getTotalNetworkWeight();
-		const probability = stakeWeight / (networkWeight || 1);
+		const totalStake = this.totalNetworkStake();
+		if (totalStake === 0 || stakeWeight === 0) return false;
 
-		// console.log('Stake weight:', stakeWeight);
-		// console.log('Network weight:', networkWeight);
-		// console.log('Probability:', probability);
+		// Deterministic slot derived from timestamp
+		const slotNumber = Math.floor(timestamp / this.SLOT_DURATION);
 
-		// For testing purposes, always return true if other conditions are met
-		return true;
+		// Deterministic hash from previous block, validator address, and time slot
+		const selectionData = previousBlockHash + address + slotNumber.toString();
+		const selectionHash = crypto
+			.createHash('sha256')
+			.update(selectionData)
+			.digest('hex');
+		const hashValue = BigInt('0x' + selectionHash);
+
+		// Time since last block in seconds (minimum 1 to avoid zero target)
+		const timeSinceLastBlock = Math.max(
+			1,
+			Math.floor((timestamp - previousBlockTimestamp) / 1000),
+		);
+
+		// target = MAX_HASH * stakeWeight * timeSinceLastBlock / (totalStake * TARGET_BLOCK_TIME)
+		// Higher stake weight → higher target → more likely to win
+		// More time since last block → higher target → block guaranteed eventually
+		const target =
+			(Blockchain.MAX_HASH * BigInt(stakeWeight) * BigInt(timeSinceLastBlock)) /
+			(BigInt(totalStake) * BigInt(this.TARGET_BLOCK_TIME));
+
+		return hashValue < target;
 	}
 
-	private findStakeableOutput(
-		address: string,
-		amount: number
-	): { tx: Transaction; index: number } | null {
-		// console.log('Looking for stakeable output:', { address, amount });
+	private canCreateStakeBlock(address: string): boolean {
+		const stake = this._stakes.get(address);
+		if (!stake) {
+			return false;
+		}
 
-		// Get all UTXOs for this address
-		const utxos = this.getUTXOs(address);
-		// console.log('Available UTXOs:', utxos);
+		// Skip time-based rate limiting in test environment
+		if (process.env.NODE_ENV !== 'test') {
+			const stakeAge = (Date.now() - stake.timestamp) / 1000;
+			if (stakeAge < this.MIN_STAKE_AGE) {
+				return false;
+			}
 
-		// Find a UTXO with sufficient amount
-		for (const utxo of utxos) {
-			if (utxo.output.amount >= amount) {
-				// Find the transaction in the chain
-				for (const block of [...this.chain].reverse()) {
-					for (const tx of block.transactions) {
-						if (tx.calculateHash() === utxo.txHash) {
-							return { tx, index: utxo.outputIndex };
-						}
-					}
-				}
+			if (Date.now() - stake.lastBlockTime < this.STAKE_CHECK_INTERVAL) {
+				return false;
 			}
 		}
 
-		console.log('No stakeable output found');
-		return null;
+		// Stake-weighted lottery
+		const latestBlock = this.getLatestBlock();
+		return this.isEligibleValidator(
+			address,
+			Date.now(),
+			latestBlock.hash,
+			latestBlock.timestamp,
+		);
 	}
 
-	public minePendingTransactions(minerAddress: string): Block {
+	public async minePendingTransactions(minerAddress: string, wallet?: Wallet): Promise<Block> {
 		// Switch to PoS only after cutoff block has been added (length > POW_CUTOFF_BLOCK)
 		const isPoSPhase = this.chain.length > POW_CUTOFF_BLOCK;
 		const lastBlock = this.getLatestBlock();
@@ -692,16 +785,16 @@ export class Blockchain {
 		// Always use Date.now() for timestamp so tests can control time
 		const timestamp = Date.now();
 
-		if (isPoSPhase) {
-			const stake = this.stakes.get(minerAddress);
+		if (isPoSPhase && wallet) {
+			const stake = this._stakes.get(minerAddress);
 			if (stake) {
-				const stakeBlock = this.generateStakeBlock(minerAddress);
+				const stakeBlock = this.generateStakeBlock(minerAddress, wallet);
 				if (!stakeBlock) {
 					throw new Error('Failed to generate stake block');
 				}
 				stakeBlock.timestamp = timestamp;
 				stakeBlock.hash = stakeBlock.calculateHash();
-				this.addMinedBlock(stakeBlock);
+				await this.addMinedBlock(stakeBlock);
 				return stakeBlock;
 			}
 			// Fallback to PoW if miner has no stake (mainly for test scenarios)
@@ -730,23 +823,98 @@ export class Blockchain {
 		}
 
 		// Use common path for validation/persistence
-		this.addMinedBlock(block);
+		await this.addMinedBlock(block);
 		return block;
 	}
 
-	addTransaction(transaction: Transaction): void {
+	private _addTransactionInternal(transaction: Transaction): void {
 		if (transaction.inputs.length === 0 || transaction.outputs.length === 0) {
 			throw new Error('Transaction must have inputs and outputs');
 		}
 
-		if (!transaction.isValid()) {
-			throw new Error('Cannot add invalid transaction to chain');
+		// Structural validation (signatures, duplicates, amounts, size limits)
+		transaction.validate();
+
+		// Validate all output addresses
+		for (const output of transaction.outputs) {
+			if (!this.validateAddress(output.address)) {
+				throw new Error('invalid output address');
+			}
+		}
+
+		// Verify all inputs reference existing UTXOs and calculate input sum
+		let inputSum = 0;
+		for (const input of transaction.inputs) {
+			const result = this.findTransactionBlock(input.previousTx);
+			if (!result) {
+				throw new Error('input references non-existent transaction');
+			}
+			const prevOutput = result.tx.outputs[input.outputIndex];
+			if (!prevOutput) {
+				throw new Error('input references non-existent output');
+			}
+
+			// Verify the UTXO is unspent
+			const utxos = this.getUTXOs(prevOutput.address);
+			const utxoExists = utxos.some(
+				(utxo) =>
+					utxo.txHash === input.previousTx &&
+					utxo.outputIndex === input.outputIndex
+			);
+			if (!utxoExists) {
+				throw new Error('input references spent or non-existent utxo');
+			}
+
+			inputSum += prevOutput.amount;
+
+			// Check coinbase maturity
+			if (
+				result.tx.isCoinbase() &&
+				this.chain.length - result.blockIndex < COIN_MATURITY
+			) {
+				throw new Error('coinbase output has not reached maturity');
+			}
+		}
+
+		// Verify input sum covers output sum
+		const outputSum = transaction.outputs.reduce(
+			(sum, out) => sum + out.amount, 0
+		);
+		if (inputSum < outputSum) {
+			throw new Error('output amounts exceed input amounts');
+		}
+
+		// Check each input against pending UTXO spends
+		for (const input of transaction.inputs) {
+			const key = this.utxoKey(input.previousTx, input.outputIndex);
+			if (this._pendingUTXOSpends.has(key)) {
+				throw new Error('utxo already spent by pending transaction');
+			}
+		}
+
+		// Track all inputs as pending spends
+		for (const input of transaction.inputs) {
+			this._pendingUTXOSpends.add(
+				this.utxoKey(input.previousTx, input.outputIndex)
+			);
 		}
 
 		this.pendingTransactions.push(transaction);
 	}
 
+	async addTransaction(transaction: Transaction): Promise<void> {
+		const release = await this._lock.acquire();
+		try {
+			this._addTransactionInternal(transaction);
+		} finally {
+			release();
+		}
+	}
+
 	isChainValid(): boolean {
+		// Rebuild stake state incrementally to validate each block against its context
+		const validationStakes = new Map<string, StakeInfo>();
+
 		for (let i = 1; i < this.chain.length; i++) {
 			const currentBlock = this.chain[i];
 			const previousBlock = this.chain[i - 1];
@@ -768,9 +936,46 @@ export class Blockchain {
 				return false;
 			}
 
+			// Update validation stakes from this block's transactions
+			// (must happen before PoS check — stake can be registered in same block)
+			for (const tx of currentBlock.transactions) {
+				if (tx.inputs.length === 0) continue;
+				if (tx.outputs.length === 0) continue;
+
+				let stakeAddress: string | null = null;
+				let stakeAmount: number | null = null;
+
+				if (
+					tx.outputs.length >= 2 &&
+					tx.outputs[0].amount === 0 &&
+					tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
+				) {
+					stakeAddress = tx.outputs[1].address;
+					stakeAmount = tx.outputs[1].amount;
+				} else {
+					const firstAddr = tx.outputs[0].address;
+					const allSame = tx.outputs.every(
+						(o: TxOutput) => o.address === firstAddr
+					);
+					if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
+						stakeAddress = firstAddr;
+						stakeAmount = tx.outputs[0].amount;
+					}
+				}
+
+				if (stakeAddress && stakeAmount) {
+					validationStakes.set(stakeAddress, {
+						amount: stakeAmount,
+						timestamp: currentBlock.timestamp,
+						lastBlockTime: currentBlock.timestamp,
+					});
+				}
+			}
+
 			if (currentBlock.isProofOfStake()) {
 				const stakeTransaction = currentBlock.transactions[1];
-				const stake = this.stakes.get(stakeTransaction.outputs[1].address);
+				const validatorAddress = stakeTransaction.outputs[1].address;
+				const stake = validationStakes.get(validatorAddress);
 				if (!stake || stake.timestamp > currentBlock.timestamp) {
 					console.log(`Block ${i} has invalid stake`);
 					return false;
@@ -792,7 +997,7 @@ export class Blockchain {
 	}
 
 	getPendingTransactions(): Transaction[] {
-		return this.pendingTransactions;
+		return [...this.pendingTransactions];
 	}
 
 	private loadBlockchain(): void {
@@ -952,7 +1157,7 @@ export class Blockchain {
 	}
 
 	public async replaceChain(newChain: Block[]): Promise<void> {
-		const release = await this.replaceLock.acquire();
+		const release = await this._lock.acquire();
 		try {
 			// Validate chain length
 			if (newChain.length <= this.chain.length) {
@@ -973,6 +1178,9 @@ export class Blockchain {
 				if (!block.hasValidTransactions()) {
 					throw new Error('Invalid chain: invalid transactions');
 				}
+
+				// Validate coinbase
+				this.validateBlockCoinbase(block);
 
 				// Validate PoW blocks
 				if (block.isProofOfWork()) {
@@ -1011,6 +1219,16 @@ export class Blockchain {
 			this.pendingTransactions = this.pendingTransactions.filter(
 				(tx) => !chainTxHashes.has(tx.calculateHash())
 			);
+
+			// Rebuild pending UTXO spends from remaining pending transactions
+			this._pendingUTXOSpends.clear();
+			for (const tx of this.pendingTransactions) {
+				for (const input of tx.inputs) {
+					this._pendingUTXOSpends.add(
+						this.utxoKey(input.previousTx, input.outputIndex)
+					);
+				}
+			}
 
 			// Save the new chain
 			this.saveBlockchain();

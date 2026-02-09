@@ -80,14 +80,7 @@ export class Wallet {
 	}
 
 	signTransaction(tx: Transaction): void {
-		tx.inputs.forEach((input: TxInput) => {
-			const msgHash = Buffer.from(
-				crypto.createHash('sha256').update(tx.calculateHash()).digest()
-			);
-
-			const signatureObj = secp256k1.ecdsaSign(msgHash, this.privateKey);
-			input.signature = Buffer.from(signatureObj.signature).toString('hex');
-		});
+		tx.signTransaction(this.privateKey);
 	}
 
 	private loadWallet(): void {

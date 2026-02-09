@@ -3,7 +3,7 @@
 | Field            | Value                                    |
 | ---------------- | ---------------------------------------- |
 | **ID**           | `B2`                                     |
-| **Status**       | `[ ]`                                    |
+| **Status**       | `[x]`                                    |
 | **Priority**     | High                                     |
 | **Dependencies** | A1, A2                                   |
 | **Branch**       | `feature/b2-transaction-validation`      |
@@ -46,14 +46,14 @@ src/blockchain/
 
 **Acceptance Criteria:**
 
-- [ ] Transactions with invalid signatures are rejected
-- [ ] Transactions spending non-existent UTXOs are rejected
-- [ ] Transactions with duplicate inputs are rejected
-- [ ] Transactions with outputs > inputs are rejected
-- [ ] Transactions with negative/zero output amounts are rejected
-- [ ] Invalid addresses are rejected everywhere
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Transactions with invalid signatures are rejected
+- [x] Transactions spending non-existent UTXOs are rejected
+- [x] Transactions with duplicate inputs are rejected
+- [x] Transactions with outputs > inputs are rejected
+- [x] Transactions with negative/zero output amounts are rejected
+- [x] Invalid addresses are rejected everywhere
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 
