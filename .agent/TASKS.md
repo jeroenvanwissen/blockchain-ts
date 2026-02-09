@@ -24,10 +24,10 @@ _Security vulnerabilities and consensus-breaking bugs. The blockchain does not w
 
 | Status | ID   | Task                                                                    | Priority | Dependencies |
 | ------ | ---- | ----------------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `A1` | [Fix Transaction Signing](tasks/A1-fix-transaction-signing.md)          | Critical | None         |
-| `[ ]`  | `A2` | [Fix UTXO Double-Spend](tasks/A2-utxo-double-spend.md)                 | Critical | None         |
-| `[ ]`  | `A3` | [Fix Concurrency / Race Conditions](tasks/A3-concurrency-locks.md)     | Critical | None         |
-| `[ ]`  | `A4` | [Coinbase Transaction Validation](tasks/A4-coinbase-validation.md)     | High     | None         |
+| `[x]`  | `A1` | [Fix Transaction Signing](tasks/A1-fix-transaction-signing.md)          | Critical | None         |
+| `[x]`  | `A2` | [Fix UTXO Double-Spend](tasks/A2-utxo-double-spend.md)                 | Critical | None         |
+| `[x]`  | `A3` | [Fix Concurrency / Race Conditions](tasks/A3-concurrency-locks.md)     | Critical | None         |
+| `[x]`  | `A4` | [Coinbase Transaction Validation](tasks/A4-coinbase-validation.md)     | High     | None         |
 
 ### Wave B — Consensus & Validation (depends on Wave A)
 
@@ -35,12 +35,13 @@ _Complete the consensus mechanism and add missing validation._
 
 | Status | ID   | Task                                                                        | Priority | Dependencies |
 | ------ | ---- | --------------------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `B1` | [Implement PoS Validator Selection](tasks/B1-pos-validator-selection.md)    | Critical | A3           |
-| `[ ]`  | `B2` | [Complete Transaction Validation](tasks/B2-transaction-validation.md)       | High     | A1, A2       |
-| `[ ]`  | `B3` | [Fix Difficulty Adjustment](tasks/B3-difficulty-adjustment.md)              | High     | None         |
-| `[ ]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                    | Medium   | None         |
-| `[ ]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                   | Medium   | None         |
-| `[ ]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)       | Medium   | B5           |
+| `[x]`  | `B1` | [Implement PoS Validator Selection](tasks/B1-pos-validator-selection.md)    | Critical | A3           |
+| `[x]`  | `B2` | [Complete Transaction Validation](tasks/B2-transaction-validation.md)       | High     | A1, A2       |
+| `[x]`  | `B3` | [Fix Difficulty Adjustment](tasks/B3-difficulty-adjustment.md)              | High     | None         |
+| `[x]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                    | Medium   | None         |
+| `[x]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                   | Medium   | None         |
+| `[x]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)       | Medium   | B5           |
+| `[ ]`  | `B7` | [Cross-Platform Storage Paths](tasks/B7-cross-platform-paths.md)            | Medium   | None         |
 
 ### Wave C — Hardening (depends on Wave B)
 
@@ -98,7 +99,7 @@ A1, A2, A3, A4
 Wave B (depends on Wave A):
 A3 ──> B1
 A1, A2 ──> B2
-B3, B4, B5 (independent, can start with Wave A)
+B3, B4, B5, B7 (independent, can start with Wave A)
 B5 ──> B6
 
 Wave C (depends on Wave B):
