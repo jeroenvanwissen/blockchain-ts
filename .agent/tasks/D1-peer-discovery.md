@@ -3,7 +3,7 @@
 | Field            | Value                          |
 | ---------------- | ------------------------------ |
 | **ID**           | `D1`                           |
-| **Status**       | `[ ]`                          |
+| **Status**       | `[x]`                          |
 | **Priority**     | High                           |
 | **Dependencies** | None                           |
 | **Branch**       | `feature/d1-peer-discovery`    |
@@ -32,11 +32,11 @@ src/
 
 **Acceptance Criteria:**
 
-- [ ] A new node with a single seed peer can discover all other nodes in the network
-- [ ] Peer lists are persisted to `data/peers.json` and used on restart
-- [ ] No duplicate connections are established
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] A new node with a single seed peer can discover all other nodes in the network
+- [x] Peer lists are persisted to `data/peers.json` and used on restart
+- [x] No duplicate connections are established
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

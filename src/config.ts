@@ -45,6 +45,14 @@ export const P2P_PORT = process.env.P2P_PORT
 	? parseInt(process.env.P2P_PORT)
 	: DEFAULT_P2P_PORT;
 
+// Peer discovery
+export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
+export const MAX_KNOWN_PEERS = 128; // Maximum number of peer addresses to track
+export const DEFAULT_SEED_NODES: string[] = [];
+export const SEED_NODES: string[] = process.env.SEED_NODES
+	? process.env.SEED_NODES.split(',').map(s => s.trim()).filter(Boolean)
+	: DEFAULT_SEED_NODES;
+
 // Consensus configuration
 export const POW_CUTOFF_BLOCK = 100;
 

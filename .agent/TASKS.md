@@ -60,7 +60,7 @@ _P2P improvements, REST API, and external interaction._
 
 | Status | ID   | Task                                                      | Priority | Dependencies |
 | ------ | ---- | --------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `D1` | [Peer Discovery Mechanism](tasks/D1-peer-discovery.md)    | High     | None         |
+| `[x]`  | `D1` | [Peer Discovery Mechanism](tasks/D1-peer-discovery.md)    | High     | None         |
 | `[ ]`  | `D2` | [Message Relaying](tasks/D2-message-relaying.md)          | High     | D1           |
 | `[ ]`  | `D3` | [REST API for Blockchain](tasks/D3-api-blockchain.md)     | High     | None         |
 | `[ ]`  | `D4` | [REST API for Transactions](tasks/D4-api-transactions.md) | High     | D3           |

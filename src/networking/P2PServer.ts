@@ -4,6 +4,7 @@ import { Blockchain } from '../blockchain/Blockchain.js';
 import { Transaction } from '../blockchain/Transaction.js';
 import { Block } from '../blockchain/Block.js';
 import fs from 'fs';
+import { PEER_BROADCAST_INTERVAL, MAX_KNOWN_PEERS } from '../config.js';
 
 export enum MessageType {
 	CHAIN = 'CHAIN',
@@ -13,6 +14,7 @@ export enum MessageType {
 	UNSTAKE = 'UNSTAKE',
 	GET_LATEST_BLOCK = 'GET_LATEST_BLOCK',
 	LATEST_BLOCK = 'LATEST_BLOCK',
+	PEERS = 'PEERS',
 }
 
 interface ChainMessage {
@@ -55,6 +57,11 @@ interface LatestBlockMessage {
 	data: Block;
 }
 
+interface PeersMessage {
+	type: MessageType.PEERS;
+	data: string[];
+}
+
 export type Message =
 	| ChainMessage
 	| TransactionMessage
@@ -62,7 +69,8 @@ export type Message =
 	| StakeMessage
 	| UnstakeMessage
 	| GetLatestBlockMessage
-	| LatestBlockMessage;
+	| LatestBlockMessage
+	| PeersMessage;
 
 // DTOs for wire format
 interface SerializedTxInput {
@@ -114,9 +122,25 @@ function isSerializedBlock(obj: unknown): obj is SerializedBlock {
 	);
 }
 
+export function isValidPeerAddress(address: string): boolean {
+	try {
+		if (!/^wss?:\/\//.test(address)) return false;
+		const url = new URL(address);
+		const port = parseInt(url.port, 10);
+		if (!url.hostname || isNaN(port) || port < 1 || port > 65535) return false;
+		if (/\s/.test(url.hostname)) return false;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export class P2PServer {
 	private sockets: WebSocket[];
 	private connectedPeers: Set<string>;
+	private _knownPeers: Set<string>;
+	private _ownAddresses: Set<string>;
+	private _peerBroadcastInterval: NodeJS.Timeout | null = null;
 
 	constructor(
 		private blockchain: Blockchain,
@@ -125,6 +149,15 @@ export class P2PServer {
 	) {
 		this.sockets = [];
 		this.connectedPeers = new Set();
+		this._knownPeers = new Set();
+		this._ownAddresses = new Set();
+		this._buildOwnAddresses();
+	}
+
+	private _buildOwnAddresses(): void {
+		this._ownAddresses.add(`ws://localhost:${this.p2pPort}`);
+		this._ownAddresses.add(`ws://127.0.0.1:${this.p2pPort}`);
+		this._ownAddresses.add(`ws://0.0.0.0:${this.p2pPort}`);
 	}
 
 	private normalizePeerUrl(url: string): string {
@@ -160,13 +193,25 @@ export class P2PServer {
 			} else {
 				console.log(`P2P Server listening on port ${this.p2pPort}`);
 			}
+			this._startPeerBroadcast();
 		});
 	}
 
-	// Update connectToPeers method
 	connectToPeers(newPeers: string[]): void {
 		newPeers.forEach((peer) => {
 			const normalizedPeer = this.normalizePeerUrl(peer);
+
+			// Validate peer address format
+			if (!isValidPeerAddress(normalizedPeer)) {
+				console.log(`Invalid peer address, skipping: ${peer}`);
+				return;
+			}
+
+			// Skip own addresses
+			if (this._ownAddresses.has(normalizedPeer)) return;
+
+			// Track as known peer
+			this._knownPeers.add(normalizedPeer);
 
 			// Check if we're already connected or connecting to this peer
 			if (this.connectedPeers.has(normalizedPeer)) {
@@ -232,6 +277,7 @@ export class P2PServer {
 		this.logPeerConnection(socket as unknown as WebSocket);
 		this.messageHandler(socket);
 		this.sendChain(socket);
+		this._sendPeerList(socket);
 	}
 
 	private async reconnectToPeer(
@@ -276,43 +322,9 @@ export class P2PServer {
 			console.log('Invalid peer address, not logging');
 			return;
 		}
-		// Extract host:port from the peer address
-		const hostPort = peerAddress.replace(/^wss?:\/\//, '');
-
-		// Create peers.json if it doesn't exist
-		if (!fs.existsSync(this.peerDataPath)) {
-			fs.writeFileSync(this.peerDataPath, '[]');
-		}
-
-		fs.readFile(this.peerDataPath, 'utf8', (err, data) => {
-			let peers: string[] = [];
-			if (!err && data) {
-				try {
-					peers = JSON.parse(data);
-				} catch (parseError) {
-					console.error('Error parsing peers.json:', parseError);
-					peers = []; // Reset to empty array if parsing fails
-				}
-			}
-
-			// Add the host:port to the array if it's not already there
-			if (!peers.includes(hostPort)) {
-				peers.push(hostPort);
-
-				// Write updated peers list
-				fs.writeFile(
-					this.peerDataPath,
-					JSON.stringify(peers, null, 2),
-					(writeErr) => {
-						if (writeErr) {
-							console.error('Error writing to peers.json:', writeErr);
-						} else {
-							console.log('Peer connection logged');
-						}
-					}
-				);
-			}
-		});
+		const normalized = this.normalizePeerUrl(peerAddress);
+		this._knownPeers.add(normalized);
+		this._persistPeers();
 	}
 
 	private messageHandler(socket: WebSocket): void {
@@ -347,6 +359,10 @@ export class P2PServer {
 
 					case MessageType.GET_LATEST_BLOCK:
 						this.handleGetLatestBlockMessage(socket);
+						break;
+
+					case MessageType.PEERS:
+						this._handlePeersMessage(data.data);
 						break;
 				}
 			} catch (error) {
@@ -527,6 +543,90 @@ export class P2PServer {
 				socket.send(JSON.stringify(message));
 			}
 		});
+	}
+
+	getKnownPeers(): string[] {
+		return [...this._knownPeers];
+	}
+
+	loadInitialPeers(peers: string[]): void {
+		for (const peer of peers) {
+			const normalized = this.normalizePeerUrl(peer);
+			if (isValidPeerAddress(normalized) && !this._ownAddresses.has(normalized)) {
+				this._knownPeers.add(normalized);
+			}
+		}
+	}
+
+	private _startPeerBroadcast(): void {
+		if (this._peerBroadcastInterval) return;
+		this._peerBroadcastInterval = setInterval(() => {
+			this._broadcastPeerList();
+		}, PEER_BROADCAST_INTERVAL);
+	}
+
+	private _stopPeerBroadcast(): void {
+		if (this._peerBroadcastInterval) {
+			clearInterval(this._peerBroadcastInterval);
+			this._peerBroadcastInterval = null;
+		}
+	}
+
+	private _broadcastPeerList(): void {
+		const peers = this.getKnownPeers();
+		if (peers.length === 0) return;
+		const message: PeersMessage = {
+			type: MessageType.PEERS,
+			data: peers,
+		};
+		this.broadcast(message);
+	}
+
+	private _sendPeerList(socket: WebSocket): void {
+		const peers = this.getKnownPeers();
+		if (peers.length === 0) return;
+		const message: PeersMessage = {
+			type: MessageType.PEERS,
+			data: peers,
+		};
+		socket.send(JSON.stringify(message));
+	}
+
+	private _handlePeersMessage(peerAddresses: unknown): void {
+		if (!Array.isArray(peerAddresses)) return;
+
+		const newPeersToConnect: string[] = [];
+
+		for (const addr of peerAddresses) {
+			if (typeof addr !== 'string') continue;
+			const normalized = this.normalizePeerUrl(addr);
+
+			if (!isValidPeerAddress(normalized)) continue;
+			if (this._ownAddresses.has(normalized)) continue;
+			if (this._knownPeers.has(normalized)) continue;
+			if (this._knownPeers.size >= MAX_KNOWN_PEERS) break;
+
+			this._knownPeers.add(normalized);
+
+			if (!this.connectedPeers.has(normalized)) {
+				newPeersToConnect.push(normalized);
+			}
+		}
+
+		this._persistPeers();
+
+		if (newPeersToConnect.length > 0) {
+			this.connectToPeers(newPeersToConnect);
+		}
+	}
+
+	private _persistPeers(): void {
+		const peers = this.getKnownPeers().map(url => url.replace(/^wss?:\/\//, ''));
+		try {
+			fs.writeFileSync(this.peerDataPath, JSON.stringify(peers, null, 2));
+		} catch (error) {
+			console.error('Error writing peers.json:', error);
+		}
 	}
 
 	getSockets(): WebSocket[] {

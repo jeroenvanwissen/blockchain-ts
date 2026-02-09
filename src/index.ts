@@ -3,7 +3,7 @@ import { P2PServer } from './networking/P2PServer.js';
 import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
 import * as fs from 'fs';
-import { DATA_DIR, P2P_PORT, PEER_DATA_PATH } from './config.js';
+import { DATA_DIR, P2P_PORT, PEER_DATA_PATH, SEED_NODES } from './config.js';
 
 // Ensure the data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -53,8 +53,11 @@ try {
 	console.error('Error reading peer data file:', error);
 }
 
-// Combine peers from command line and file
-const allPeers = [...new Set([...cliPeers, ...filePeers])];
+// Combine peers from seed nodes, command line, and file
+const allPeers = [...new Set([...SEED_NODES, ...cliPeers, ...filePeers])];
+
+// Register all known peers before connecting
+p2pServer.loadInitialPeers(allPeers);
 
 // Connect to all peers
 p2pServer.connectToPeers(allPeers);
