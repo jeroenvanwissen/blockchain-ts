@@ -9,16 +9,23 @@
 | **Branch**       | `feature/c2-block-validation`        |
 
 **Goal:**
-Add comprehensive block validation including timestamp checks, proper hash verification, and consensus transition validation. Currently, blocks can have arbitrary timestamps, the genesis block hash isn't re-verified on load, and the PoW-to-PoS transition at block 100 isn't validated during chain sync.
+Add comprehensive block validation including timestamp checks, proper hash verification, and consensus transition validation. Ensure `replaceChain()` has the same validation rigor as `_addMinedBlockInternal()`.
+
+**Already Implemented (via earlier tasks):**
+
+- `_addMinedBlockInternal` validates median time past (`block.timestamp <= getMedianTimePast()` rejected)
+- `_addMinedBlockInternal` enforces minimum block time (`BLOCK_TIME * 1000` gap)
+- `_addMinedBlockInternal` rejects PoW blocks after `POW_CUTOFF_BLOCK`
+- Coinbase validation (first tx is coinbase, correct reward, no duplicates) — task A4
+- Block index and previous hash continuity checks
 
 **Current Missing Validations:**
 
-- Block timestamps can be in the past or far future (no range check)
-- Genesis block hash not re-verified when loading from disk
-- No validation that PoW-to-PoS transition happens at the correct block height
-- `MIXED_MODE_START_BLOCK` and `POS_START_BLOCK` config values are dead code
-- Block index can be negative (no check)
-- No maximum block size validation
+- `replaceChain()` has weaker validation than `_addMinedBlockInternal` — missing timestamp checks, difficulty validation for PoW, and incomplete PoS validation
+- Genesis block hash not re-verified when loading from disk (only field-by-field comparison)
+- `MIXED_MODE_START_BLOCK` and `POS_START_BLOCK` config values are dead code (defined but never imported)
+- No maximum block size validation (max transactions per block)
+- No future timestamp rejection (`block.timestamp <= Date.now() + 2 hours`)
 
 **Scope:**
 
@@ -33,29 +40,25 @@ src/
 
 **Implementation:**
 
-1. Add timestamp validation:
-   - `block.timestamp >= previousBlock.timestamp` (no going backwards)
-   - `block.timestamp <= Date.now() + 2 hours` (not too far in the future)
-   - Validate timestamp is a positive integer
-2. Add block index validation: `block.index >= 0`
-3. Verify genesis block hash on chain load (recalculate and compare)
-4. Validate consensus transition:
-   - Blocks 0 to `POW_CUTOFF_BLOCK - 1` must be PoW
-   - Blocks >= `POW_CUTOFF_BLOCK` must be PoS
-   - Reject PoS blocks before cutoff and PoW blocks after cutoff
-5. Implement or remove `MIXED_MODE_START_BLOCK` and `POS_START_BLOCK`:
+1. Bring `replaceChain()` validation to parity with `_addMinedBlockInternal()`:
+   - Add timestamp validation (median time past, minimum block time gap)
+   - Add difficulty validation for PoW blocks in received chains
+   - Add full PoS validator eligibility check (currently only validates stake, not slot eligibility)
+   - Add future timestamp rejection: `block.timestamp <= Date.now() + 2 hours`
+2. Verify genesis block hash on chain load (recalculate full hash and compare, not just field-by-field)
+3. Implement or remove `MIXED_MODE_START_BLOCK` and `POS_START_BLOCK`:
    - If mixed mode is intended: allow both PoW and PoS in range [80, 100]
-   - If not: remove dead code
-6. Add block size limit (max transactions per block)
+   - If not: remove dead code from config.ts
+4. Add block size limit (max transactions per block, add `MAX_BLOCK_TRANSACTIONS` to config)
 
 **Acceptance Criteria:**
 
-- [ ] Blocks with timestamps in the past (before previous block) are rejected
-- [ ] Blocks with timestamps far in the future are rejected
-- [ ] Genesis block integrity is verified on load
-- [ ] PoW blocks after cutoff are rejected
-- [ ] PoS blocks before cutoff are rejected
-- [ ] Dead config constants are resolved
+- [ ] `replaceChain()` validates timestamps (median time past, minimum gap, future limit)
+- [ ] `replaceChain()` validates PoW difficulty matches expected difficulty
+- [ ] `replaceChain()` validates PoS validator eligibility (not just stake existence)
+- [ ] Genesis block integrity is verified via full hash on load
+- [ ] Dead config constants (`MIXED_MODE_START_BLOCK`, `POS_START_BLOCK`) are resolved
+- [ ] Block size limit is enforced
 - [ ] Build passes: `npm run build`
 - [ ] Tests pass: `npm test`
 

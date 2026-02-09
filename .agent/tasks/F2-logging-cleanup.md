@@ -9,7 +9,7 @@
 | **Branch**       | `feature/f2-logging-cleanup`       |
 
 **Goal:**
-Replace scattered `console.log` statements with proper structured logging using the winston logger already configured in the project.
+Replace scattered `console.log` statements (111 occurrences across 12 source files) with proper structured logging. A skeleton winston logger exists at `lib/logger.js` (CommonJS) but is never imported by any source file — it needs to be migrated to TypeScript ESM and integrated.
 
 **Scope:**
 
@@ -23,17 +23,18 @@ src/networking/
 └── P2PServer.ts                    # MODIFY — replace console usage with logger
 src/
 └── index.ts                        # MODIFY — replace console usage with logger
-lib/logger/                         # MODIFY — verify logger configuration
+lib/logger.js                       # MIGRATE — convert CJS to TypeScript ESM, move to src/
 ```
 
 **Implementation:**
 
-1. Audit all `console.log` / `console.error` / `console.warn` usage across `src/`
-2. Replace with appropriate winston log levels (`error`, `warn`, `info`, `debug`)
-3. Remove hash calculation logging from `Block.ts` or move to `debug` level
-4. Ensure log format includes timestamp, level, and component name
-5. Add configurable log level via environment variable (`LOG_LEVEL=debug`)
+1. Migrate `lib/logger.js` (CommonJS) to TypeScript ESM at `src/logger.ts`; update the existing winston configuration to use `LOG_LEVEL` env var instead of `DEBUG`
+2. Audit all `console.log` / `console.error` / `console.warn` usage across `src/` (currently 111 occurrences in 12 files)
+3. Replace with appropriate winston log levels (`error`, `warn`, `info`, `debug`)
+4. Remove hash calculation logging from `Block.ts` or move to `debug` level
+5. Ensure log format includes timestamp, level, and component name (partially done in existing logger)
 6. Verify that sensitive data (private keys, etc.) is never logged
+7. Remove the old `lib/logger.js` after migration
 
 **Acceptance Criteria:**
 

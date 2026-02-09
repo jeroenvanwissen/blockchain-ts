@@ -9,7 +9,7 @@
 | **Branch**       | `feature/e4-reconnect-limiting`    |
 
 **Goal:**
-Add logic to limit the maximum number of reconnection attempts to a peer. Currently, the P2P server uses exponential backoff but has no upper bound on retry count, wasting resources on permanently unavailable peers.
+Improve reconnection limiting for permanently unavailable peers. Basic retry logic already exists: `reconnectToPeer()` uses exponential backoff (base 1s, max 30s cap) with a hardcoded `maxAttempts = 10`. However, the implementation has gaps that need addressing.
 
 **Scope:**
 
@@ -21,14 +21,19 @@ src/
 └── config.ts                       # MODIFY — add MAX_RECONNECT_ATTEMPTS, UNREACHABLE_RETRY_INTERVAL
 ```
 
-**Implementation:**
+**Already Implemented:**
 
-1. Add `MAX_RECONNECT_ATTEMPTS` (default: 10) and `UNREACHABLE_RETRY_INTERVAL` (default: 30 min) to `config.ts`
-2. Track reconnection attempt count per peer in `P2PServer`
-3. Stop reconnecting after reaching the maximum, mark peer as unreachable
-4. Log when a peer is marked unreachable
-5. Optionally retry unreachable peers at the longer interval
-6. Reset reconnection count on successful connection
+- `reconnectToPeer()` has `maxAttempts = 10` with exponential backoff (P2PServer.ts:237-271)
+- Stops retrying after max attempts with a log message
+
+**Remaining Implementation:**
+
+1. Move `maxAttempts` to config as `MAX_RECONNECT_ATTEMPTS` (currently hardcoded)
+2. Add `UNREACHABLE_RETRY_INTERVAL` (default: 30 min) to `config.ts`
+3. Track reconnection state per peer in a `Map` (current approach uses a recursive function parameter, so the counter doesn't persist or reset)
+4. Reset reconnection counter when a peer successfully reconnects (currently not tracked)
+5. Mark unreachable peers and periodically retry at the longer interval
+6. Log unreachable peers with their last-seen timestamp
 
 **Acceptance Criteria:**
 
