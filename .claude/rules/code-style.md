@@ -63,7 +63,9 @@
 
 - Use `async/await` for all asynchronous operations
 - Use `async-mutex` (`Mutex`) for protecting shared mutable state
-- Pattern: `const release = await this.lock.acquire(); try { ... } finally { release(); }`
+- Pattern: `const release = await this._lock.acquire(); try { ... } finally { release(); }`
+- Public methods acquire the lock; internal `_` methods assume lock is already held
+- Never call a public lock-acquiring method from within a lock — use the internal `_` variant
 - Worker threads for CPU-intensive operations (mining)
 
 ### Type Safety
@@ -78,7 +80,7 @@
 | ----------------------------------------------- | ----------------------------------------------- |
 | `import { Block } from './Block.js';`           | `import Block from './Block';`                  |
 | `throw new Error('descriptive message');`        | `throw 'string error';`                         |
-| `const release = await mutex.acquire();`         | Modify shared state without a lock              |
+| `const release = await this._lock.acquire();`    | Modify shared state without a lock              |
 | `export const CONFIG = value;` in config.ts      | Hardcode constants in implementation files       |
 | `import type { Foo } from './Foo.js';`           | Import runtime values when only types are needed |
 | One class per file, matching filename             | Multiple classes in a single file                |

@@ -5,16 +5,27 @@
 ```
 src/
 ├── blockchain/               # Core consensus, data structures, and wallet
-│   ├── *.ts                  #   One class per file
+│   ├── Block.ts              #   Block structure, hashing, PoW/PoS detection
+│   ├── Blockchain.ts         #   Chain management, UTXO set, validation, staking
+│   ├── BlockStore.ts         #   Chunked block storage with protobuf index
+│   ├── Transaction.ts        #   Transaction model, signing, verification
+│   ├── Wallet.ts             #   Key management, address encoding, persistence
+│   ├── Miner.ts              #   PoW mining via worker threads
+│   ├── StakingService.ts     #   PoS block generation at intervals
 │   ├── miningWorker.cjs      #   Worker thread (CommonJS required)
 │   └── __tests__/            #   Colocated unit tests
 ├── networking/               # P2P communication layer
-│   ├── *.ts                  #   One class per file
+│   ├── P2PServer.ts          #   WebSocket server/client, chain sync
 │   └── __tests__/            #   Colocated unit tests
+├── __tests__/                # Root-level tests (config, etc.)
 ├── config.ts                 # All configuration constants (single source of truth)
 ├── index.ts                  # Node entry point
 └── mine.ts                   # Miner entry point
-data/                         # Runtime data (gitignored, created at startup)
+proto/                        # Protobuf schema definitions
+├── blockchain.proto          #   Block serialization schema
+├── blockindex.proto          #   Block index schema
+└── wallet.proto              #   Wallet data schema
+data/                         # Runtime data (gitignored, platform-specific default path)
 dist/                         # Compiled output (gitignored)
 ```
 
@@ -52,11 +63,13 @@ dist/                         # Compiled output (gitignored)
 
 - Use `npm install` to add dependencies
 - Use caret ranges (`^`) for version pinning
-- Runtime crypto: use Node.js built-in `crypto` module, not `crypto-js`
-- `secp256k1` for elliptic curve operations
-- `async-mutex` for concurrency control
+- Runtime crypto: use Node.js built-in `crypto` module for SHA256
+- `secp256k1` for ECDSA elliptic curve operations
+- `crypto-js` for RIPEMD160 (not available in Node.js built-in crypto)
+- `async-mutex` for concurrency control (Mutex)
 - `ws` for WebSocket communication
-- `winston` for logging (configured in `lib/logger/`)
+- `protobufjs` for binary serialization (blocks, index, wallet)
+- `winston` for logging (configured but not yet migrated from console — see task F2)
 
 ## Entry Points
 
@@ -66,8 +79,9 @@ dist/                         # Compiled output (gitignored)
 
 ## Data Persistence
 
-- All runtime data in `data/` directory (configurable via `--datadir`)
-- Chain: `blocks/` subdirectory with chunked `blk*.dat` files and `index.dat`
-- Wallet: `wallet.dat` (protobuf, keys and address)
+- Default data directory is platform-specific (macOS: `~/Library/Application Support/blockchain-ts/`, Linux: `~/.blockchain-ts/`, Windows: `%APPDATA%/blockchain-ts/`)
+- Configurable via `--data-dir` CLI argument
+- Chain: `blocks/` subdirectory with chunked `blk*.dat` files (append-only, 128 MB max) and `index.dat` (protobuf)
+- Wallet: `wallet.dat` (protobuf, keys and address, `0600` permissions)
 - Peers: `peers.json` (known peer addresses)
-- Create backup before overwriting wallet: `wallet.dat.{timestamp}.backup`
+- Create backup before overwriting wallet: `wallet.dat.{timestamp}.backup` (max 3 backups kept)

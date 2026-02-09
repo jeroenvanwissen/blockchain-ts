@@ -11,6 +11,12 @@
 - Test location: `__tests__/` directory inside each module (colocated with source)
 - Test file naming: `PascalCase.test.ts` matching source file (e.g., `Blockchain.test.ts`)
 - Test helpers: defined as local functions within test files (no shared test utils directory yet)
+- Current test files:
+  - `src/__tests__/config.test.ts`
+  - `src/blockchain/__tests__/Blockchain.test.ts`
+  - `src/blockchain/__tests__/BlockStore.test.ts`
+  - `src/blockchain/__tests__/Wallet.test.ts`
+  - `src/networking/__tests__/P2PServer.test.ts`
 
 ## Test Structure
 
@@ -55,7 +61,7 @@ describe('ClassName', () => {
 
 - Use `beforeEach` for per-test setup (fresh instances, fake timers, mocks)
 - Use `afterEach` for cleanup (restore real timers, clear mocks)
-- Set `process.env.NODE_ENV = 'test'` in `beforeEach` (note: planned for removal — see task C4)
+- Set `process.env.NODE_ENV = 'test'` in `beforeEach`
 - Create helper functions for repetitive operations (e.g., mining N blocks)
 
 ### Mocking
@@ -83,19 +89,28 @@ describe('ClassName', () => {
 - Transaction creation and manipulation
 - Chain validation logic
 
+### Async Testing
+
+- Blockchain mutation methods are async — use `await` in tests
+- `expect().toThrow()` becomes `await expect(promise).rejects.toThrow()` for async methods
+- Access private members via bracket notation: `blockchain['_stakes']`, `blockchain['_pendingUnstakes']`
+- **CRITICAL:** Use `jest.setSystemTime(new Date(time))` to advance time, NOT `jest.spyOn(Date, 'now')` — fake timers replace the global Date object
+- Tests needing staking balance must mine `3 * COIN_MATURITY` (30) blocks for sufficient mature coins
+- Tests that spend coinbase must mine `COIN_MATURITY` (10) blocks first for maturity
+
 ### Assertions
 
 - Use `expect().toBe()` for primitives, `expect().toEqual()` for objects
 - Use `expect().toHaveBeenCalledWith()` for verifying mock calls
-- Use `expect().toThrow()` for error cases
+- Use `expect().toThrow()` for sync errors, `await expect().rejects.toThrow()` for async
 - One logical assertion per test where practical, multiple related assertions are acceptable
 
 ## Coverage
 
 - **Minimum coverage:** Not currently enforced (target >80% — see task E6)
 - **Coverage command:** `npm test -- --coverage`
-- **Currently tested:** Blockchain consensus, P2P server basics
-- **Currently untested:** Transaction, Block, Wallet, StakingService, Miner (individual unit tests)
+- **Currently tested:** Blockchain (consensus, UTXO, staking, validation), BlockStore, Wallet, P2P server, config
+- **Currently untested:** Transaction, Block, StakingService, Miner (individual unit tests)
 
 ## Do / Don't
 

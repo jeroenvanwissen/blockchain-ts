@@ -205,7 +205,7 @@ git checkout .                          # Reset all
 
 ## Tips
 
-- Start with independent tasks (A1, A2, B1, C1, C2, C4, D1, D2) that have no dependencies
+- Waves A, B, and C are completed — start with Wave D (D1, D3 are independent)
 - Keep task scope tight — follow the guardrails
 - Run verification often to catch issues early
 - Reference the dependency graph in TASKS.md to plan parallel work

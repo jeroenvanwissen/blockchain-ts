@@ -154,7 +154,7 @@ npm run mine                # Start standalone miner
 
 ## Notes
 
-- **Start with Wave A** — these are independent and can all be worked on in parallel
+- **Waves A, B, and C are complete** — start with Wave D (D1, D3 are independent)
 - Each wave unlocks the next; don't skip ahead unless dependencies are met
 - Update status as work progresses (`[ ]` → `[~]` → `[x]`)
 - Archive completed waves to keep this file manageable

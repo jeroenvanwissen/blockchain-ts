@@ -166,14 +166,14 @@ Every finding gets a priority:
 
 Organize findings into **priority-ordered waves** labeled A through F (or beyond if needed):
 
-| Wave | Purpose                              | Start Condition                  |
-| ---- | ------------------------------------ | -------------------------------- |
-| A    | Critical fixes                       | Immediately, all independent     |
-| B    | Core validation and reliability      | After relevant A tasks complete  |
-| C    | Hardening and robustness             | After relevant B tasks complete  |
-| D    | Infrastructure and integration       | After core is solid              |
-| E    | Features and improvements            | After infrastructure is ready    |
-| F    | Cleanup and nice-to-have             | Anytime, lowest priority         |
+| Wave | Purpose                         | Start Condition                 |
+| ---- | ------------------------------- | ------------------------------- |
+| A    | Critical fixes                  | Immediately, all independent    |
+| B    | Core validation and reliability | After relevant A tasks complete |
+| C    | Hardening and robustness        | After relevant B tasks complete |
+| D    | Infrastructure and integration  | After core is solid             |
+| E    | Features and improvements       | After infrastructure is ready   |
+| F    | Cleanup and nice-to-have        | Anytime, lowest priority        |
 
 **Rules:**
 
@@ -223,13 +223,13 @@ Create one file per task in `.agent/tasks/`.
 ````markdown
 # Task {{ID}}: {{Title}}
 
-| Field            | Value                                |
-| ---------------- | ------------------------------------ |
-| **ID**           | `{{ID}}`                             |
-| **Status**       | `[ ]`                                |
-| **Priority**     | {{Critical / High / Medium / Low}}   |
-| **Dependencies** | {{Comma-separated IDs, or "None"}}   |
-| **Branch**       | `{{prefix}}/{{id-slug}}`             |
+| Field            | Value                              |
+| ---------------- | ---------------------------------- |
+| **ID**           | `{{ID}}`                           |
+| **Status**       | `[ ]`                              |
+| **Priority**     | {{Critical / High / Medium / Low}} |
+| **Dependencies** | {{Comma-separated IDs, or "None"}} |
+| **Branch**       | `{{prefix}}/{{id-slug}}`           |
 
 **Goal:**
 {{1-3 sentences explaining what this task achieves and why it matters.}}
@@ -273,13 +273,13 @@ Create one file per task in `.agent/tasks/`.
 
 **Branch prefix conventions:**
 
-| Task Type       | Prefix       | Example                       |
-| --------------- | ------------ | ----------------------------- |
-| Bug fix         | `fix/`       | `fix/a1-auth-bypass`          |
-| New feature     | `feature/`   | `feature/d1-rest-api`         |
-| Refactor        | `refactor/`  | `refactor/c3-extract-service` |
-| Test            | `test/`      | `test/e6-coverage`            |
-| Chore / cleanup | `chore/`     | `chore/f2-logging`            |
+| Task Type       | Prefix      | Example                       |
+| --------------- | ----------- | ----------------------------- |
+| Bug fix         | `fix/`      | `fix/a1-auth-bypass`          |
+| New feature     | `feature/`  | `feature/d1-rest-api`         |
+| Refactor        | `refactor/` | `refactor/c3-extract-service` |
+| Test            | `test/`     | `test/e6-coverage`            |
+| Chore / cleanup | `chore/`    | `chore/f2-logging`            |
 
 **Writing guidelines:**
 
@@ -321,18 +321,18 @@ Create `.agent/TASKS.md` as the central task index.
 
 _{{One-line description of what this wave addresses.}}_
 
-| Status | ID   | Task                                           | Priority | Dependencies |
-| ------ | ---- | ---------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `A1` | [Task Title](tasks/A1-short-slug.md)           | Critical | None         |
-| `[ ]`  | `A2` | [Task Title](tasks/A2-short-slug.md)           | Critical | None         |
+| Status | ID   | Task                                 | Priority | Dependencies |
+| ------ | ---- | ------------------------------------ | -------- | ------------ |
+| `[ ]`  | `A1` | [Task Title](tasks/A1-short-slug.md) | Critical | None         |
+| `[ ]`  | `A2` | [Task Title](tasks/A2-short-slug.md) | Critical | None         |
 
 ### Wave B — {{Wave Title}}
 
 _{{One-line description.}}_
 
-| Status | ID   | Task                                           | Priority | Dependencies |
-| ------ | ---- | ---------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `B1` | [Task Title](tasks/B1-short-slug.md)           | High     | A1           |
+| Status | ID   | Task                                 | Priority | Dependencies |
+| ------ | ---- | ------------------------------------ | -------- | ------------ |
+| `[ ]`  | `B1` | [Task Title](tasks/B1-short-slug.md) | High     | A1           |
 
 {{Continue for all waves...}}
 
@@ -366,14 +366,14 @@ A2 ──> B2
 
 ## Guardrails
 
-| Rule                           | Value              | Action                  |
-| ------------------------------ | ------------------ | ----------------------- |
-| Max files changed per PR       | 8                  | Split into subtasks     |
-| Max diff lines (added+removed) | 500                | Split into subtasks     |
-| Compile check                  | `{{build command}}`| Must pass before PR     |
-| Test suite                     | `{{test command}}` | Must pass before PR     |
-| Code review required           | All PRs            | Required before merge   |
-| Ambiguity detected             | Missing info       | **STOP and ask user**   |
+| Rule                           | Value               | Action                |
+| ------------------------------ | ------------------- | --------------------- |
+| Max files changed per PR       | 8                   | Split into subtasks   |
+| Max diff lines (added+removed) | 500                 | Split into subtasks   |
+| Compile check                  | `{{build command}}` | Must pass before PR   |
+| Test suite                     | `{{test command}}`  | Must pass before PR   |
+| Code review required           | All PRs             | Required before merge |
+| Ambiguity detected             | Missing info        | **STOP and ask user** |
 
 ---
 
@@ -400,10 +400,10 @@ Create `.agent/README.md` as the agent workflow guide.
 
 ## Contents
 
-| File                       | Purpose                            |
-| -------------------------- | ---------------------------------- |
-| [TASKS.md](TASKS.md)      | Task index and project backlog     |
-| [tasks/](tasks/)           | Individual task detail files       |
+| File                 | Purpose                        |
+| -------------------- | ------------------------------ |
+| [TASKS.md](TASKS.md) | Task index and project backlog |
+| [tasks/](tasks/)     | Individual task detail files   |
 
 ---
 
@@ -490,14 +490,14 @@ After PR is merged, update the task status in TASKS.md (`[ ]` → `[x]`).
 
 ## Guardrails
 
-| Rule                           | Value              | Action                  |
-| ------------------------------ | ------------------ | ----------------------- |
-| Max files changed per PR       | 8                  | Split into subtasks     |
-| Max diff lines (added+removed) | 500                | Split into subtasks     |
-| Build check                    | Must pass          | Required before PR      |
-| Test suite                     | Must pass          | Required before PR      |
-| Code review required           | All PRs            | Required before merge   |
-| Ambiguity detected             | Missing info       | **STOP and ask user**   |
+| Rule                           | Value        | Action                |
+| ------------------------------ | ------------ | --------------------- |
+| Max files changed per PR       | 8            | Split into subtasks   |
+| Max diff lines (added+removed) | 500          | Split into subtasks   |
+| Build check                    | Must pass    | Required before PR    |
+| Test suite                     | Must pass    | Required before PR    |
+| Code review required           | All PRs      | Required before merge |
+| Ambiguity detected             | Missing info | **STOP and ask user** |
 ````
 
 ### 3.4 — Generate .claude/CLAUDE.md
@@ -515,13 +515,13 @@ Create `.claude/CLAUDE.md` as the main project instructions file. This file is l
 
 ## Quick Reference
 
-| Action         | Command                |
-| -------------- | ---------------------- |
-| Build          | `{{build command}}`    |
-| Test           | `{{test command}}`     |
-| Lint           | `{{lint command}}`     |
-| Run            | `{{run command}}`      |
-| Dev mode       | `{{dev command}}`      |
+| Action   | Command             |
+| -------- | ------------------- |
+| Build    | `{{build command}}` |
+| Test     | `{{test command}}`  |
+| Lint     | `{{lint command}}`  |
+| Run      | `{{run command}}`   |
+| Dev mode | `{{dev command}}`   |
 
 ## Project Structure
 
@@ -545,12 +545,27 @@ Create `.claude/CLAUDE.md` as the main project instructions file. This file is l
 
 Detailed conventions are in `.claude/rules/`:
 
-| File                                      | Covers                                    |
-| ----------------------------------------- | ----------------------------------------- |
-| [rules/project.md](rules/project.md)     | Project structure and architecture         |
-| [rules/code-style.md](rules/code-style.md) | Code style and formatting                |
-| [rules/testing.md](rules/testing.md)     | Testing conventions and requirements       |
-| [rules/security.md](rules/security.md)   | Security requirements and practices        |
+| File                                       | Covers                               |
+| ------------------------------------------ | ------------------------------------ |
+| [rules/project.md](rules/project.md)       | Project structure and architecture   |
+| [rules/code-style.md](rules/code-style.md) | Code style and formatting            |
+| [rules/testing.md](rules/testing.md)       | Testing conventions and requirements |
+| [rules/security.md](rules/security.md)     | Security requirements and practices  |
+
+## Documentation Maintenance
+
+When making changes to the codebase, update all affected documentation files to stay in sync:
+
+| File                                       | Update when...                                     |
+| ------------------------------------------ | -------------------------------------------------- |
+| [README.md](../README.md)                  | Features, architecture, config, or usage changes   |
+| [.agent/TASKS.md](../.agent/TASKS.md)      | Task status changes (started, completed, blocked)  |
+| [.agent/README.md](../.agent/README.md)    | Workflow or tooling changes                        |
+| [.claude/CLAUDE.md](./)                    | Architecture, key decisions, or structure changes  |
+| [rules/code-style.md](rules/code-style.md) | New patterns, naming conventions, or style changes |
+| [rules/project.md](rules/project.md)       | New files, directories, or dependency changes      |
+| [rules/security.md](rules/security.md)     | Security-relevant changes or new validations       |
+| [rules/testing.md](rules/testing.md)       | New test files, patterns, or framework changes     |
 
 ## Tasks
 
@@ -626,7 +641,7 @@ Code formatting, naming, and structural patterns.
 
 **Template:**
 
-````markdown
+```markdown
 # Code Style
 
 ## Formatting
@@ -683,11 +698,11 @@ Code formatting, naming, and structural patterns.
 
 ## Do / Don't
 
-| Do                                        | Don't                                      |
-| ----------------------------------------- | ------------------------------------------ |
-| {{Good pattern example}}                  | {{Bad pattern example}}                    |
-| {{Good pattern example}}                  | {{Bad pattern example}}                    |
-````
+| Do                       | Don't                   |
+| ------------------------ | ----------------------- |
+| {{Good pattern example}} | {{Bad pattern example}} |
+| {{Good pattern example}} | {{Bad pattern example}} |
+```
 
 ---
 
@@ -750,10 +765,10 @@ Testing conventions, patterns, and requirements.
 
 ## Do / Don't
 
-| Do                                        | Don't                                      |
-| ----------------------------------------- | ------------------------------------------ |
-| {{Good testing pattern}}                  | {{Bad testing pattern}}                    |
-| {{Good testing pattern}}                  | {{Bad testing pattern}}                    |
+| Do                       | Don't                   |
+| ------------------------ | ----------------------- |
+| {{Good testing pattern}} | {{Bad testing pattern}} |
+| {{Good testing pattern}} | {{Bad testing pattern}} |
 ````
 
 ---
@@ -764,7 +779,7 @@ Security requirements and practices.
 
 **Template:**
 
-````markdown
+```markdown
 # Security Requirements
 
 ## Secrets Management
@@ -799,11 +814,11 @@ Security requirements and practices.
 
 ## Do / Don't
 
-| Do                                        | Don't                                      |
-| ----------------------------------------- | ------------------------------------------ |
-| {{Good security pattern}}                 | {{Bad security pattern}}                   |
-| {{Good security pattern}}                 | {{Bad security pattern}}                   |
-````
+| Do                        | Don't                    |
+| ------------------------- | ------------------------ |
+| {{Good security pattern}} | {{Bad security pattern}} |
+| {{Good security pattern}} | {{Bad security pattern}} |
+```
 
 ---
 

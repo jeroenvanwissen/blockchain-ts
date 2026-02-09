@@ -50,16 +50,20 @@ git --version          # Should be 2.30+
 
 ## Features
 
-| Feature                | Description                                                     |
-| ---------------------- | --------------------------------------------------------------- |
-| **Hybrid Consensus**   | Proof of Work transitions to Proof of Stake at block 100        |
-| **UTXO Model**         | Unspent Transaction Output tracking with double-spend prevention |
-| **P2P Networking**     | WebSocket-based peer communication with chain synchronization   |
-| **Digital Signatures** | secp256k1 elliptic curve cryptography for transaction signing   |
-| **Wallet System**      | Key generation, Base58Check address encoding, persistent storage |
-| **Worker Mining**      | Non-blocking PoW mining using Node.js worker threads            |
-| **Staking**            | Stake registration, weight calculation, PoS block generation    |
-| **Persistence**        | Chain state, wallet, and peer data persisted to JSON files      |
+| Feature                  | Description                                                       |
+| ------------------------ | ----------------------------------------------------------------- |
+| **Hybrid Consensus**     | PoW transitions to PoS at block 100 with difficulty adjustment    |
+| **UTXO Model**           | Unspent Transaction Output tracking with double-spend prevention  |
+| **Coinbase Maturity**    | Coinbase outputs require 10 confirmations before spending         |
+| **P2P Networking**       | WebSocket-based peer communication with chain synchronization     |
+| **Fork Resolution**      | Chain weight comparison for fork selection (not longest chain)    |
+| **Digital Signatures**   | secp256k1 ECDSA for transaction signing and verification         |
+| **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |
+| **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
+| **Staking**              | Stake-weighted validator lottery, age multiplier, coinstake txs  |
+| **Stake Security**       | Delayed unstaking, double-sign slashing, age-capped weight      |
+| **Difficulty Adjustment**| Proportional adjustment every 10 blocks (clamped 4x max change) |
+| **Persistence**          | Chunked block storage with protobuf index, wallet as protobuf   |
 
 ---
 
@@ -68,19 +72,22 @@ git --version          # Should be 2.30+
 ```
 src/
 ├── blockchain/
-│   ├── Block.ts            # Block structure with PoW/PoS support
-│   ├── Blockchain.ts       # Chain management, UTXO tracking, consensus
-│   ├── Transaction.ts      # Transaction inputs/outputs, signing, verification
-│   ├── Wallet.ts           # Key generation, address encoding, persistence
-│   ├── Miner.ts            # Worker thread PoW mining
-│   ├── StakingService.ts   # Periodic PoS block generation
-│   └── miningWorker.cjs    # Hash computation worker thread
+│   ├── Block.ts              # Block structure, hashing, PoW/PoS detection
+│   ├── Blockchain.ts         # Chain management, UTXO set, validation, staking
+│   ├── BlockStore.ts         # Chunked block storage with protobuf index
+│   ├── Transaction.ts        # Transaction model, signing, verification
+│   ├── Wallet.ts             # Key management, address encoding, persistence
+│   ├── Miner.ts              # PoW mining via worker threads
+│   ├── StakingService.ts     # Periodic PoS block generation
+│   ├── miningWorker.cjs      # Worker thread for CPU-intensive hashing
+│   └── __tests__/            # Unit tests
 ├── networking/
-│   └── P2PServer.ts        # WebSocket P2P server and message routing
-├── config.ts               # Configuration constants
-├── index.ts                # Main entry point
-├── mine.ts                 # Standalone miner entry point
-└── test-consensus.ts       # Consensus transition demo
+│   ├── P2PServer.ts          # WebSocket P2P server and message routing
+│   └── __tests__/            # Unit tests
+├── config.ts                 # All configuration constants
+├── index.ts                  # Main entry point
+├── mine.ts                   # Standalone miner entry point
+└── test-consensus.ts         # Consensus transition demo
 ```
 
 ### Components
@@ -88,9 +95,10 @@ src/
 | Component          | File                  | Responsibility                                       |
 | ------------------ | --------------------- | ---------------------------------------------------- |
 | **Block**          | `Block.ts`            | Block structure, hash calculation, PoW/PoS detection |
-| **Blockchain**     | `Blockchain.ts`       | Chain management, UTXO tracking, consensus, mining   |
-| **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, verification                |
-| **Wallet**         | `Wallet.ts`           | Key generation, address encoding, persistence        |
+| **Blockchain**     | `Blockchain.ts`       | Chain management, UTXO set, consensus, staking       |
+| **BlockStore**     | `BlockStore.ts`       | Chunked block persistence with protobuf index        |
+| **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
+| **Wallet**         | `Wallet.ts`           | Key management, address encoding, protobuf storage   |
 | **Miner**          | `Miner.ts`            | Worker thread PoW mining, job management             |
 | **StakingService** | `StakingService.ts`   | Periodic PoS block generation                        |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
@@ -101,26 +109,35 @@ src/
 
 Key constants in `src/config.ts`:
 
-| Setting              | Default | Description                                  |
-| -------------------- | ------- | -------------------------------------------- |
-| `P2P_PORT`           | 5001    | WebSocket P2P port (env: `P2P_PORT`)         |
-| `POW_CUTOFF_BLOCK`   | 100     | Block height where PoW ends                  |
-| `POS_START_BLOCK`    | 90      | Block height where PoS preparation begins    |
-| `MIXED_MODE_START`   | 80      | Block height where mixed PoW/PoS begins      |
-| `POW_BLOCK_REWARD`   | 10      | Mining reward per block (PoW)                |
-| `POS_BLOCK_REWARD`   | 10      | Staking reward per block (PoS)               |
-| `COIN_MATURITY`      | 10      | Blocks before coins are spendable            |
+| Setting                         | Default | Description                                    |
+| ------------------------------- | ------- | ---------------------------------------------- |
+| `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
+| `POW_CUTOFF_BLOCK`              | 100     | Block height where PoW ends and PoS begins     |
+| `POW_BLOCK_REWARD`              | 10      | Mining reward per block (PoW)                  |
+| `POS_BLOCK_REWARD`              | 10      | Staking reward per block (PoS)                 |
+| `COIN_MATURITY`                 | 10      | Blocks before coinbase outputs are spendable   |
+| `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
+| `DIFFICULTY_ADJUSTMENT_INTERVAL`| 10      | Blocks between difficulty recalculations       |
+| `MIN_DIFFICULTY`                | 4       | Minimum PoW difficulty                         |
+| `MAX_DIFFICULTY_CHANGE_FACTOR`  | 4       | Max 4x change per difficulty adjustment        |
+| `UNSTAKE_DELAY`                 | 100     | Blocks before unstaked funds are released       |
+| `MAX_STAKE_AGE_MULTIPLIER`      | 4       | Maximum age multiplier for stake weight        |
+| `MAX_BLOCK_FILE_SIZE`           | 128 MB  | Max size per chunked block data file           |
+| `MAX_WALLET_BACKUPS`            | 3       | Maximum wallet backup files to keep            |
 
 ### Data Files
 
-Runtime data is stored in `./data/` (configurable via `--data-dir`):
+Runtime data stored in a platform-specific directory (configurable via `--data-dir`):
+- **macOS:** `~/Library/Application Support/blockchain-ts/`
+- **Linux:** `~/.blockchain-ts/`
+- **Windows:** `%APPDATA%/blockchain-ts/`
 
-| File                    | Content                              |
-| ----------------------- | ------------------------------------ |
-| `blocks/blk*.dat`       | Chunked block data files             |
-| `blocks/index.dat`      | Block index (hash/height lookups)    |
-| `wallet.dat`            | Wallet keys and transaction history  |
-| `peers.json`            | Known peer addresses                 |
+| File                    | Content                                    |
+| ----------------------- | ------------------------------------------ |
+| `blocks/blk*.dat`       | Chunked block data files (append-only)     |
+| `blocks/index.dat`      | Block index (hash/height → file + offset)  |
+| `wallet.dat`            | Wallet keys and address (protobuf)         |
+| `peers.json`            | Known peer addresses                       |
 
 ---
 
@@ -162,23 +179,24 @@ npm run build           # Compile TypeScript
 
 ```typescript
 import { Blockchain } from './blockchain/Blockchain.js';
-import { Transaction } from './blockchain/Transaction.js';
 import { Wallet } from './blockchain/Wallet.js';
 
 // Create a blockchain and wallet
 const blockchain = new Blockchain();
 const wallet = new Wallet();
 
-// Create and sign a transaction
-const tx = new Transaction(fromAddress, toAddress, amount);
-tx.signTransaction(wallet.privateKey);
-blockchain.addTransaction(tx);
+// Create a transaction (uses UTXO model internally)
+const tx = blockchain.createTransaction(fromAddress, toAddress, amount, wallet);
+await blockchain.addTransaction(tx);
 
-// Mine pending transactions
-blockchain.minePendingTransactions(wallet.address);
+// Mine pending transactions (PoW phase)
+await blockchain.minePendingTransactions(wallet.address, wallet);
 
-// Check balance
+// Check balance (UTXO-based)
 const balance = blockchain.getBalance(wallet.address);
+
+// Stake coins (PoS phase)
+await blockchain.stake(wallet.address, 50, wallet);
 ```
 
 ---
@@ -269,7 +287,7 @@ npm run lint                      # Check for code issues
 **Don't:**
 - Skip verification steps
 - Merge with failing tests
-- Commit secrets, private keys, or wallet files
+- Commit secrets, private keys, or wallet files (`data/` is gitignored)
 - Mix unrelated changes in one PR
 
 ---
