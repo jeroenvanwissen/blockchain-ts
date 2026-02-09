@@ -39,6 +39,8 @@ _Complete the consensus mechanism and add missing validation._
 | `[ ]`  | `B2` | [Complete Transaction Validation](tasks/B2-transaction-validation.md)       | High     | A1, A2       |
 | `[ ]`  | `B3` | [Fix Difficulty Adjustment](tasks/B3-difficulty-adjustment.md)              | High     | None         |
 | `[ ]`  | `B4` | [Wallet Security Hardening](tasks/B4-wallet-security.md)                    | Medium   | None         |
+| `[ ]`  | `B5` | [Binary Data Persistence](tasks/B5-binary-persistence.md)                   | Medium   | None         |
+| `[ ]`  | `B6` | [Chunked Block Storage with Index](tasks/B6-chunked-block-storage.md)       | Medium   | B5           |
 
 ### Wave C — Hardening (depends on Wave B)
 
@@ -96,7 +98,8 @@ A1, A2, A3, A4
 Wave B (depends on Wave A):
 A3 ──> B1
 A1, A2 ──> B2
-B3, B4     (independent, can start with Wave A)
+B3, B4, B5 (independent, can start with Wave A)
+B5 ──> B6
 
 Wave C (depends on Wave B):
 B1 ──> C1
