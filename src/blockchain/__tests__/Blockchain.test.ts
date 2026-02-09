@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 import { Block } from '../Block.js';
-import { Blockchain } from '../Blockchain.js';
+import { Blockchain, type BlockchainOptions } from '../Blockchain.js';
 import { Wallet } from '../Wallet.js';
 import { Transaction } from '../Transaction.js';
 import {
@@ -16,6 +16,15 @@ import {
 	MAX_STAKE_AGE_MULTIPLIER,
 } from '../../config.js';
 import * as fs from 'fs';
+
+const testOptions: BlockchainOptions = {
+	minStakeAge: 0,
+	minBlockInterval: 0,
+	validateDifficulty: false,
+	validateTimestamps: false,
+	stakeCheckInterval: 0,
+	allowPowAfterCutoff: true,
+};
 
 // Mock the fs module
 jest.mock('fs');
@@ -44,7 +53,6 @@ describe('Blockchain', () => {
 	let minerWallet: Wallet;
 
 	beforeEach(() => {
-		process.env.NODE_ENV = 'test';
 		// Mock fs functions for BlockStore's chunked storage
 		(fs.existsSync as jest.Mock).mockReturnValue(false);
 		(fs.readFileSync as jest.Mock).mockImplementation(() => {
@@ -69,12 +77,11 @@ describe('Blockchain', () => {
 		const initialTestTime = genesisTime + 24 * 60 * 60 * 1000; // Start 1 day after genesis
 		jest.useFakeTimers();
 		jest.setSystemTime(new Date(initialTestTime));
-		blockchain = new Blockchain();
+		blockchain = new Blockchain(testOptions);
 		minerWallet = new Wallet();
 	});
 
 	afterEach(() => {
-		process.env.NODE_ENV = 'development';
 		jest.useRealTimers();
 	});
 
@@ -143,7 +150,7 @@ describe('Blockchain', () => {
 		});
 
 		it('should handle stake weight changes over time', async () => {
-			const blockchain = new Blockchain();
+			const blockchain = new Blockchain(testOptions);
 			const minerWallet = new Wallet();
 			const stakeholderWallet = new Wallet();
 			// Set initial time
@@ -946,16 +953,19 @@ describe('Blockchain', () => {
 
 			const latestBlock = blockchain.getLatestBlock();
 
-			// Count wins over many slots at low timeSinceLastBlock
+			// Count wins over many slots with a fixed short timeSinceLastBlock
+			// to avoid target saturation (both always winning at large time gaps)
 			let wins1 = 0;
 			let wins2 = 0;
 			for (let slot = 0; slot < 1000; slot++) {
-				const timestamp = latestBlock.timestamp + 1000 + slot * 60000;
+				const slotBase = (Math.floor(latestBlock.timestamp / 60000) + slot + 1) * 60000;
+				const timestamp = slotBase + 1000;
+				const prevTimestamp = slotBase;
 				if (blockchain.isEligibleValidator(
-					wallet1.getAddress(), timestamp, latestBlock.hash, latestBlock.timestamp,
+					wallet1.getAddress(), timestamp, latestBlock.hash, prevTimestamp,
 				)) wins1++;
 				if (blockchain.isEligibleValidator(
-					wallet2.getAddress(), timestamp, latestBlock.hash, latestBlock.timestamp,
+					wallet2.getAddress(), timestamp, latestBlock.hash, prevTimestamp,
 				)) wins2++;
 			}
 
@@ -1004,7 +1014,7 @@ describe('Blockchain', () => {
 			// Restore real getDifficulty/setDifficulty for difficulty tests
 			(Block.prototype.getDifficulty as jest.Mock).mockRestore();
 			(Block.prototype.setDifficulty as jest.Mock).mockRestore();
-			diffBlockchain = new Blockchain();
+			diffBlockchain = new Blockchain(testOptions);
 			diffMinerAddr = minerWallet.getAddress();
 		});
 

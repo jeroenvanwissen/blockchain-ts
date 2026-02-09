@@ -3,7 +3,7 @@
 | Field            | Value                                    |
 | ---------------- | ---------------------------------------- |
 | **ID**           | `C4`                                     |
-| **Status**       | `[ ]`                                    |
+| **Status**       | `[x]`                                    |
 | **Priority**     | Medium                                   |
 | **Dependencies** | B2, C2                                   |
 | **Branch**       | `feature/c4-remove-test-bypasses`        |

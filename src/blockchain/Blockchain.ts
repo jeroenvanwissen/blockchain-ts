@@ -42,6 +42,15 @@ interface UTXO {
 
 import { Mutex } from 'async-mutex';
 
+export interface BlockchainOptions {
+	minStakeAge?: number;
+	minBlockInterval?: number;
+	validateDifficulty?: boolean;
+	validateTimestamps?: boolean;
+	stakeCheckInterval?: number;
+	allowPowAfterCutoff?: boolean;
+}
+
 export class Blockchain {
 	private _lock: Mutex = new Mutex();
 
@@ -58,12 +67,19 @@ export class Blockchain {
 	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
 	private readonly MIN_STAKE_AMOUNT = 100;
-	private readonly MIN_STAKE_AGE = 60 * 60 * 24;
-	private readonly STAKE_CHECK_INTERVAL = 60 * 1000;
 	private readonly SLOT_DURATION = 60 * 1000;
-	private lastStakeCheck: number = 0;
+	private readonly _options: Required<BlockchainOptions>;
 
-	constructor() {
+	constructor(options?: BlockchainOptions) {
+		this._options = {
+			minStakeAge: 86400,
+			minBlockInterval: BLOCK_TIME * 1000,
+			validateDifficulty: true,
+			validateTimestamps: true,
+			stakeCheckInterval: 60 * 1000,
+			allowPowAfterCutoff: false,
+			...options,
+		};
 		this.blockStore = new BlockStore(BLOCKS_DIR);
 		const genesisBlock = this.createGenesisBlock();
 		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
@@ -160,8 +176,7 @@ export class Blockchain {
 	}
 
 	public canAcceptPowBlock(): boolean {
-		// Allow PoW up to and including the cutoff index; in test environment allow PoW fallback for scenarios without stake
-		if (process.env.NODE_ENV === 'test') return true;
+		if (this._options.allowPowAfterCutoff) return true;
 		return this.chain.length <= POW_CUTOFF_BLOCK;
 	}
 
@@ -202,29 +217,18 @@ export class Blockchain {
 
 		const lastBlock = this.getLatestBlock();
 
-		// Debug log for block timing
-		if (process.env.NODE_ENV === 'test') {
-			console.log('[DEBUG] addMinedBlock:', {
-				blockTimestamp: block.timestamp,
-				lastBlockTimestamp: lastBlock.timestamp,
-				blockTime: this.BLOCK_TIME,
-				timeSinceLastBlock: block.timestamp - lastBlock.timestamp,
-				minRequired: this.BLOCK_TIME * 1000,
-			});
-		}
-
-		// Enforce minimum block time (skip in tests where time may be simulated arbitrarily)
+		// Enforce minimum block time
 		const timeSinceLastBlock = block.timestamp - lastBlock.timestamp;
 		if (
-			process.env.NODE_ENV !== 'test' &&
-			timeSinceLastBlock < this.BLOCK_TIME * 1000
+			this._options.minBlockInterval > 0 &&
+			timeSinceLastBlock < this._options.minBlockInterval
 		) {
 			throw new Error('Block created too quickly');
 		}
 
 		// Validate timestamp against median time past to prevent manipulation
 		if (
-			process.env.NODE_ENV !== 'test' &&
+			this._options.validateTimestamps &&
 			block.timestamp <= this.getMedianTimePast()
 		) {
 			throw new Error(
@@ -234,7 +238,7 @@ export class Blockchain {
 
 		// Reject blocks with timestamps too far in the future
 		if (
-			process.env.NODE_ENV !== 'test' &&
+			this._options.validateTimestamps &&
 			block.timestamp > Date.now() + MAX_FUTURE_BLOCK_TIME
 		) {
 			throw new Error('block timestamp too far in the future');
@@ -257,7 +261,7 @@ export class Blockchain {
 
 		// Validate based on block type and difficulty
 		if (block.isProofOfWork()) {
-			if (process.env.NODE_ENV !== 'test') {
+			if (this._options.validateDifficulty) {
 				if (block.powDifficulty !== this.calculateNewDifficulty()) {
 					throw new Error('Invalid block difficulty');
 				}
@@ -407,9 +411,8 @@ export class Blockchain {
 			return false;
 		}
 
-		// In tests, skip the stake age requirement to allow faster validation
-		if (process.env.NODE_ENV !== 'test') {
-			// Stake age: ensure at least MIN_STAKE_AGE seconds have passed since earliest input tx
+		// Stake age: ensure at least minStakeAge seconds have passed since earliest input tx
+		if (this._options.minStakeAge > 0) {
 			let earliestInputTime = Number.MAX_SAFE_INTEGER;
 			for (const input of stakeInputs) {
 				const prevTx = this.findTransaction(input.previousTx)!;
@@ -417,7 +420,7 @@ export class Blockchain {
 					earliestInputTime = prevTx.timestamp;
 			}
 			const stakeAge = (Date.now() - earliestInputTime) / 1000;
-			if (stakeAge < this.MIN_STAKE_AGE) {
+			if (stakeAge < this._options.minStakeAge) {
 				return false;
 			}
 		}
@@ -858,14 +861,15 @@ export class Blockchain {
 			return false;
 		}
 
-		// Skip time-based rate limiting in test environment
-		if (process.env.NODE_ENV !== 'test') {
+		if (this._options.minStakeAge > 0) {
 			const stakeAge = (Date.now() - stake.timestamp) / 1000;
-			if (stakeAge < this.MIN_STAKE_AGE) {
+			if (stakeAge < this._options.minStakeAge) {
 				return false;
 			}
+		}
 
-			if (Date.now() - stake.lastBlockTime < this.STAKE_CHECK_INTERVAL) {
+		if (this._options.stakeCheckInterval > 0) {
+			if (Date.now() - stake.lastBlockTime < this._options.stakeCheckInterval) {
 				return false;
 			}
 		}
@@ -916,7 +920,7 @@ export class Blockchain {
 			transactions,
 			lastBlock.hash,
 			0,
-			process.env.NODE_ENV === 'test' ? 1 : this.calculateNewDifficulty(),
+			this._options.validateDifficulty ? this.calculateNewDifficulty() : 1,
 			this.chain.length
 		);
 
@@ -1317,19 +1321,17 @@ export class Blockchain {
 					throw new Error('Invalid chain: block exceeds maximum transaction count');
 				}
 
-				// Timestamp validations (skip in tests)
-				if (process.env.NODE_ENV !== 'test') {
-					// Future timestamp rejection
+				// Timestamp validations
+				if (this._options.validateTimestamps) {
 					if (block.timestamp > Date.now() + MAX_FUTURE_BLOCK_TIME) {
 						throw new Error('Invalid chain: block timestamp too far in the future');
 					}
 
-					// Minimum block time gap
-					if (block.timestamp - previousBlock.timestamp < this.BLOCK_TIME * 1000) {
+					if (this._options.minBlockInterval > 0 &&
+						block.timestamp - previousBlock.timestamp < this._options.minBlockInterval) {
 						throw new Error('Invalid chain: block created too quickly');
 					}
 
-					// Median time past
 					const medianTimePast = this.getMedianTimePastForChain(newChain, i - 1);
 					if (block.timestamp <= medianTimePast) {
 						throw new Error('Invalid chain: block timestamp must be greater than median time past');
@@ -1370,8 +1372,7 @@ export class Blockchain {
 					if (i > POW_CUTOFF_BLOCK) {
 						throw new Error('Invalid chain: PoW block after cutoff');
 					}
-					// Validate difficulty (skip in tests)
-					if (process.env.NODE_ENV !== 'test') {
+					if (this._options.validateDifficulty) {
 						const expectedDifficulty = this.calculateDifficultyForChain(newChain, i);
 						if (block.powDifficulty !== expectedDifficulty) {
 							throw new Error('Invalid chain: incorrect block difficulty');
