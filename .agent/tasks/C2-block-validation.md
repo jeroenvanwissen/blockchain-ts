@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `C2`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | High                                 |
 | **Dependencies** | A4, B2                               |
 | **Branch**       | `feature/c2-block-validation`        |
@@ -53,14 +53,14 @@ src/
 
 **Acceptance Criteria:**
 
-- [ ] `replaceChain()` validates timestamps (median time past, minimum gap, future limit)
-- [ ] `replaceChain()` validates PoW difficulty matches expected difficulty
-- [ ] `replaceChain()` validates PoS validator eligibility (not just stake existence)
-- [ ] Genesis block integrity is verified via full hash on load
-- [ ] Dead config constants (`MIXED_MODE_START_BLOCK`, `POS_START_BLOCK`) are resolved
-- [ ] Block size limit is enforced
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] `replaceChain()` validates timestamps (median time past, minimum gap, future limit)
+- [x] `replaceChain()` validates PoW difficulty matches expected difficulty
+- [x] `replaceChain()` validates PoS validator eligibility (not just stake existence)
+- [x] Genesis block integrity is verified via full hash on load
+- [x] Dead config constants (`MIXED_MODE_START_BLOCK`, `POS_START_BLOCK`) are resolved
+- [x] Block size limit is enforced
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

@@ -47,8 +47,6 @@ export const P2P_PORT = process.env.P2P_PORT
 
 // Consensus configuration
 export const POW_CUTOFF_BLOCK = 100;
-export const POS_START_BLOCK = 90;  // Changed from 80 to 90
-export const MIXED_MODE_START_BLOCK = 80;  // Keep at 80
 
 // Coin configuration
 export const COIN_MATURITY = 10; // Coins must be at least 10 blocks old
@@ -58,6 +56,10 @@ export const POW_BLOCK_REWARD = 10; // Reward for mined blocks
 // Transaction limits
 export const MAX_TRANSACTION_INPUTS = 256;
 export const MAX_TRANSACTION_OUTPUTS = 256;
+
+// Block limits
+export const MAX_BLOCK_TRANSACTIONS = 1000;
+export const MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60 * 1000; // 2 hours in ms
 
 // Block timing
 export const BLOCK_TIME = 30; // Target time between blocks in seconds

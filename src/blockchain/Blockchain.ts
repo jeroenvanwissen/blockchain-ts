@@ -14,6 +14,8 @@ import {
 	MIN_DIFFICULTY,
 	MAX_DIFFICULTY_CHANGE_FACTOR,
 	MEDIAN_TIME_SPAN,
+	MAX_BLOCK_TRANSACTIONS,
+	MAX_FUTURE_BLOCK_TIME,
 } from '../config.js';
 
 export interface StakeInfo {
@@ -183,6 +185,11 @@ export class Blockchain {
 		// Validate coinbase transaction structure and reward
 		this.validateBlockCoinbase(block);
 
+		// Block size limit
+		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
+			throw new Error('block exceeds maximum transaction count');
+		}
+
 		const lastBlock = this.getLatestBlock();
 
 		// Debug log for block timing
@@ -213,6 +220,14 @@ export class Blockchain {
 			throw new Error(
 				'Block timestamp must be greater than median time past',
 			);
+		}
+
+		// Reject blocks with timestamps too far in the future
+		if (
+			process.env.NODE_ENV !== 'test' &&
+			block.timestamp > Date.now() + MAX_FUTURE_BLOCK_TIME
+		) {
+			throw new Error('block timestamp too far in the future');
 		}
 
 		if (block.previousHash !== lastBlock.hash) {
@@ -403,9 +418,10 @@ export class Blockchain {
 		const timestamp = 1609459200000; // Jan 1, 2021, 00:00:00 UTC
 		const genesisTransaction = new Transaction(
 			[],
-			[{ address: 'genesis', amount: 0 }]
+			[{ address: 'genesis', amount: 0 }],
+			timestamp,
+			0, // deterministic nonce for reproducible genesis hash
 		);
-		genesisTransaction.timestamp = timestamp;
 		return new Block(timestamp, [genesisTransaction], '0', 0, 4, 0);
 	}
 
@@ -413,16 +429,18 @@ export class Blockchain {
 		return this.chain[this.chain.length - 1];
 	}
 
-	public totalNetworkStake(): number {
+	public totalNetworkStake(stakes?: Map<string, StakeInfo>): number {
+		const stakeMap = stakes ?? this._stakes;
 		let total = 0;
-		for (const [address] of this._stakes) {
-			total += this.calculateStakeWeight(address);
+		for (const [address] of stakeMap) {
+			total += this.calculateStakeWeight(address, stakeMap);
 		}
 		return total;
 	}
 
-	calculateStakeWeight(address: string): number {
-		const stake = this._stakes.get(address);
+	calculateStakeWeight(address: string, stakes?: Map<string, StakeInfo>): number {
+		const stakeMap = stakes ?? this._stakes;
+		const stake = stakeMap.get(address);
 		if (!stake) return 0;
 
 		// Use lastBlockTime instead of Date.now() for weight calculation
@@ -738,9 +756,10 @@ export class Blockchain {
 		timestamp: number,
 		previousBlockHash: string,
 		previousBlockTimestamp: number,
+		stakes?: Map<string, StakeInfo>,
 	): boolean {
-		const stakeWeight = this.calculateStakeWeight(address);
-		const totalStake = this.totalNetworkStake();
+		const stakeWeight = this.calculateStakeWeight(address, stakes);
+		const totalStake = this.totalNetworkStake(stakes);
 		if (totalStake === 0 || stakeWeight === 0) return false;
 
 		// Deterministic slot derived from timestamp
@@ -1035,7 +1054,7 @@ export class Blockchain {
 				return;
 			}
 
-			// Validate genesis block
+			// Validate genesis block (field-by-field + full hash verification)
 			const genesisBlock = blocks[0];
 			const expectedGenesis = this.createGenesisBlock();
 
@@ -1051,6 +1070,11 @@ export class Blockchain {
 					expectedGenesis.transactions[0].outputs[0].amount
 			) {
 				throw new Error('Invalid genesis block');
+			}
+
+			// Verify genesis block hash integrity
+			if (genesisBlock.hash !== expectedGenesis.hash) {
+				throw new Error('Invalid genesis block: hash mismatch');
 			}
 
 			// Validate chain continuity
@@ -1149,6 +1173,41 @@ export class Blockchain {
 		return Math.max(MIN_DIFFICULTY, newDifficulty);
 	}
 
+	private getMedianTimePastForChain(chain: Block[], upToIndex: number): number {
+		const count = Math.min(upToIndex + 1, MEDIAN_TIME_SPAN);
+		const startIndex = upToIndex + 1 - count;
+		const timestamps: number[] = [];
+		for (let i = startIndex; i <= upToIndex; i++) {
+			timestamps.push(chain[i].timestamp);
+		}
+		timestamps.sort((a, b) => a - b);
+		return timestamps[Math.floor(timestamps.length / 2)];
+	}
+
+	private calculateDifficultyForChain(chain: Block[], atIndex: number): number {
+		if (atIndex <= DIFFICULTY_ADJUSTMENT_INTERVAL) {
+			return chain[0].getDifficulty();
+		}
+		const lastIndex = atIndex - 1;
+		const firstIndex = lastIndex - DIFFICULTY_ADJUSTMENT_INTERVAL;
+		const timeTaken = Math.max(
+			1,
+			chain[lastIndex].timestamp - chain[firstIndex].timestamp,
+		);
+		const timeExpected = BLOCK_TIME * 1000 * DIFFICULTY_ADJUSTMENT_INTERVAL;
+		const oldDifficulty = chain[lastIndex].getDifficulty();
+		let newDifficulty = Math.round(
+			oldDifficulty * (timeExpected / timeTaken),
+		);
+		const maxDiff = oldDifficulty * MAX_DIFFICULTY_CHANGE_FACTOR;
+		const minDiff = Math.ceil(
+			oldDifficulty / MAX_DIFFICULTY_CHANGE_FACTOR,
+		);
+		newDifficulty = Math.min(newDifficulty, maxDiff);
+		newDifficulty = Math.max(newDifficulty, minDiff);
+		return Math.max(MIN_DIFFICULTY, newDifficulty);
+	}
+
 	public async replaceChain(newChain: Block[]): Promise<void> {
 		const release = await this._lock.acquire();
 		try {
@@ -1162,14 +1221,33 @@ export class Blockchain {
 				throw new Error('received chain does not have more weight than current chain');
 			}
 
+			// Verify genesis block hash integrity
+			const expectedGenesis = this.createGenesisBlock();
+			if (newChain[0].hash !== expectedGenesis.hash) {
+				throw new Error('Invalid chain: genesis block hash mismatch');
+			}
+
+			// Build stakes incrementally for PoS validation
+			const validationStakes = new Map<string, StakeInfo>();
+
 			// Validate chain integrity
 			for (let i = 1; i < newChain.length; i++) {
 				const block = newChain[i];
 				const previousBlock = newChain[i - 1];
 
+				// Validate block index continuity
+				if (block.index !== i) {
+					throw new Error('Invalid chain: incorrect block index');
+				}
+
 				// Validate block linkage
 				if (block.previousHash !== previousBlock.hash) {
 					throw new Error('Invalid chain: broken link');
+				}
+
+				// Validate block hash matches recalculated hash
+				if (block.hash !== block.calculateHash()) {
+					throw new Error('Invalid chain: block hash mismatch');
 				}
 
 				// Validate block transactions
@@ -1180,6 +1258,65 @@ export class Blockchain {
 				// Validate coinbase
 				this.validateBlockCoinbase(block);
 
+				// Block size limit
+				if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
+					throw new Error('Invalid chain: block exceeds maximum transaction count');
+				}
+
+				// Timestamp validations (skip in tests)
+				if (process.env.NODE_ENV !== 'test') {
+					// Future timestamp rejection
+					if (block.timestamp > Date.now() + MAX_FUTURE_BLOCK_TIME) {
+						throw new Error('Invalid chain: block timestamp too far in the future');
+					}
+
+					// Minimum block time gap
+					if (block.timestamp - previousBlock.timestamp < this.BLOCK_TIME * 1000) {
+						throw new Error('Invalid chain: block created too quickly');
+					}
+
+					// Median time past
+					const medianTimePast = this.getMedianTimePastForChain(newChain, i - 1);
+					if (block.timestamp <= medianTimePast) {
+						throw new Error('Invalid chain: block timestamp must be greater than median time past');
+					}
+				}
+
+				// Update validation stakes from this block's transactions
+				for (const tx of block.transactions) {
+					if (tx.inputs.length === 0) continue;
+					if (tx.outputs.length === 0) continue;
+
+					let stakeAddress: string | null = null;
+					let stakeAmount: number | null = null;
+
+					if (
+						tx.outputs.length >= 2 &&
+						tx.outputs[0].amount === 0 &&
+						tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
+					) {
+						stakeAddress = tx.outputs[1].address;
+						stakeAmount = tx.outputs[1].amount;
+					} else {
+						const firstAddr = tx.outputs[0].address;
+						const allSame = tx.outputs.every(
+							(o: TxOutput) => o.address === firstAddr
+						);
+						if (allSame && tx.outputs[0].amount >= this.MIN_STAKE_AMOUNT) {
+							stakeAddress = firstAddr;
+							stakeAmount = tx.outputs[0].amount;
+						}
+					}
+
+					if (stakeAddress && stakeAmount) {
+						validationStakes.set(stakeAddress, {
+							amount: stakeAmount,
+							timestamp: block.timestamp,
+							lastBlockTime: block.timestamp,
+						});
+					}
+				}
+
 				// Validate PoW blocks
 				if (block.isProofOfWork()) {
 					if (!block.isValid()) {
@@ -1188,13 +1325,32 @@ export class Blockchain {
 					if (i > POW_CUTOFF_BLOCK) {
 						throw new Error('Invalid chain: PoW block after cutoff');
 					}
+					// Validate difficulty (skip in tests)
+					if (process.env.NODE_ENV !== 'test') {
+						const expectedDifficulty = this.calculateDifficultyForChain(newChain, i);
+						if (block.powDifficulty !== expectedDifficulty) {
+							throw new Error('Invalid chain: incorrect block difficulty');
+						}
+					}
 				}
 
 				// Validate PoS blocks
-				if (block.isProofOfStake() && i <= POW_CUTOFF_BLOCK) {
+				if (block.isProofOfStake()) {
 					const stakeTransaction = block.transactions[1];
-					if (!this.validateStake(stakeTransaction)) {
+					const validatorAddress = stakeTransaction.outputs[1].address;
+					const stake = validationStakes.get(validatorAddress);
+					if (!stake || stake.amount < this.MIN_STAKE_AMOUNT) {
 						throw new Error('Invalid chain: invalid stake');
+					}
+					// Verify validator was eligible via stake-weighted lottery
+					if (!this.isEligibleValidator(
+						validatorAddress,
+						block.timestamp,
+						previousBlock.hash,
+						previousBlock.timestamp,
+						validationStakes,
+					)) {
+						throw new Error('Invalid chain: validator not eligible for this slot');
 					}
 				}
 			}

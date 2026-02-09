@@ -11,6 +11,7 @@ import {
 	DIFFICULTY_ADJUSTMENT_INTERVAL,
 	MIN_DIFFICULTY,
 	MAX_DIFFICULTY_CHANGE_FACTOR,
+	MAX_BLOCK_TRANSACTIONS,
 } from '../../config.js';
 import * as fs from 'fs';
 
@@ -1362,6 +1363,312 @@ describe('Blockchain', () => {
 			expect(chain[0].cumulativeWeight).toBe(16);  // 2^4
 			expect(chain[1].cumulativeWeight).toBe(80);  // 16 + 2^6
 			expect(chain[2].cumulativeWeight).toBe(336); // 80 + 2^8
+		});
+	});
+
+	describe('Block Validation (C2)', () => {
+		it('should reject replaceChain with tampered block hash', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			// Build a heavier chain with a tampered hash
+			const genesisBlock = blockchain.getChain()[0];
+			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				timestamp1,
+				[coinbase1],
+				genesisBlock.hash,
+				0,
+				2,
+				1,
+			);
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				timestamp2,
+				[coinbase2],
+				block1.hash,
+				0,
+				2,
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			// Tamper with block1's hash after building the chain
+			block1.hash = 'tampered' + block1.hash.slice(8);
+
+			await expect(blockchain.replaceChain([genesisBlock, block1, block2]))
+				.rejects.toThrow('block hash mismatch');
+		});
+
+		it('should reject replaceChain with incorrect block index', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			const genesisBlock = blockchain.getChain()[0];
+			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				timestamp1,
+				[coinbase1],
+				genesisBlock.hash,
+				0,
+				2,
+				99, // Wrong index — should be 1
+			);
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				timestamp2,
+				[coinbase2],
+				block1.hash,
+				0,
+				2,
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			await expect(blockchain.replaceChain([genesisBlock, block1, block2]))
+				.rejects.toThrow('incorrect block index');
+		});
+
+		it('should reject replaceChain with invalid genesis hash', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			// Create a fake genesis block with different parameters
+			const fakeGenesis = new Block(
+				999999,
+				[new Transaction([], [{ address: 'fake', amount: 0 }])],
+				'0',
+				0,
+				4,
+				0,
+			);
+
+			const timestamp1 = fakeGenesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				timestamp1,
+				[coinbase1],
+				fakeGenesis.hash,
+				0,
+				2,
+				1,
+			);
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				timestamp2,
+				[coinbase2],
+				block1.hash,
+				0,
+				2,
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			await expect(blockchain.replaceChain([fakeGenesis, block1, block2]))
+				.rejects.toThrow('genesis block hash mismatch');
+		});
+
+		it('should reject block exceeding MAX_BLOCK_TRANSACTIONS', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(1, minerAddr);
+
+			const lastBlock = blockchain.getLatestBlock();
+			const blockTime = lastBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+
+			// Create a block with too many transactions
+			const txs: Transaction[] = [
+				new Transaction([], [{ address: minerAddr, amount: POW_BLOCK_REWARD }]),
+			];
+			for (let i = 0; i < MAX_BLOCK_TRANSACTIONS; i++) {
+				txs.push(new Transaction(
+					[{ previousTx: 'fake', outputIndex: 0, signature: 'fake' }],
+					[{ address: minerAddr, amount: 1 }],
+				));
+			}
+
+			const block = new Block(
+				blockTime,
+				txs,
+				lastBlock.hash,
+				0,
+				1,
+				blockchain.getChain().length,
+			);
+			block.hash = block.calculateHash();
+
+			await expect(blockchain.addMinedBlock(block))
+				.rejects.toThrow('block exceeds maximum transaction count');
+		});
+
+		it('should reject replaceChain with block exceeding MAX_BLOCK_TRANSACTIONS', async () => {
+			const minerAddr = minerWallet.getAddress();
+
+			const genesisBlock = blockchain.getChain()[0];
+			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+
+			// Create a block with too many transactions
+			const txs: Transaction[] = [
+				new Transaction([], [{ address: minerAddr, amount: POW_BLOCK_REWARD }]),
+			];
+			for (let i = 0; i < MAX_BLOCK_TRANSACTIONS; i++) {
+				txs.push(new Transaction(
+					[{ previousTx: 'fake', outputIndex: 0, signature: 'fake' }],
+					[{ address: minerAddr, amount: 1 }],
+				));
+			}
+
+			const block1 = new Block(
+				timestamp1,
+				txs,
+				genesisBlock.hash,
+				0,
+				2,
+				1,
+			);
+			block1.hash = block1.calculateHash();
+
+			await expect(blockchain.replaceChain([genesisBlock, block1]))
+				.rejects.toThrow('block exceeds maximum transaction count');
+		});
+
+		it('should reject replaceChain with broken link', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			const genesisBlock = blockchain.getChain()[0];
+			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				timestamp1,
+				[coinbase1],
+				'wrong-previous-hash', // broken link
+				0,
+				2,
+				1,
+			);
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				timestamp2,
+				[coinbase2],
+				block1.hash,
+				0,
+				2,
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			await expect(blockchain.replaceChain([genesisBlock, block1, block2]))
+				.rejects.toThrow('broken link');
+		});
+
+		it('should accept a valid replacement chain', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			// Build a valid heavier chain
+			const genesisBlock = blockchain.getChain()[0];
+			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				timestamp1,
+				[coinbase1],
+				genesisBlock.hash,
+				0,
+				2,
+				1,
+			);
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				timestamp2,
+				[coinbase2],
+				block1.hash,
+				0,
+				2,
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			const newChain = [genesisBlock, block1, block2];
+			await blockchain.replaceChain(newChain);
+			expect(blockchain.getChain().length).toBe(3);
+			expect(blockchain.getChainWeight()).toBeGreaterThan(0);
 		});
 	});
 });
