@@ -403,7 +403,10 @@ export class P2PServer {
 					)
 				);
 			}
-			if (blocks.length > this.blockchain.getChain().length) {
+			// Compute weight of received chain and compare to current
+			Blockchain.computeChainWeights(blocks);
+			const receivedWeight = blocks[blocks.length - 1].cumulativeWeight;
+			if (receivedWeight > this.blockchain.getChainWeight()) {
 				// replaceChain handles its own locking and validation
 				await this.blockchain.replaceChain(blocks);
 			}

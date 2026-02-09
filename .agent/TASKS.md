@@ -49,7 +49,7 @@ _Fork handling, block validation, stake security, and test cleanup._
 
 | Status | ID   | Task                                                                        | Priority | Dependencies |
 | ------ | ---- | --------------------------------------------------------------------------- | -------- | ------------ |
-| `[ ]`  | `C1` | [Implement Fork Resolution](tasks/C1-fork-resolution.md)                   | High     | B1           |
+| `[x]`  | `C1` | [Implement Fork Resolution](tasks/C1-fork-resolution.md)                   | High     | B1           |
 | `[ ]`  | `C2` | [Complete Block Validation](tasks/C2-block-validation.md)                   | High     | A4, B2       |
 | `[ ]`  | `C3` | [Stake Security Improvements](tasks/C3-stake-security.md)                   | Medium   | B1           |
 | `[ ]`  | `C4` | [Remove Test Environment Bypasses](tasks/C4-remove-test-bypasses.md)       | Medium   | B2, C2       |

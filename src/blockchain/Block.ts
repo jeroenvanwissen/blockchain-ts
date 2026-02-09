@@ -6,6 +6,7 @@ export class Block {
 	public nonce: number = 0;
 	public powDifficulty: number;
 	public index: number;
+	public cumulativeWeight: number = 0;
 
 	constructor(
 		public timestamp: number,

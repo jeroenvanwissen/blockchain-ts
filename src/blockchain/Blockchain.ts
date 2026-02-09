@@ -54,6 +54,7 @@ export class Blockchain {
 	constructor() {
 		this.blockStore = new BlockStore(BLOCKS_DIR);
 		const genesisBlock = this.createGenesisBlock();
+		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
 		this.chain = [genesisBlock];
 		this.pendingTransactions = [];
 
@@ -62,6 +63,27 @@ export class Blockchain {
 
 		// Load the rest of the blockchain
 		this.loadBlockchain();
+	}
+
+	static blockWeight(block: Block): number {
+		if (block.isProofOfStake()) {
+			// PoS: use validator's stake amount from coinstake transaction
+			return block.transactions[1].outputs[1].amount;
+		}
+		// PoW: 2^difficulty (exponential, matching Bitcoin)
+		return Math.pow(2, block.powDifficulty);
+	}
+
+	static computeChainWeights(chain: Block[]): void {
+		let cumWeight = 0;
+		for (const block of chain) {
+			cumWeight += Blockchain.blockWeight(block);
+			block.cumulativeWeight = cumWeight;
+		}
+	}
+
+	getChainWeight(): number {
+		return this.getLatestBlock().cumulativeWeight;
 	}
 
 	private utxoKey(txHash: string, outputIndex: number): string {
@@ -272,6 +294,10 @@ export class Blockchain {
 				});
 			}
 		}
+
+		// Set cumulative weight before adding to chain
+		const previousWeight = this.getLatestBlock().cumulativeWeight;
+		block.cumulativeWeight = previousWeight + Blockchain.blockWeight(block);
 
 		this.chain.push(block);
 		this.lastBlockTime = block.timestamp;
@@ -1002,6 +1028,7 @@ export class Blockchain {
 			if (blocks.length === 0) {
 				// No stored blocks — persist genesis and return
 				this.chain = [this.createGenesisBlock()];
+				Blockchain.computeChainWeights(this.chain);
 				this.blockStore.appendBlock(this.chain[0]);
 				this.utxoSet.clear();
 				this.updateUTXOSet(this.chain[0]);
@@ -1041,6 +1068,9 @@ export class Blockchain {
 			}
 
 			this.chain = blocks;
+
+			// Compute cumulative weights
+			Blockchain.computeChainWeights(this.chain);
 
 			// Rebuild UTXO set
 			this.utxoSet.clear();
@@ -1122,9 +1152,14 @@ export class Blockchain {
 	public async replaceChain(newChain: Block[]): Promise<void> {
 		const release = await this._lock.acquire();
 		try {
-			// Validate chain length
-			if (newChain.length <= this.chain.length) {
-				throw new Error('Received chain is not longer than current chain');
+			// Compute cumulative weights for the new chain
+			Blockchain.computeChainWeights(newChain);
+
+			// Compare by cumulative weight, not length
+			const newWeight = newChain[newChain.length - 1].cumulativeWeight;
+			const currentWeight = this.getChainWeight();
+			if (newWeight <= currentWeight) {
+				throw new Error('received chain does not have more weight than current chain');
 			}
 
 			// Validate chain integrity
@@ -1164,6 +1199,9 @@ export class Blockchain {
 				}
 			}
 
+			// Save old chain for orphan transaction recovery
+			const oldChain = this.chain;
+
 			// Replace the chain
 			this.chain = newChain;
 
@@ -1190,6 +1228,24 @@ export class Blockchain {
 					this._pendingUTXOSpends.add(
 						this.utxoKey(input.previousTx, input.outputIndex)
 					);
+				}
+			}
+
+			// Re-add transactions from orphaned blocks back to pending pool
+			const forkIndex = oldChain.findIndex((block, i) =>
+				i >= newChain.length || block.hash !== newChain[i].hash
+			);
+			if (forkIndex > 0) {
+				for (let i = forkIndex; i < oldChain.length; i++) {
+					for (const tx of oldChain[i].transactions) {
+						if (tx.isCoinbase() || tx.isCoinStake()) continue;
+						if (chainTxHashes.has(tx.calculateHash())) continue;
+						try {
+							this._addTransactionInternal(tx);
+						} catch {
+							// Transaction no longer valid in new chain context
+						}
+					}
 				}
 			}
 

@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `C1`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | High                                 |
 | **Dependencies** | B1                                   |
 | **Branch**       | `fix/c1-fork-resolution`             |
@@ -45,13 +45,13 @@ src/networking/
 
 **Acceptance Criteria:**
 
-- [ ] Chain selection uses cumulative weight, not length
-- [ ] PoW blocks contribute `2^difficulty` to chain weight
-- [ ] PoS blocks contribute stake weight
-- [ ] Equal-weight chains are handled deterministically
-- [ ] Transactions from orphaned blocks return to pending pool
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
+- [x] Chain selection uses cumulative weight, not length
+- [x] PoW blocks contribute `2^difficulty` to chain weight
+- [x] PoS blocks contribute stake weight
+- [x] Equal-weight chains are handled deterministically
+- [x] Transactions from orphaned blocks return to pending pool
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
 
 **Verification Commands:**
 

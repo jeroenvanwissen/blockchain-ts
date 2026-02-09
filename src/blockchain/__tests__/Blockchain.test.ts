@@ -1159,4 +1159,209 @@ describe('Blockchain', () => {
 			expect(diffBlockchain.BLOCK_TIME).toBe(BLOCK_TIME);
 		});
 	});
+
+	describe('Fork Resolution', () => {
+		it('should compute block weight as 2^difficulty for PoW blocks', () => {
+			const block = new Block(Date.now(), [], '0', 0, 4, 0);
+			expect(Blockchain.blockWeight(block)).toBe(Math.pow(2, 4));
+		});
+
+		it('should set cumulative weight on mined blocks', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			const chain = blockchain.getChain();
+			// Genesis has cumulativeWeight = 2^4 = 16 (difficulty 4)
+			// Mined blocks have difficulty 1 (mocked), weight = 2^1 = 2
+			expect(chain[0].cumulativeWeight).toBe(16); // genesis: 2^4
+			expect(chain[1].cumulativeWeight).toBe(18); // 16 + 2^1
+			expect(chain[2].cumulativeWeight).toBe(20); // 18 + 2^1
+			expect(chain[3].cumulativeWeight).toBe(22); // 20 + 2^1
+		});
+
+		it('should report chain weight from latest block', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(2, minerAddr);
+
+			// Genesis (2^4=16) + 2 blocks (2^1=2 each) = 20
+			expect(blockchain.getChainWeight()).toBe(20);
+		});
+
+		it('should prefer higher-difficulty chain over longer chain in replaceChain', async () => {
+			const minerAddr = minerWallet.getAddress();
+			// Mine 3 blocks on current chain (difficulty 1, mocked)
+			await minePowBlocks(3, minerAddr);
+			const currentWeight = blockchain.getChainWeight();
+
+			// Build a shorter chain (2 blocks) with higher difficulty
+			const genesisBlock = blockchain.getChain()[0];
+			const highDiffBlock1Timestamp =
+				genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase1 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block1 = new Block(
+				highDiffBlock1Timestamp,
+				[coinbase1],
+				genesisBlock.hash,
+				0,
+				2, // difficulty 2 → weight 4
+				1,
+			);
+			// Mine valid PoW
+			while (!block1.isValid()) {
+				block1.nonce++;
+				block1.hash = block1.calculateHash();
+			}
+
+			const highDiffBlock2Timestamp =
+				highDiffBlock1Timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase2 = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block2 = new Block(
+				highDiffBlock2Timestamp,
+				[coinbase2],
+				block1.hash,
+				0,
+				2, // difficulty 2 → weight 4
+				2,
+			);
+			while (!block2.isValid()) {
+				block2.nonce++;
+				block2.hash = block2.calculateHash();
+			}
+
+			const newChain = [genesisBlock, block1, block2];
+			// New chain: genesis(16) + 4 + 4 = 24, more than current 22
+			expect(Blockchain.blockWeight(block1)).toBe(4);
+
+			await blockchain.replaceChain(newChain);
+			expect(blockchain.getChain().length).toBe(3); // shorter than original 4
+			expect(blockchain.getChainWeight()).toBeGreaterThan(currentWeight);
+		});
+
+		it('should reject chain with equal weight (no flip-flopping)', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(2, minerAddr);
+
+			// Build a chain with same total weight
+			const chain = blockchain.getChain();
+			const sameLengthChain = [...chain];
+
+			await expect(blockchain.replaceChain(sameLengthChain))
+				.rejects.toThrow('received chain does not have more weight');
+		});
+
+		it('should reject chain with less weight', async () => {
+			const minerAddr = minerWallet.getAddress();
+			await minePowBlocks(3, minerAddr);
+
+			// Try to replace with just genesis + 1 block (less weight)
+			const genesis = blockchain.getChain()[0];
+			const singleBlockTimestamp =
+				genesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			const coinbase = new Transaction(
+				[],
+				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+			);
+			const block = new Block(
+				singleBlockTimestamp,
+				[coinbase],
+				genesis.hash,
+				0,
+				1,
+				1,
+			);
+			while (!block.isValid()) {
+				block.nonce++;
+				block.hash = block.calculateHash();
+			}
+
+			await expect(blockchain.replaceChain([genesis, block]))
+				.rejects.toThrow('received chain does not have more weight');
+		});
+
+		it('should return orphaned transactions to pending pool', async () => {
+			const minerAddr = minerWallet.getAddress();
+			// Mine enough blocks for coinbase maturity
+			await minePowBlocks(COIN_MATURITY, minerAddr);
+
+			// Create a transaction
+			const receiverWallet = new Wallet();
+			const tx = blockchain.createTransaction(
+				minerAddr,
+				receiverWallet.getAddress(),
+				5,
+				minerWallet,
+			);
+			await blockchain.addTransaction(tx);
+			const txHash = tx.calculateHash();
+
+			// Mine block containing the transaction
+			const lastBlock1 = blockchain.getLatestBlock();
+			const blockTime1 = lastBlock1.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+			jest.setSystemTime(new Date(blockTime1));
+			await blockchain.minePendingTransactions(minerAddr);
+
+			// Now the tx is in the chain
+			expect(blockchain.getPendingTransactions().length).toBe(0);
+
+			// Build a heavier alternative chain that does NOT include the tx
+			// by forking before the block containing the tx
+			const chain = blockchain.getChain();
+			const forkPoint = chain.length - 1; // fork before last block
+			const forkBase = chain.slice(0, forkPoint);
+
+			// Create two high-difficulty blocks on the fork (to outweigh current chain)
+			let prevBlock = forkBase[forkBase.length - 1];
+			const altBlocks: Block[] = [];
+			for (let i = 0; i < 2; i++) {
+				const timestamp = prevBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
+				const coinbase = new Transaction(
+					[],
+					[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
+				);
+				const altBlock = new Block(
+					timestamp,
+					[coinbase],
+					prevBlock.hash,
+					0,
+					2, // higher difficulty = more weight than difficulty-1 blocks
+					forkPoint + i,
+				);
+				while (!altBlock.isValid()) {
+					altBlock.nonce++;
+					altBlock.hash = altBlock.calculateHash();
+				}
+				altBlocks.push(altBlock);
+				prevBlock = altBlock;
+			}
+
+			const altChain = [...forkBase, ...altBlocks];
+			await blockchain.replaceChain(altChain);
+
+			// The orphaned transaction should be back in pending pool
+			const pending = blockchain.getPendingTransactions();
+			const found = pending.some((t) => t.calculateHash() === txHash);
+			expect(found).toBe(true);
+		});
+
+		it('should compute chain weights correctly via computeChainWeights', () => {
+			const genesis = new Block(Date.now(), [], '0', 0, 4, 0);
+			const block1 = new Block(Date.now(), [], genesis.hash, 0, 6, 1);
+			block1.hash = block1.calculateHash();
+			const block2 = new Block(Date.now(), [], block1.hash, 0, 8, 2);
+			block2.hash = block2.calculateHash();
+
+			const chain = [genesis, block1, block2];
+			Blockchain.computeChainWeights(chain);
+
+			expect(chain[0].cumulativeWeight).toBe(16);  // 2^4
+			expect(chain[1].cumulativeWeight).toBe(80);  // 16 + 2^6
+			expect(chain[2].cumulativeWeight).toBe(336); // 80 + 2^8
+		});
+	});
 });
