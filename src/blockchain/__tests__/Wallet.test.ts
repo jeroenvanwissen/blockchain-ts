@@ -8,6 +8,25 @@ import { MAX_WALLET_BACKUPS } from '../../config.js';
 // Mock the fs module
 jest.mock('fs');
 
+// Mock protobufjs to prevent real .proto file reads (fs is mocked)
+jest.mock('protobufjs', () => {
+	const mockType = {
+		create: (obj: unknown) => obj,
+		encode: (obj: unknown) => ({
+			finish: () => Buffer.from(JSON.stringify(obj)),
+		}),
+		decode: (buf: Buffer) => JSON.parse(buf.toString()) as unknown,
+		verify: () => null,
+		toObject: (obj: unknown) => obj,
+	};
+	return {
+		__esModule: true,
+		default: {
+			loadSync: () => ({ lookupType: () => mockType }),
+		},
+	};
+});
+
 // Helper to generate a valid key pair
 function generateKeyPair(): { privateKey: Buffer; publicKey: Buffer } {
 	let privateKey: Buffer;
@@ -18,20 +37,20 @@ function generateKeyPair(): { privateKey: Buffer; publicKey: Buffer } {
 	return { privateKey, publicKey };
 }
 
-// Helper to create valid wallet JSON
-function createWalletJson(keyPair?: { privateKey: Buffer; publicKey: Buffer }): string {
+// Helper to create valid wallet data as a Buffer (protobuf mock uses JSON internally)
+function createWalletBuffer(keyPair?: { privateKey: Buffer; publicKey: Buffer }): Buffer {
 	const { privateKey, publicKey } = keyPair || generateKeyPair();
-	return JSON.stringify({
-		privateKey: privateKey.toString('hex'),
-		publicKey: publicKey.toString('hex'),
+	return Buffer.from(JSON.stringify({
+		privateKey: Array.from(privateKey),
+		publicKey: Array.from(publicKey),
 		address: '1TestAddress',
 		transactions: [],
 		utxos: [],
-	});
+	}));
 }
 
 describe('Wallet', () => {
-	const testPath = '/tmp/test-wallet.json';
+	const testPath = '/tmp/test-wallet.dat';
 
 	beforeEach(() => {
 		process.env.NODE_ENV = 'test';
@@ -55,10 +74,10 @@ describe('Wallet', () => {
 
 		it('should load existing wallet from file', () => {
 			const keyPair = generateKeyPair();
-			const walletJson = createWalletJson(keyPair);
+			const walletBuffer = createWalletBuffer(keyPair);
 
 			(fs.existsSync as jest.Mock).mockReturnValue(true);
-			(fs.readFileSync as jest.Mock).mockReturnValue(walletJson);
+			(fs.readFileSync as jest.Mock).mockReturnValue(walletBuffer);
 			(fs.readdirSync as jest.Mock).mockReturnValue([]);
 
 			const wallet = new Wallet(testPath);
@@ -67,11 +86,11 @@ describe('Wallet', () => {
 	});
 
 	describe('corrupted wallet recovery', () => {
-		it('should generate new wallet when file contains invalid JSON', () => {
+		it('should generate new wallet when file contains invalid data', () => {
 			(fs.existsSync as jest.Mock).mockImplementation((...args: unknown[]) => {
 				return args[0] === testPath;
 			});
-			(fs.readFileSync as jest.Mock).mockReturnValue('not valid json{{{');
+			(fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('not valid protobuf'));
 
 			const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 			const wallet = new Wallet(testPath);
@@ -84,7 +103,7 @@ describe('Wallet', () => {
 		it('should generate new wallet when file is missing required fields', () => {
 			(fs.existsSync as jest.Mock).mockImplementation((...args: unknown[]) => args[0] === testPath);
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({ privateKey: 'abc' })
+				Buffer.from(JSON.stringify({ privateKey: Array.from(Buffer.from('abc')) }))
 			);
 
 			const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -98,13 +117,13 @@ describe('Wallet', () => {
 		it('should generate new wallet when private key is invalid', () => {
 			(fs.existsSync as jest.Mock).mockImplementation((...args: unknown[]) => args[0] === testPath);
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({
-					privateKey: '00'.repeat(32),
-					publicKey: 'ff'.repeat(33),
+				Buffer.from(JSON.stringify({
+					privateKey: Array.from(Buffer.alloc(32, 0)),
+					publicKey: Array.from(Buffer.alloc(33, 0xff)),
 					address: '1BadKeys',
 					transactions: [],
 					utxos: [],
-				})
+				}))
 			);
 
 			const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -121,13 +140,13 @@ describe('Wallet', () => {
 
 			(fs.existsSync as jest.Mock).mockImplementation((...args: unknown[]) => args[0] === testPath);
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({
-					privateKey: keyPair1.privateKey.toString('hex'),
-					publicKey: keyPair2.publicKey.toString('hex'),
+				Buffer.from(JSON.stringify({
+					privateKey: Array.from(keyPair1.privateKey),
+					publicKey: Array.from(keyPair2.publicKey),
 					address: '1Mismatch',
 					transactions: [],
 					utxos: [],
-				})
+				}))
 			);
 
 			const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -164,20 +183,20 @@ describe('Wallet', () => {
 			(fs.copyFileSync as jest.Mock).mockImplementation(() => {});
 
 			const wallet = new Wallet(testPath);
-			wallet.exportWallet('/tmp/exported-wallet.json');
+			wallet.exportWallet('/tmp/exported-wallet.dat');
 
-			expect(fs.chmodSync).toHaveBeenCalledWith('/tmp/exported-wallet.json', 0o600);
+			expect(fs.chmodSync).toHaveBeenCalledWith('/tmp/exported-wallet.dat', 0o600);
 		});
 	});
 
 	describe('backup pruning', () => {
 		it('should keep only the last 3 backups', () => {
 			const backupFiles = [
-				'test-wallet.json.1000.backup',
-				'test-wallet.json.2000.backup',
-				'test-wallet.json.3000.backup',
-				'test-wallet.json.4000.backup',
-				'test-wallet.json.5000.backup',
+				'test-wallet.dat.1000.backup',
+				'test-wallet.dat.2000.backup',
+				'test-wallet.dat.3000.backup',
+				'test-wallet.dat.4000.backup',
+				'test-wallet.dat.5000.backup',
 			];
 
 			// Wallet file exists for backup creation
@@ -206,8 +225,8 @@ describe('Wallet', () => {
 				return existsSyncCallCount > 1;
 			});
 			(fs.readdirSync as jest.Mock).mockReturnValue([
-				'test-wallet.json.1000.backup',
-				'test-wallet.json.2000.backup',
+				'test-wallet.dat.1000.backup',
+				'test-wallet.dat.2000.backup',
 			]);
 			(fs.copyFileSync as jest.Mock).mockImplementation(() => {});
 			(fs.unlinkSync as jest.Mock).mockImplementation(() => {});
@@ -224,66 +243,66 @@ describe('Wallet', () => {
 			const keyPair2 = generateKeyPair();
 
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({
-					privateKey: keyPair1.privateKey.toString('hex'),
-					publicKey: keyPair2.publicKey.toString('hex'),
+				Buffer.from(JSON.stringify({
+					privateKey: Array.from(keyPair1.privateKey),
+					publicKey: Array.from(keyPair2.publicKey),
 					address: '1Mismatch',
 					transactions: [],
 					utxos: [],
-				})
+				}))
 			);
 
 			expect(() => {
-				Wallet.importWallet('/tmp/import.json', testPath);
+				Wallet.importWallet('/tmp/import.dat', testPath);
 			}).toThrow('public key does not match private key');
 		});
 
-		it('should reject import when file is not valid JSON', () => {
-			(fs.readFileSync as jest.Mock).mockReturnValue('not json');
+		it('should reject import when file is not valid', () => {
+			(fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('not valid'));
 
 			expect(() => {
-				Wallet.importWallet('/tmp/import.json', testPath);
+				Wallet.importWallet('/tmp/import.dat', testPath);
 			}).toThrow('failed to read or parse import file');
 		});
 
 		it('should reject import when required fields are missing', () => {
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({ privateKey: 'abc' })
+				Buffer.from(JSON.stringify({ privateKey: Array.from(Buffer.from('abc')) }))
 			);
 
 			expect(() => {
-				Wallet.importWallet('/tmp/import.json', testPath);
+				Wallet.importWallet('/tmp/import.dat', testPath);
 			}).toThrow('missing required fields');
 		});
 
 		it('should reject import with invalid private key', () => {
 			(fs.readFileSync as jest.Mock).mockReturnValue(
-				JSON.stringify({
-					privateKey: '00'.repeat(32),
-					publicKey: 'ff'.repeat(33),
+				Buffer.from(JSON.stringify({
+					privateKey: Array.from(Buffer.alloc(32, 0)),
+					publicKey: Array.from(Buffer.alloc(33, 0xff)),
 					address: '1Bad',
 					transactions: [],
 					utxos: [],
-				})
+				}))
 			);
 
 			expect(() => {
-				Wallet.importWallet('/tmp/import.json', testPath);
+				Wallet.importWallet('/tmp/import.dat', testPath);
 			}).toThrow('invalid private key');
 		});
 
 		it('should accept import with valid matching keys', () => {
 			const keyPair = generateKeyPair();
-			const validJson = createWalletJson(keyPair);
+			const walletBuffer = createWalletBuffer(keyPair);
 
 			// First readFileSync: import validation read
 			// Second readFileSync: Wallet constructor loadWallet
-			(fs.readFileSync as jest.Mock).mockReturnValue(validJson);
+			(fs.readFileSync as jest.Mock).mockReturnValue(walletBuffer);
 			(fs.existsSync as jest.Mock).mockReturnValue(true);
 			(fs.copyFileSync as jest.Mock).mockImplementation(() => {});
 			(fs.readdirSync as jest.Mock).mockReturnValue([]);
 
-			const wallet = Wallet.importWallet('/tmp/import.json', testPath);
+			const wallet = Wallet.importWallet('/tmp/import.dat', testPath);
 			expect(wallet.publicKey.equals(keyPair.publicKey)).toBe(true);
 		});
 	});

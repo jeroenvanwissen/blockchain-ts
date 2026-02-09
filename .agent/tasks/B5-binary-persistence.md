@@ -3,7 +3,7 @@
 | Field            | Value                                |
 | ---------------- | ------------------------------------ |
 | **ID**           | `B5`                                 |
-| **Status**       | `[ ]`                                |
+| **Status**       | `[x]`                                |
 | **Priority**     | Medium                               |
 | **Dependencies** | None                                 |
 | **Branch**       | `feature/b5-binary-persistence`      |
@@ -110,19 +110,19 @@ message WalletData {
 
 **Acceptance Criteria:**
 
-- [ ] `protobufjs` added as dependency
-- [ ] `.proto` schema files created for blockchain and wallet data
-- [ ] `Blockchain.saveBlockchain()` writes binary `.dat` file
-- [ ] `Blockchain.loadBlockchain()` reads binary `.dat` file
-- [ ] `Wallet.saveWallet()` writes binary `.dat` file
-- [ ] `Wallet.loadWallet()` reads binary `.dat` file
-- [ ] No `JSON.stringify` / `JSON.parse` remains for blockchain or wallet persistence (save, load, tests)
-- [ ] No `.json` file references remain for blockchain or wallet data in config, source, or tests
-- [ ] Backup files use `.dat` extension
-- [ ] Peers file (`peers.json`) remains JSON (human-editable, small data)
-- [ ] Build passes: `npm run build`
-- [ ] Tests pass: `npm test`
-- [ ] Lint passes: `npm run lint`
+- [x] `protobufjs` added as dependency
+- [x] `.proto` schema files created for blockchain and wallet data
+- [x] `Blockchain.saveBlockchain()` writes binary `.dat` file
+- [x] `Blockchain.loadBlockchain()` reads binary `.dat` file
+- [x] `Wallet.saveWallet()` writes binary `.dat` file
+- [x] `Wallet.loadWallet()` reads binary `.dat` file
+- [x] No `JSON.stringify` / `JSON.parse` remains for blockchain or wallet persistence (save, load, tests)
+- [x] No `.json` file references remain for blockchain or wallet data in config, source, or tests
+- [x] Backup files use `.dat` extension
+- [x] Peers file (`peers.json`) remains JSON (human-editable, small data)
+- [x] Build passes: `npm run build`
+- [x] Tests pass: `npm test`
+- [x] Lint passes: `npm run lint`
 
 **Verification Commands:**
 

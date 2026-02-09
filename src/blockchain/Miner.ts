@@ -2,21 +2,15 @@
 import { Block } from './Block.js';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
 import { Blockchain } from './Blockchain.js';
+import { Wallet } from './Wallet.js';
 import { Worker } from 'worker_threads';
 import * as path from 'path';
-import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import WebSocket from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-interface WalletData {
-	address: string;
-	privateKey: string;
-	publicKey: string;
-}
 
 interface MinedBlock {
 	timestamp: number;
@@ -66,12 +60,11 @@ export class Miner {
 
 	private getMinerAddressFromWallet(): string {
 		try {
-			const walletData = fs.readFileSync('data/wallet.json', 'utf-8');
-			const wallet = JSON.parse(walletData) as WalletData;
-			return wallet.address;
+			const wallet = new Wallet();
+			return wallet.getAddress();
 		} catch (error) {
-			console.error('Error reading wallet.json:', error);
-			throw new Error('Failed to read miner address from wallet.json');
+			console.error('Error reading wallet:', error);
+			throw new Error('failed to read miner address from wallet');
 		}
 	}
 

@@ -17,6 +17,25 @@ import * as fs from 'fs';
 // Mock the fs module
 jest.mock('fs');
 
+// Mock protobufjs to prevent real .proto file reads (fs is mocked)
+jest.mock('protobufjs', () => {
+	const mockType = {
+		create: (obj: unknown) => obj,
+		encode: (obj: unknown) => ({
+			finish: () => Buffer.from(JSON.stringify(obj)),
+		}),
+		decode: (buf: Buffer) => JSON.parse(buf.toString()) as unknown,
+		verify: () => null,
+		toObject: (obj: unknown) => obj,
+	};
+	return {
+		__esModule: true,
+		default: {
+			loadSync: () => ({ lookupType: () => mockType }),
+		},
+	};
+});
+
 describe('Blockchain', () => {
 	let blockchain: Blockchain;
 	let minerWallet: Wallet;

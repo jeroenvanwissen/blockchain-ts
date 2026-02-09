@@ -20,7 +20,7 @@ const getDataDirectory = (): string => {
 
 // Export configured paths
 export const DATA_DIR = getDataDirectory();
-export const BLOCKCHAIN_DATA_PATH = path.join(DATA_DIR, 'blockchain_data.json');
+export const BLOCKCHAIN_DATA_PATH = path.join(DATA_DIR, 'blockchain_data.dat');
 export const PEER_DATA_PATH = path.join(DATA_DIR, 'peers.json');
 
 // P2P configuration
@@ -47,7 +47,12 @@ export const MAX_TRANSACTION_OUTPUTS = 256;
 export const BLOCK_TIME = 30; // Target time between blocks in seconds
 
 // Wallet configuration
+export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
+
+// Proto schema paths
+export const BLOCKCHAIN_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockchain.proto');
+export const WALLET_PROTO_PATH = path.join(process.cwd(), 'proto', 'wallet.proto');
 
 // Difficulty adjustment
 export const DIFFICULTY_ADJUSTMENT_INTERVAL = 10; // Adjust difficulty every N blocks

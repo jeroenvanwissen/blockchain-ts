@@ -4,8 +4,10 @@ import { Wallet } from './Wallet.js';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import protobuf from 'protobufjs';
 import {
 	BLOCKCHAIN_DATA_PATH,
+	BLOCKCHAIN_PROTO_PATH,
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
@@ -16,6 +18,14 @@ import {
 	MAX_DIFFICULTY_CHANGE_FACTOR,
 	MEDIAN_TIME_SPAN,
 } from '../config.js';
+
+let _blockchainProtoRoot: protobuf.Root | null = null;
+function getBlockchainProto(): protobuf.Type {
+	if (!_blockchainProtoRoot) {
+		_blockchainProtoRoot = protobuf.loadSync(BLOCKCHAIN_PROTO_PATH);
+	}
+	return _blockchainProtoRoot.lookupType('BlockchainData');
+}
 
 export interface StakeInfo {
 	amount: number;
@@ -1025,14 +1035,17 @@ export class Blockchain {
 				return;
 			}
 
-			const data = fs.readFileSync(this.FILE_PATH, 'utf8');
-			if (!data || data.trim() === '') {
+			const fileBuffer = fs.readFileSync(this.FILE_PATH);
+			if (!fileBuffer || fileBuffer.length === 0) {
 				this.chain = [this.createGenesisBlock()];
 				this.saveBlockchain();
 				return;
 			}
 
-			const serializedChain = JSON.parse(data) as SerializedBlock[];
+			const BlockchainData = getBlockchainProto();
+			const decoded = BlockchainData.decode(fileBuffer as Uint8Array);
+			const obj = BlockchainData.toObject(decoded, { longs: Number });
+			const serializedChain = obj.blocks as SerializedBlock[];
 
 			const reconstructedChain: Block[] = [];
 
@@ -1118,7 +1131,33 @@ export class Blockchain {
 				fs.mkdirSync(dataDir, { recursive: true });
 			}
 
-			fs.writeFileSync(this.FILE_PATH, JSON.stringify(this.chain, null, 2));
+			const BlockchainData = getBlockchainProto();
+			const serializedBlocks = this.chain.map((block) => ({
+				timestamp: block.timestamp,
+				transactions: block.transactions.map((tx) => ({
+					inputs: tx.inputs.map((input) => ({
+						previousTx: input.previousTx,
+						outputIndex: input.outputIndex,
+						signature: input.signature,
+					})),
+					outputs: tx.outputs.map((output) => ({
+						address: output.address,
+						amount: output.amount,
+					})),
+					timestamp: tx.timestamp,
+					nonce: tx.nonce,
+				})),
+				previousHash: block.previousHash,
+				nonce: block.nonce,
+				powDifficulty: block.powDifficulty,
+				index: block.index,
+				hash: block.hash,
+			}));
+			const message = BlockchainData.create({ blocks: serializedBlocks });
+			const errMsg = BlockchainData.verify(message);
+			if (errMsg) throw new Error(`invalid blockchain data: ${errMsg}`);
+			const buffer = BlockchainData.encode(message).finish();
+			fs.writeFileSync(this.FILE_PATH, buffer);
 		} catch (error) {
 			console.error('Error saving blockchain:', error);
 			throw error;
