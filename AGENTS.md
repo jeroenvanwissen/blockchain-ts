@@ -37,6 +37,7 @@ Run npm scripts from the repository root.
 
 - ES modules (`"type": "module"`). Relative imports use explicit `.js` extensions; use `import type` for type-only imports.
 - `src/blockchain/miningWorker.cjs` must stay CommonJS.
+- TypeScript stays on 6.0.x (`~6.0.3`; Dependabot ignores 6.1+). typescript-eslint (<6.1) and ts-jest (<7) load its JavaScript compiler API, which TypeScript 7 doesn't have. TS 6 doesn't include `@types` packages automatically, so `tsconfig.json` lists `types` (`node`, `jest`); add new global type packages there.
 - CommonJS packages behave differently under ts-jest (compiled to CommonJS) and the real runtime (native ESM): a namespace import can work in tests and crash the node. Verify new CommonJS imports with `npm run smoke`.
 - Don't use `import.meta` in modules that tests import; ts-jest rejects it (TS1343). Entry points such as `src/smoke.ts` may use it.
 - Node modules log through `logger(scope)` from `src/logger.ts` (`<time> LEVEL [scope] message`; `LOG_LEVEL` env, default info), not `console`. Use debug for per-connection noise, warn for anything an operator should look at. The CLI and the smoke/e2e scripts use plain console output. Smoke fails on any WARN or ERROR line, and the scripts match some log wording (`P2P Server listening`, `API listening on`, `Chain loaded`, `[Staking] staked block`, `[Blockchain] reorganized`), so keep those messages.

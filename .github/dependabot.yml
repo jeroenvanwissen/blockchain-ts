@@ -9,6 +9,11 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    ignore:
+      # TypeScript stays on 6.0.x: typescript-eslint (<6.1) and ts-jest (<7) load its JavaScript
+      # compiler API, which TypeScript 7 doesn't have. Patch releases of 6.0 still come through.
+      - dependency-name: "typescript"
+        versions: [">=6.1.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
