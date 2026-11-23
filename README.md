@@ -329,7 +329,7 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender |
 | `PEERS`       | Broadcast | Known peer addresses (discovery) |
 
-A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up from known peers every minute. Lost peers are redialed with doubling delays capped at 60 s. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
+A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up every minute from its address book: addresses that worked first, at random. Peers' `PEERS` messages add at most 32 addresses each and never decide whom the node dials. Addresses that fail 5 times in a row are dropped, unless you configured them (`--peers`, `SEED_NODES`), and only configured or verified addresses are passed on. Lost peers are redialed with doubling delays capped at 60 s. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
 
 ---
 

@@ -118,21 +118,12 @@ describe('P2PServer', () => {
 		await p2pServer.close(); // clears handshake timers of the mock sockets
 	});
 
-	it('should not log invalid peer addresses', () => {
-		const invalidSocket = { url: '' } as WebSocket;
-		const validSocket = { url: 'ws://valid-peer:5002' } as WebSocket;
+	it('should not add an address just because a socket connected', () => {
+		// Addresses come from configured peers, PEERS messages and inbound listen ports only
+		p2pServer['logPeerConnection']({ url: '' } as WebSocket);
+		p2pServer['logPeerConnection']({ url: 'ws://valid-peer:5002' } as WebSocket);
 
-		p2pServer['logPeerConnection'](invalidSocket);
-		p2pServer['logPeerConnection'](validSocket);
-
-		// Get the last call to writeFileSync
-		const writeFileSyncMock = fs.writeFileSync as jest.Mock;
-		const lastWriteCall =
-			writeFileSyncMock.mock.calls[writeFileSyncMock.mock.calls.length - 1];
-		const writtenData = JSON.parse(lastWriteCall[1] as string) as string[];
-
-		expect(writtenData).toHaveLength(1);
-		expect(writtenData[0]).toBe('valid-peer:5002');
+		expect(p2pServer.getKnownPeers()).toHaveLength(0);
 	});
 
 	it('should keep every field (and the txid) of a relayed transaction', async () => {
@@ -310,7 +301,7 @@ describe('P2PServer', () => {
 		});
 
 		it('should skip duplicate peers in PEERS message', () => {
-			p2pServer['_knownPeers'].add('ws://existing:5001');
+			p2pServer.loadInitialPeers([], ['ws://existing:5001']);
 			p2pServer['_handlePeersMessage'](['ws://existing:5001']);
 			expect(p2pServer.getKnownPeers()).toHaveLength(1);
 		});
@@ -332,28 +323,36 @@ describe('P2PServer', () => {
 		});
 
 		it('should not exceed MAX_KNOWN_PEERS', () => {
-			// Fill up known peers to the limit
-			for (let i = 0; i < 128; i++) {
-				p2pServer['_knownPeers'].add(`ws://existing${i}:5001`);
-			}
+			// Fill up known peers to the limit (none has failed, so none can be replaced)
+			p2pServer.loadInitialPeers([], Array.from({ length: 128 }, (_, i) => `ws://existing${i}:5001`));
 			p2pServer['_handlePeersMessage'](['ws://new-peer:6001']);
-			expect(p2pServer['_knownPeers'].has('ws://new-peer:6001')).toBe(false);
-			expect(p2pServer['_knownPeers'].size).toBe(128);
+			expect(p2pServer.getKnownPeers()).not.toContain('ws://new-peer:6001');
+			expect(p2pServer.getKnownPeers()).toHaveLength(128);
 		});
 
-		it('should attempt connection to newly discovered peers', () => {
+		it('should fill outbound slots at random after learning addresses, not dial the named ones', () => {
+			const fillSpy = jest.spyOn(p2pServer, 'fillOutbound').mockImplementation();
 			const connectSpy = jest.spyOn(p2pServer, 'connectToPeers');
 			p2pServer['_handlePeersMessage'](['ws://new-peer:5001']);
-			expect(connectSpy).toHaveBeenCalledWith(['ws://new-peer:5001']);
+			expect(fillSpy).toHaveBeenCalledTimes(1);
+			expect(connectSpy).not.toHaveBeenCalled();
+			fillSpy.mockRestore();
 			connectSpy.mockRestore();
 		});
 
-		it('should not attempt connection to already connected peers', () => {
-			p2pServer['connectedPeers'].add('ws://existing:5001');
-			const connectSpy = jest.spyOn(p2pServer, 'connectToPeers');
+		it('should not refill when a PEERS message teaches nothing new', () => {
+			p2pServer.loadInitialPeers([], ['ws://existing:5001']);
+			const fillSpy = jest.spyOn(p2pServer, 'fillOutbound').mockImplementation();
 			p2pServer['_handlePeersMessage'](['ws://existing:5001']);
-			expect(connectSpy).not.toHaveBeenCalled();
-			connectSpy.mockRestore();
+			expect(fillSpy).not.toHaveBeenCalled();
+			fillSpy.mockRestore();
+		});
+
+		it('should not pass on learned addresses until they are verified', () => {
+			jest.spyOn(p2pServer, 'fillOutbound').mockImplementation();
+			p2pServer['_handlePeersMessage'](['ws://unverified:5001']);
+			expect(p2pServer.getKnownPeers()).toContain('ws://unverified:5001');
+			expect(p2pServer['_addresses'].shareable(32)).toEqual([]);
 		});
 
 		it('should persist peers after handling PEERS message', () => {
@@ -368,7 +367,7 @@ describe('P2PServer', () => {
 
 	describe('peer list exchange', () => {
 		it('should send peer list on new connection', () => {
-			p2pServer['_knownPeers'].add('ws://known-peer:5001');
+			p2pServer.loadInitialPeers(['ws://known-peer:5001']); // configured: shareable
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
 			connectReady(mockSocket);
@@ -383,7 +382,6 @@ describe('P2PServer', () => {
 		});
 
 		it('should not send peer list when no known peers', () => {
-			// Use a socket without a valid ws:// URL so logPeerConnection doesn't add it
 			const noUrlSocket = new MockWebSocket('');
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
@@ -409,7 +407,7 @@ describe('P2PServer', () => {
 		});
 
 		it('should broadcast peer list at configured interval', () => {
-			p2pServer['_knownPeers'].add('ws://peer1:5001');
+			p2pServer.loadInitialPeers(['ws://peer1:5001']); // configured: shareable
 			const mockSocket1 = new MockWebSocket('ws://peer1:5001');
 			connectReady(mockSocket1);
 			mockSocket1.send.mockClear();
@@ -467,8 +465,7 @@ describe('P2PServer', () => {
 	describe('peer persistence', () => {
 		it('should write known peers to peerDataPath in host:port format', () => {
 			const writeFileSyncMock = fs.writeFileSync as jest.Mock;
-			p2pServer['_knownPeers'].add('ws://host1:5001');
-			p2pServer['_knownPeers'].add('ws://host2:5002');
+			p2pServer.loadInitialPeers(['ws://host1:5001', 'ws://host2:5002']);
 
 			p2pServer['_persistPeers']();
 
@@ -488,7 +485,7 @@ describe('P2PServer', () => {
 				throw new Error('disk full');
 			});
 
-			p2pServer['_knownPeers'].add('ws://host:5001');
+			p2pServer.loadInitialPeers(['ws://host:5001']);
 			p2pServer['_persistPeers']();
 
 			expect(console.error).toHaveBeenCalledWith(

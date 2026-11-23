@@ -85,12 +85,11 @@ Scope notes (expand into task files when picked up):
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0037](TASK-0037-process-lifecycle.md) | Graceful shutdown on SIGTERM; fail fast when the P2P port is taken | done | P2 | small | none | F-031, F-032 |
 | [TASK-0038](TASK-0038-node-versions.md) | Declare and test the supported Node versions | done | P2 | small | TASK-0033 | F-033 |
-| TASK-0039 | Peer address book: evict failing addresses, choose outbound peers at random | pending | P2 | medium | TASK-0020 | F-034 |
+| [TASK-0039](TASK-0039-address-book.md) | Peer address book: evict failing addresses, choose outbound peers at random | done | P2 | medium | TASK-0020 | F-034 |
 | TASK-0040 | Staking status in the API and CLI | pending | P3 | small | TASK-0016 | F-035 |
 
 Scope notes (expand into task files when picked up):
 
-- **TASK-0039:** per-address attempts and last success; drop addresses after repeated failures; pick outbound candidates at random, preferring ones that worked; cap addresses taken from one `PEERS` message.
 - **TASK-0040:** `GET /staking` (enabled, wallet locked or staking-only, eligible outputs and value, last staked block) and `cli staking`.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)

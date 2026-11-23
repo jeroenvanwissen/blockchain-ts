@@ -10,6 +10,7 @@ import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import {
 	MAX_FUTURE_BLOCK_TIME,
+	MAX_ADDRESSES_PER_MESSAGE,
 	MAX_INBOUND_PEERS,
 	MAX_OUTBOUND_PEERS,
 	MAX_PENDING_GET_BLOCKS,
@@ -143,6 +144,19 @@ describe('Peer limits and misbehavior', () => {
 		expect(node.getSockets()).toHaveLength(0); // the first server is unaffected
 	});
 
+	it(`should learn at most ${MAX_ADDRESSES_PER_MESSAGE} addresses from one PEERS message`, async () => {
+		jest.spyOn(node, 'fillOutbound').mockImplementation(); // don't dial the junk
+		const flooder = await rawPeer(40_006);
+		const junk = Array.from({ length: 200 }, (_, i) => `ws://10.9.${Math.floor(i / 250)}.${i % 250}:5001`);
+
+		flooder.send(JSON.stringify({ type: MessageType.PEERS, data: junk }));
+		await waitUntil(() => node.getKnownPeers().length > 0);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		const learned = node.getKnownPeers().filter((address) => address.startsWith('ws://10.9.'));
+		expect(learned).toHaveLength(MAX_ADDRESSES_PER_MESSAGE);
+	});
+
 	it('should drop expired bans when loading the ban list', () => {
 		fs.writeFileSync(banListPath, JSON.stringify({ '10.0.0.1': Date.now() - 1, '10.0.0.2': Date.now() + 60_000 }));
 
@@ -220,6 +234,7 @@ describe('Peer limits and misbehavior', () => {
 				},
 			);
 
+			node.loadInitialPeers(['ws://127.0.0.1:1']); // configured: kept however often it fails
 			node['reconnectToPeer']('ws://127.0.0.1:1');
 			jest.runAllTimers();
 

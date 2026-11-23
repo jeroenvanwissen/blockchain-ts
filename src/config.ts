@@ -76,6 +76,11 @@ export const REGTEST_STAKE_MIN_AGE = 0;
 // Peer discovery
 export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
 export const MAX_KNOWN_PEERS = 128; // Maximum number of peer addresses to track
+// Address book (TASK-0039)
+export const MAX_ADDRESSES_PER_MESSAGE = 32; // addresses read from one PEERS message, and sent in one
+export const MAX_ADDRESS_FAILURES = 5; // consecutive failures before a learned address is dropped
+export const ADDRESS_RETRY_BASE = 30_000; // ms before redialing a failed address; doubles per failure
+export const ADDRESS_RETRY_MAX = 60 * 60 * 1000; // retry wait cap
 
 // Peer limits and misbehavior (TASK-0020)
 export const MAX_INBOUND_PEERS = 32; // further inbound connections are refused

@@ -114,14 +114,13 @@ try {
 	log.error('Error reading peer data file:', error);
 }
 
-// Combine peers from seed nodes, command line, and file
-const allPeers = [...new Set([...SEED_NODES, ...cliPeers, ...filePeers])];
+// Seed and command-line peers are the operator's (always kept); peers.json holds learned ones
+const configuredPeers = [...new Set([...SEED_NODES, ...cliPeers])];
+p2pServer.loadInitialPeers(configuredPeers, filePeers);
 
-// Register all known peers before connecting
-p2pServer.loadInitialPeers(allPeers);
-
-// Connect to all peers
-p2pServer.connectToPeers(allPeers);
+// Dial the configured peers, then fill the remaining outbound slots from the address book
+p2pServer.connectToPeers(configuredPeers);
+p2pServer.fillOutbound();
 
 log.info('Blockchain node started. Listening for peers...');
 

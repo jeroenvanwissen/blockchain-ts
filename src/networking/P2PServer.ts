@@ -11,8 +11,8 @@ import {
 	BLOCK_JSON_CACHE_SIZE,
 	GET_BLOCKS_INTERVAL,
 	HANDSHAKE_TIMEOUT,
+	MAX_ADDRESSES_PER_MESSAGE,
 	MAX_INBOUND_PEERS,
-	MAX_KNOWN_PEERS,
 	MAX_OUTBOUND_PEERS,
 	MAX_PENDING_GET_BLOCKS,
 	MAX_RECONNECT_ATTEMPTS,
@@ -27,6 +27,7 @@ import {
 	SYNC_BATCH_SIZE,
 } from '../config.js';
 import { logger } from '../logger.js';
+import { AddressBook } from './AddressBook.js';
 
 const log = logger('P2P');
 
@@ -124,7 +125,7 @@ export function isValidPeerAddress(address: string): boolean {
 export class P2PServer {
 	private sockets: WebSocket[];
 	private connectedPeers: Set<string>;
-	private _knownPeers: Set<string>;
+	private readonly _addresses = new AddressBook(); // known peer addresses
 	private _ownAddresses: Set<string>;
 	private _peerBroadcastInterval: NodeJS.Timeout | null = null;
 	private readonly _peerState = new Map<WebSocket, PeerState>();
@@ -150,7 +151,6 @@ export class P2PServer {
 		this._loadBans();
 		this.sockets = [];
 		this.connectedPeers = new Set();
-		this._knownPeers = new Set();
 		this._ownAddresses = new Set();
 		this._buildOwnAddresses();
 	}
@@ -224,7 +224,10 @@ export class P2PServer {
 		if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
 
-	/** Remember these peers and dial them, up to MAX_OUTBOUND_PEERS connections. */
+	/**
+	 * Dial these operator-given peers (CLI, seeds) and keep them as configured addresses, up to
+	 * MAX_OUTBOUND_PEERS connections.
+	 */
 	connectToPeers(newPeers: string[]): void {
 		for (const peer of newPeers) {
 			const normalizedPeer = this.normalizePeerUrl(peer);
@@ -233,9 +236,10 @@ export class P2PServer {
 				continue;
 			}
 			if (this._ownAddresses.has(normalizedPeer) || this.isBanned(normalizedPeer)) continue;
-			this._knownPeers.add(normalizedPeer);
+			this._addresses.addConfigured(normalizedPeer);
 			if (this._canDial(normalizedPeer)) this._dial(normalizedPeer);
 		}
+		this._persistPeers();
 	}
 
 	/** Whether `key` (a peer URL, IP, or loopback IP:port) is banned right now. */
@@ -257,6 +261,7 @@ export class P2PServer {
 		return (
 			!this._isClosing &&
 			!this.connectedPeers.has(url) &&
+			this._addresses.has(url) &&
 			!this._ownAddresses.has(url) &&
 			!this.isBanned(url) &&
 			this._countPeers(false) < MAX_OUTBOUND_PEERS
@@ -266,6 +271,7 @@ export class P2PServer {
 	/** Open an outbound connection; `onFail` runs if it never opens. */
 	private _dial(url: string, onFail?: () => void): void {
 		this.connectedPeers.add(url); // connecting or connected
+		this._addresses.markAttempt(url, Date.now());
 		log.debug(`Attempting to connect to peer: ${url}`);
 		const socket = new WebSocket(url, {
 			handshakeTimeout: 5000,
@@ -287,6 +293,10 @@ export class P2PServer {
 			if (opened || this._isClosing) return;
 			// Unreachable peers are routine (offline, wrong address): not an error
 			log.info(`Connection failed to peer: ${url} (${error.message})`);
+			if (this._addresses.markFailure(url, Date.now())) {
+				log.info(`Dropping peer address ${url} after repeated failures`);
+				this._persistPeers();
+			}
 			onFail?.();
 		});
 		socket.on('close', () => {
@@ -295,9 +305,13 @@ export class P2PServer {
 		});
 	}
 
-	/** Top outbound connections back up from known peers (runs with the peer broadcast). */
-	private _fillOutbound(): void {
-		for (const peer of this._knownPeers) {
+	/**
+	 * Top outbound connections up from the address book: verified addresses first, at random,
+	 * so no peer decides whom this node dials. Runs at startup, after PEERS messages and with
+	 * the peer broadcast.
+	 */
+	fillOutbound(): void {
+		for (const peer of this._addresses.candidates(Date.now())) {
 			if (this._countPeers(false) >= MAX_OUTBOUND_PEERS) break;
 			if (this._canDial(peer)) this._dial(peer);
 		}
@@ -315,7 +329,7 @@ export class P2PServer {
 		this._saveBans();
 		log.warn(`Banning peer ${key} for ${BAN_DURATION / 3_600_000} h`);
 		const url = (socket as unknown as { url?: string }).url;
-		if (url && this._knownPeers.delete(this.normalizePeerUrl(url))) this._persistPeers();
+		if (url && this._addresses.remove(this.normalizePeerUrl(url))) this._persistPeers();
 		socket.close(1008, 'misbehaving');
 	}
 
@@ -433,9 +447,7 @@ export class P2PServer {
 			log.debug('Invalid peer address, not logging');
 			return;
 		}
-		const normalized = this.normalizePeerUrl(peerAddress);
-		this._knownPeers.add(normalized);
-		this._persistPeers();
+		log.debug(`Connected to ${this.normalizePeerUrl(peerAddress)}`);
 	}
 
 	private messageHandler(socket: WebSocket): void {
@@ -504,19 +516,29 @@ export class P2PServer {
 			log.info(`Disconnecting peer: ${reason}`);
 			socket.close();
 		};
+		const dialed = (socket as unknown as { url?: string }).url;
+		const address = dialed ? this.normalizePeerUrl(dialed) : undefined;
+		// A peer on another network or chain will never be useful: forget its address
+		const forget = () => {
+			if (address && this._addresses.remove(address)) this._persistPeers();
+		};
 		if (!isVersionPayload(data)) return reject('malformed VERSION');
-		if (data.magic !== this._networkMagic) return reject(`different network (${data.magic})`);
-		if (data.version !== PROTOCOL_VERSION) return reject(`protocol version ${data.version}`);
-		if (data.genesisHash !== this.blockchain.getChain()[0].hash) return reject('different genesis block');
+		if (data.magic !== this._networkMagic) {
+			forget();
+			return reject(`different network (${data.magic})`);
+		}
+		if (data.version !== PROTOCOL_VERSION) {
+			if (address) this._addresses.markFailure(address, Date.now());
+			return reject(`protocol version ${data.version}`);
+		}
+		if (data.genesisHash !== this.blockchain.getChain()[0].hash) {
+			forget();
+			return reject('different genesis block');
+		}
 		if (data.nonce === this._nonce) {
 			state.isSelf = true;
-			const url = (socket as unknown as { url?: string }).url;
-			if (url) {
-				const normalized = this.normalizePeerUrl(url);
-				this._ownAddresses.add(normalized);
-				this._knownPeers.delete(normalized);
-				this._persistPeers();
-			}
+			if (address) this._ownAddresses.add(address);
+			forget();
 			return reject('connected to ourselves');
 		}
 
@@ -543,6 +565,11 @@ export class P2PServer {
 			clearTimeout(state.handshakeTimer);
 			state.handshakeTimer = null;
 		}
+		const dialed = (socket as unknown as { url?: string }).url;
+		if (dialed) {
+			this._addresses.markSuccess(this.normalizePeerUrl(dialed), Date.now());
+			this._persistPeers();
+		}
 		this._sendPeerList(socket);
 		if (!this.blockchain.hasBlock(version.tip)) this._requestBlocks(socket);
 	}
@@ -554,9 +581,7 @@ export class P2PServer {
 		if (host.includes(':')) host = `[${host}]`;
 		const address = this.normalizePeerUrl(`${host}:${listenPort}`);
 		if (!isValidPeerAddress(address) || this._ownAddresses.has(address)) return;
-		if (this._knownPeers.size >= MAX_KNOWN_PEERS || this._knownPeers.has(address)) return;
-		this._knownPeers.add(address);
-		this._persistPeers();
+		if (this._addresses.addLearned(address)) this._persistPeers();
 	}
 
 	private _requestBlocks(socket: WebSocket, after?: string): void {
@@ -778,15 +803,22 @@ export class P2PServer {
 		}
 	}
 
+	/** Known peer addresses, verified and configured ones first. */
 	getKnownPeers(): string[] {
-		return [...this._knownPeers];
+		return this._addresses.all();
 	}
 
-	loadInitialPeers(peers: string[]): void {
-		for (const peer of peers) {
-			const normalized = this.normalizePeerUrl(peer);
-			if (isValidPeerAddress(normalized) && !this._ownAddresses.has(normalized)) {
-				this._knownPeers.add(normalized);
+	/** Startup addresses: operator-given ones (CLI, seeds) and the saved list (learned). */
+	loadInitialPeers(configured: string[], learned: string[] = []): void {
+		for (const [peers, add] of [
+			[configured, (url: string) => this._addresses.addConfigured(url)],
+			[learned, (url: string) => void this._addresses.addLearned(url)],
+		] as const) {
+			for (const peer of peers) {
+				const normalized = this.normalizePeerUrl(peer);
+				if (isValidPeerAddress(normalized) && !this._ownAddresses.has(normalized) && !this.isBanned(normalized)) {
+					add(normalized);
+				}
 			}
 		}
 	}
@@ -795,7 +827,7 @@ export class P2PServer {
 		if (this._peerBroadcastInterval) return;
 		this._peerBroadcastInterval = setInterval(() => {
 			this._broadcastPeerList();
-			this._fillOutbound();
+			this.fillOutbound();
 		}, PEER_BROADCAST_INTERVAL);
 	}
 
@@ -807,13 +839,13 @@ export class P2PServer {
 	}
 
 	private _broadcastPeerList(): void {
-		const peers = this.getKnownPeers();
+		const peers = this._addresses.shareable(MAX_ADDRESSES_PER_MESSAGE);
 		if (peers.length === 0) return;
 		this.broadcast({ type: MessageType.PEERS, data: peers });
 	}
 
 	private _sendPeerList(socket: WebSocket): void {
-		const peers = this.getKnownPeers();
+		const peers = this._addresses.shareable(MAX_ADDRESSES_PER_MESSAGE);
 		if (peers.length === 0) return;
 		this._send(socket, { type: MessageType.PEERS, data: peers });
 	}
@@ -824,28 +856,18 @@ export class P2PServer {
 			return;
 		}
 
-		const newPeersToConnect: string[] = [];
-
-		for (const addr of peerAddresses) {
+		// Learn at most MAX_ADDRESSES_PER_MESSAGE; dialing is left to the random fill, so the
+		// sender can't choose our outbound peers
+		let learned = 0;
+		for (const addr of peerAddresses.slice(0, MAX_ADDRESSES_PER_MESSAGE)) {
 			if (typeof addr !== 'string') continue;
 			const normalized = this.normalizePeerUrl(addr);
-
-			if (!isValidPeerAddress(normalized)) continue;
-			if (this._ownAddresses.has(normalized)) continue;
-			if (this._knownPeers.has(normalized)) continue;
-			if (this._knownPeers.size >= MAX_KNOWN_PEERS) break;
-
-			this._knownPeers.add(normalized);
-
-			if (!this.connectedPeers.has(normalized)) {
-				newPeersToConnect.push(normalized);
-			}
+			if (!isValidPeerAddress(normalized) || this._ownAddresses.has(normalized) || this.isBanned(normalized)) continue;
+			if (this._addresses.addLearned(normalized)) learned++;
 		}
-
-		this._persistPeers();
-
-		if (newPeersToConnect.length > 0) {
-			this.connectToPeers(newPeersToConnect);
+		if (learned > 0) {
+			this._persistPeers();
+			this.fillOutbound();
 		}
 	}
 
