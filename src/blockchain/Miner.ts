@@ -120,7 +120,7 @@ export class Miner {
 			worker.once('message', (message: WorkerResult) => {
 				finish(message.type === 'found' ? { nonce: message.nonce, hash: message.hash } : null);
 			});
-			worker.once('error', (error) => finish(null, error));
+			worker.once('error', (error: unknown) => finish(null, error instanceof Error ? error : new Error(String(error))));
 		});
 	}
 
