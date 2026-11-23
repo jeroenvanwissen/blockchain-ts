@@ -72,7 +72,7 @@ describe('Proof of stake (kernel)', () => {
 		const received = Block.fromJSON(JSON.parse(JSON.stringify(block)));
 
 		expect(received.signature).toBe(block.signature);
-		await expect(chain.addMinedBlock(received)).resolves.toBeUndefined();
+		await expect(chain.addMinedBlock(received)).resolves.toBe('connected');
 	});
 
 	it('should reject PoW blocks after the cutoff and PoS blocks before it', async () => {

@@ -281,39 +281,6 @@ describe('BlockStore', () => {
 		});
 	});
 
-	describe('replaceAll', () => {
-		it('should clear all data and rewrite blocks', () => {
-			const store = new BlockStore('/data/blocks');
-			const block0 = createBlock(0);
-			store.appendBlock(block0);
-
-			const block1 = createBlock(1, block0.hash);
-			store.appendBlock(block1);
-			expect(store.getBlockCount()).toBe(2);
-
-			// Replace with just genesis
-			const newBlock0 = createBlock(0);
-			store.replaceAll([newBlock0]);
-
-			expect(store.getBlockCount()).toBe(1);
-			const retrieved = store.getBlockByHeight(0);
-			expect(retrieved).not.toBeNull();
-			expect(retrieved!.hash).toBe(newBlock0.hash);
-		});
-
-		it('should delete old files before rewriting', () => {
-			const store = new BlockStore('/data/blocks');
-			const block0 = createBlock(0);
-			store.appendBlock(block0);
-
-			// Verify blk file exists
-			expect(fileSystem.has('/data/blocks/blk00000.dat')).toBe(true);
-
-			store.replaceAll([]);
-			expect(store.getBlockCount()).toBe(0);
-		});
-	});
-
 	describe('rebuildIndex', () => {
 		it('should reconstruct index from blk files', () => {
 			const store = new BlockStore('/data/blocks');

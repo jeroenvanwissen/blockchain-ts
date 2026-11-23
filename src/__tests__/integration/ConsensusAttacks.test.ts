@@ -108,7 +108,7 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 		const restarted = openPosChain(dir);
 		expect(restarted.getStakeModifier()).toBe(chain.getStakeModifier());
 		const next = findStakeBlock(chain, staker);
-		await expect(restarted.addMinedBlock(next)).resolves.toBeUndefined();
+		await expect(restarted.addMinedBlock(next)).resolves.toBe('connected');
 	});
 
 	// F-007 — fixed by TASK-0009: coinstakes never enter the mempool, and a block classified as

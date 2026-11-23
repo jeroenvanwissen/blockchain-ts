@@ -121,7 +121,7 @@ describe('P2PServer', () => {
 		const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], NULL_HASH, 0, undefined, 1);
 		const wire = JSON.parse(JSON.stringify(block)) as { transactions: Record<string, unknown>[] };
 		delete wire.transactions[0].outputs;
-		const addSpy = jest.spyOn(blockchain, 'addMinedBlock').mockResolvedValue(undefined);
+		const addSpy = jest.spyOn(blockchain, 'addMinedBlock').mockResolvedValue('connected');
 
 		await p2pServer['handleBlockMessage'](wire);
 

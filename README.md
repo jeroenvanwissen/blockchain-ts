@@ -19,7 +19,7 @@
 
 **Consensus works end to end; networking is not yet hardened.** Nodes start, restart, mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set. `npm run smoke` covers two real nodes; the PoW→PoS transition is covered by integration tests with a shortened PoW phase. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- a node that misses a block only resyncs when it reconnects, and forks are resolved by swapping whole chains (TASK-0012, TASK-0013);
+- a node that misses a block only resyncs when it reconnects, and every new peer gets the full chain (TASK-0013);
 - no API or CLI yet to send coins or inspect the chain (TASK-0016, TASK-0017).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
@@ -68,7 +68,7 @@ git --version          # Should be 2.30+
 | **UTXO Model**           | Unspent Transaction Output tracking with double-spend prevention  |
 | **Coinbase Maturity**    | Coinbase outputs require 10 confirmations before spending         |
 | **P2P Networking**       | WebSocket-based peer communication with chain synchronization     |
-| **Fork Resolution**      | Chain weight comparison for fork selection (not longest chain)    |
+| **Fork Resolution**      | Block tree; the branch with the most work wins; reorgs with undo data |
 | **Digital Signatures**   | secp256k1 ECDSA per input (low-S), txid excludes signatures      |
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
 | **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |

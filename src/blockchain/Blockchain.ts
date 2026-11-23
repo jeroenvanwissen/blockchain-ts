@@ -41,6 +41,17 @@ export interface BlockchainOptions {
 	blocksDir?: string;
 }
 
+/** What happened to a block passed to addMinedBlock. */
+export type BlockOutcome = 'connected' | 'reorganized' | 'side';
+
+/** A known block (active chain or side branch). */
+interface IndexEntry {
+	block: Block;
+	height: number;
+	work: bigint; // cumulative chain work up to and including this block
+	isInvalid: boolean; // failed full validation; descendants are rejected
+}
+
 /** Chain state a block is validated against; `utxos` advances as blocks connect. */
 interface ConnectContext {
 	prevBlocks: Block[]; // chain up to and including the parent block
@@ -54,6 +65,8 @@ export class Blockchain {
 	private chain: Block[];
 	private _utxos = new UtxoSet();
 	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
+	private _index = new Map<string, IndexEntry>(); // every known block, by hash
+	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
 	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
 	private lastBlockTime: number = Date.now();
@@ -76,8 +89,14 @@ export class Blockchain {
 		this.chain = [genesisBlock];
 		this.pendingTransactions = [];
 
-		// Initialize UTXO set with genesis block
+		// Initialize UTXO set and block index with the genesis block
 		this._utxos.addOutputs(genesisBlock.transactions[0], 0);
+		this._index.set(genesisBlock.hash, {
+			block: genesisBlock,
+			height: 0,
+			work: genesisBlock.cumulativeWeight,
+			isInvalid: false,
+		});
 
 		// Load the rest of the blockchain
 		this.loadBlockchain();
@@ -168,10 +187,11 @@ export class Blockchain {
 	/**
 	 * The single block-validation path, used for new blocks, chain replacement and startup
 	 * load. Validates `block` on top of `ctx` and, only if every check passes, applies it to
-	 * ctx.utxos (nothing is changed when it throws) and returns the block's stake modifier. Consensus checks read time
+	 * ctx.utxos (nothing is changed when it throws). Returns the block's stake modifier and its
+	 * undo data (the outputs it spent). Consensus checks read time
 	 * from block data only; the wall clock is used only for the future-timestamp limit.
 	 */
-	private _connectBlock(block: Block, ctx: ConnectContext): string {
+	private _connectBlock(block: Block, ctx: ConnectContext): { modifier: string; undo: UTXO[] } {
 		const height = ctx.prevBlocks.length;
 		const parent = ctx.prevBlocks[height - 1];
 
@@ -268,11 +288,14 @@ export class Blockchain {
 		});
 
 		// Every check passed: apply
+		const undo: UTXO[] = [];
 		for (const [key, [txHash, outputIndex]] of spent) {
-			if (!created.delete(key)) ctx.utxos.remove(txHash, outputIndex);
+			if (created.delete(key)) continue; // created and spent within this block
+			const removed = ctx.utxos.remove(txHash, outputIndex);
+			if (removed) undo.push(removed);
 		}
 		for (const utxo of created.values()) ctx.utxos.add(utxo);
-		return nextStakeModifier(proof, ctx.modifiers[height - 1]);
+		return { modifier: nextStakeModifier(proof, ctx.modifiers[height - 1]), undo };
 	}
 
 	/**
@@ -347,8 +370,11 @@ export class Blockchain {
 		return hash;
 	}
 
-	/** Validate a whole chain from genesis through _connectBlock and return its state. */
-	private _replayChain(blocks: Block[]): { utxos: UtxoSet; modifiers: string[] } {
+	/**
+	 * Validate a whole chain from genesis through _connectBlock and return its state. A
+	 * failure carries the failing height as `error.height`.
+	 */
+	private _replayChain(blocks: Block[]): { utxos: UtxoSet; modifiers: string[]; undo: UTXO[][] } {
 		const genesis = this.createGenesisBlock();
 		if (
 			blocks.length === 0 ||
@@ -362,40 +388,213 @@ export class Blockchain {
 			utxos: new UtxoSet(),
 			modifiers: [GENESIS_STAKE_MODIFIER],
 		};
+		const undo: UTXO[][] = [[]];
 		ctx.utxos.addOutputs(blocks[0].transactions[0], 0);
 		for (let i = 1; i < blocks.length; i++) {
 			try {
-				ctx.modifiers.push(this._connectBlock(blocks[i], ctx));
+				const result = this._connectBlock(blocks[i], ctx);
+				ctx.modifiers.push(result.modifier);
+				undo.push(result.undo);
 			} catch (error) {
-				throw new Error(`block ${i}: ${(error as Error).message}`);
+				throw Object.assign(new Error(`block ${i}: ${(error as Error).message}`), { height: i });
 			}
 			ctx.prevBlocks.push(blocks[i]);
 		}
-		return { utxos: ctx.utxos, modifiers: ctx.modifiers };
+		return { utxos: ctx.utxos, modifiers: ctx.modifiers, undo };
 	}
 
-	private _addMinedBlockInternal(block: Block): void {
-		const modifier = this._connectBlock(block, {
+	/** Fully validate `block` on top of the active tip and make it the new tip (no persistence). */
+	private _connectTip(block: Block): void {
+		const { modifier, undo } = this._connectBlock(block, {
 			prevBlocks: this.chain,
 			utxos: this._utxos,
 			modifiers: this._modifiers,
 		});
-		this._modifiers.push(modifier);
-
 		block.cumulativeWeight = this.getLatestBlock().cumulativeWeight + Blockchain.blockWeight(block);
+		this._modifiers.push(modifier);
+		this._undo.set(block.hash, undo);
 		this.chain.push(block);
 		this.lastBlockTime = block.timestamp;
-		this.pendingTransactions = [];
-		this._pendingUTXOSpends.clear();
-
-		// Persist new block
-		this.blockStore.appendBlock(block);
 	}
 
-	public async addMinedBlock(block: Block): Promise<void> {
+	/** Undo the active tip: remove the outputs it created and restore the ones it spent. */
+	private _disconnectTip(): Block {
+		const block = this.chain.pop()!;
+		this._modifiers.pop();
+		for (const tx of block.transactions) {
+			const txHash = tx.calculateHash();
+			tx.outputs.forEach((output, outputIndex) => {
+				if (output.amount > 0n) this._utxos.remove(txHash, outputIndex);
+			});
+		}
+		for (const utxo of this._undo.get(block.hash) ?? []) this._utxos.add(utxo);
+		this._undo.delete(block.hash);
+		return block;
+	}
+
+	private _isActive(entry: IndexEntry): boolean {
+		return this.chain[entry.height]?.hash === entry.block.hash;
+	}
+
+	/** Blocks from genesis up to and including `entry`, following parent links. */
+	private _branchTo(entry: IndexEntry, index: Map<string, IndexEntry> = this._index): Block[] {
+		const branch: Block[] = [];
+		for (let e: IndexEntry | undefined = entry; e; e = index.get(e.block.previousHash)) {
+			branch.unshift(e.block);
+			if (e.height === 0) break;
+		}
+		return branch;
+	}
+
+	/** Whether `entry` or an ancestor below the fork with the active chain is invalid. */
+	private _branchIsInvalid(entry: IndexEntry): boolean {
+		for (let e: IndexEntry | undefined = entry; e && !this._isActive(e); e = this._index.get(e.block.previousHash)) {
+			if (e.isInvalid) return true;
+		}
+		return false;
+	}
+
+	private _hasInvalidAncestor(entry: IndexEntry, index: Map<string, IndexEntry>): boolean {
+		for (let e: IndexEntry | undefined = entry; e; e = index.get(e.block.previousHash)) {
+			if (e.isInvalid) return true;
+			if (e.height === 0) break;
+		}
+		return false;
+	}
+
+	/** Re-check pending transactions (plus `extra`, e.g. from disconnected blocks) against the tip. */
+	private _readmitTransactions(extra: Transaction[] = []): void {
+		const candidates = [...extra, ...this.pendingTransactions];
+		this.pendingTransactions = [];
+		this._pendingUTXOSpends.clear();
+		for (const tx of candidates) {
+			if (tx.isCoinbase() || tx.isCoinStake()) continue;
+			try {
+				this._addTransactionInternal(tx);
+			} catch {
+				// Confirmed, conflicting, or otherwise no longer valid
+			}
+		}
+	}
+
+	/**
+	 * Make the branch ending at `target` (which has more work than the active chain) active:
+	 * disconnect back to the fork point, then connect the branch with full validation. If a
+	 * branch block is invalid it is marked so and the previous chain is restored.
+	 */
+	private _activateBranch(target: IndexEntry): void {
+		const branch: Block[] = [];
+		let fork: IndexEntry = target;
+		while (!this._isActive(fork)) {
+			branch.unshift(fork.block);
+			fork = this._index.get(fork.block.previousHash)!;
+		}
+
+		const disconnected: Block[] = [];
+		while (this.chain.length - 1 > fork.height) disconnected.unshift(this._disconnectTip());
+
+		let connected = 0;
+		try {
+			for (const block of branch) {
+				this._connectTip(block);
+				connected++;
+			}
+		} catch (error) {
+			const failed = branch[connected];
+			this._index.get(failed.hash)!.isInvalid = true;
+			for (let i = 0; i < connected; i++) this._disconnectTip();
+			for (const block of disconnected) this._connectTip(block); // known valid
+			const reason = (error as Error).message;
+			throw new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`);
+		}
+
+		console.log(
+			`[Blockchain] reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
+				`replaced by ${branch.length}, tip ${target.block.hash.slice(0, 16)}`,
+		);
+		this._readmitTransactions(disconnected.flatMap((block) => block.transactions));
+	}
+
+	/** Checks for a block stored on a side branch; full validation happens if it becomes active. */
+	private _checkSideBlock(block: Block, parent: IndexEntry): void {
+		const height = parent.height + 1;
+		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
+			throw new Error('block exceeds maximum transaction count');
+		}
+		if (block.isProofOfWork() ? height > this._options.powCutoffBlock : height <= this._options.powCutoffBlock) {
+			throw new Error('wrong consensus type for this height');
+		}
+		if (block.isProofOfWork() && !block.isValid()) {
+			throw new Error('invalid proof of work');
+		}
+		if (this._options.validateDifficulty) {
+			const branch = this._branchTo(parent);
+			if (block.bits !== requiredBits(branch, height, block.isProofOfStake())) {
+				throw new Error('incorrect block difficulty');
+			}
+		}
+	}
+
+	/**
+	 * Accept a block whose parent is known: extend the tip, store it on a side branch, or
+	 * reorganize to its branch when that has more work. Throws if the block is rejected.
+	 */
+	private _acceptBlock(block: Block): BlockOutcome {
+		if (this._index.has(block.hash)) {
+			throw new Error('block already known');
+		}
+		if (block.hash !== block.calculateHash()) {
+			throw new Error('block hash mismatch');
+		}
+		const parent = this._index.get(block.previousHash);
+		if (!parent) {
+			throw new Error('unknown parent block');
+		}
+		if (this._branchIsInvalid(parent)) {
+			throw new Error('parent block is invalid');
+		}
+		if (block.index !== parent.height + 1) {
+			throw new Error(`incorrect block index: expected ${parent.height + 1}, got ${block.index}`);
+		}
+
+		if (block.previousHash === this.getLatestBlock().hash) {
+			this._connectTip(block);
+			this._index.set(block.hash, {
+				block,
+				height: block.index,
+				work: block.cumulativeWeight,
+				isInvalid: false,
+			});
+			this.blockStore.appendBlock(block);
+			this._readmitTransactions();
+			return 'connected';
+		}
+
+		this._checkSideBlock(block, parent);
+		const entry: IndexEntry = {
+			block,
+			height: block.index,
+			work: parent.work + Blockchain.blockWeight(block),
+			isInvalid: false,
+		};
+		block.cumulativeWeight = entry.work;
+		this._index.set(block.hash, entry);
+		this.blockStore.appendBlock(block);
+		if (entry.work <= this.getChainWeight()) return 'side';
+		this._activateBranch(entry);
+		return 'reorganized';
+	}
+
+	/** Whether a block with this hash is known (active chain or side branch). */
+	public hasBlock(hash: string): boolean {
+		return this._index.has(hash);
+	}
+
+	/** Add a block (mined, staked or received): extends the tip, a side branch, or reorganizes. */
+	public async addMinedBlock(block: Block): Promise<BlockOutcome> {
 		const release = await this._lock.acquire();
 		try {
-			this._addMinedBlockInternal(block);
+			return this._acceptBlock(block);
 		} finally {
 			release();
 		}
@@ -675,31 +874,61 @@ export class Blockchain {
 
 	private loadBlockchain(): void {
 		try {
-			const blocks = this.blockStore.loadAllBlocks();
+			const stored = this.blockStore.loadAllBlocks();
 
-			if (blocks.length === 0) {
+			if (stored.length === 0) {
 				// No stored blocks — persist genesis and return
-				this.chain = [this.createGenesisBlock()];
-				Blockchain.computeChainWeights(this.chain);
 				this.blockStore.appendBlock(this.chain[0]);
-				this._utxos = new UtxoSet();
-				this._utxos.addOutputs(this.chain[0].transactions[0], 0);
-				this._modifiers = [GENESIS_STAKE_MODIFIER];
 				return;
 			}
 
-			// Revalidate the stored chain with the same rules as blocks from peers
-			let state: ReturnType<Blockchain['_replayChain']>;
-			try {
-				state = this._replayChain(blocks);
-			} catch (error) {
-				throw new Error(`invalid stored chain: ${(error as Error).message}`);
+			const genesis = this.createGenesisBlock();
+			if (stored[0].hash !== genesis.hash || stored[0].calculateHash() !== genesis.hash) {
+				throw new Error('invalid stored chain: genesis block hash mismatch');
 			}
 
-			this.chain = blocks;
-			Blockchain.computeChainWeights(this.chain);
-			this._utxos = state.utxos;
-			this._modifiers = state.modifiers;
+			// Rebuild the block tree; parents are always stored before their children
+			const index = new Map<string, IndexEntry>();
+			stored[0].cumulativeWeight = Blockchain.blockWeight(stored[0]);
+			index.set(stored[0].hash, {
+				block: stored[0],
+				height: 0,
+				work: stored[0].cumulativeWeight,
+				isInvalid: false,
+			});
+			for (const block of stored.slice(1)) {
+				const parent = index.get(block.previousHash);
+				if (!parent || index.has(block.hash) || block.hash !== block.calculateHash()) {
+					console.error(`[Blockchain] skipping unusable stored block ${block.hash.slice(0, 16)}`);
+					continue;
+				}
+				const work = parent.work + Blockchain.blockWeight(block);
+				block.cumulativeWeight = work;
+				index.set(block.hash, { block, height: parent.height + 1, work, isInvalid: false });
+			}
+
+			// Activate the valid branch with the most work (ties: stored first). Stored side
+			// blocks were never fully validated, so fall back when a branch fails.
+			const candidates = [...index.values()].sort((a, b) =>
+				b.work > a.work ? 1 : b.work < a.work ? -1 : 0,
+			);
+			for (const candidate of candidates) {
+				if (this._hasInvalidAncestor(candidate, index)) continue;
+				const branch = this._branchTo(candidate, index);
+				try {
+					const state = this._replayChain(branch);
+					this.chain = branch;
+					this._utxos = state.utxos;
+					this._modifiers = state.modifiers;
+					this._undo = new Map(branch.map((block, i) => [block.hash, state.undo[i]]));
+					this._index = index;
+					return;
+				} catch (error) {
+					const height = (error as Error & { height?: number }).height ?? 0;
+					index.get(branch[height].hash)!.isInvalid = true;
+					console.error(`[Blockchain] invalid stored block: ${(error as Error).message}`);
+				}
+			}
 		} catch (error) {
 			console.error('Error loading blockchain:', error);
 			throw error;
@@ -721,53 +950,39 @@ export class Blockchain {
 		return timestamps[Math.floor(timestamps.length / 2)];
 	}
 
+	/**
+	 * Adopt `newChain` (genesis first) if it has more work: its blocks go through the same
+	 * acceptance path as single blocks, so the node reorganizes to it or keeps its chain.
+	 */
 	public async replaceChain(newChain: Block[]): Promise<void> {
 		const release = await this._lock.acquire();
 		try {
-			// Compare by cumulative weight, not length
 			Blockchain.computeChainWeights(newChain);
 			const newWeight = newChain[newChain.length - 1].cumulativeWeight;
 			if (newWeight <= this.getChainWeight()) {
 				throw new Error('received chain does not have more weight than current chain');
 			}
-
-			let state: ReturnType<Blockchain['_replayChain']>;
-			try {
-				state = this._replayChain(newChain);
-			} catch (error) {
-				throw new Error(`Invalid chain: ${(error as Error).message}`);
+			if (newChain[0].hash !== this.chain[0].hash) {
+				throw new Error('Invalid chain: genesis block hash mismatch');
 			}
 
-			const oldChain = this.chain;
-			this.chain = newChain;
-			this._utxos = state.utxos;
-			this._modifiers = state.modifiers;
-
-			// Re-admit pending transactions and those from orphaned blocks that are still
-			// valid on the new chain (confirmed or conflicting ones are rejected)
-			const forkIndex = oldChain.findIndex(
-				(block, i) => i >= newChain.length || block.hash !== newChain[i].hash,
-			);
-			const orphaned =
-				forkIndex > 0
-					? oldChain
-							.slice(forkIndex)
-							.flatMap((block) => block.transactions)
-							.filter((tx) => !tx.isCoinbase() && !tx.isCoinStake())
-					: [];
-			const candidates = [...this.pendingTransactions, ...orphaned];
-			this.pendingTransactions = [];
-			this._pendingUTXOSpends.clear();
-			for (const tx of candidates) {
+			for (let i = 1; i < newChain.length; i++) {
+				const block = newChain[i];
 				try {
-					this._addTransactionInternal(tx);
-				} catch {
-					// No longer valid on the new chain
+					if (block.index !== i) {
+						throw new Error(`incorrect block index: expected ${i}, got ${block.index}`);
+					}
+					if (block.previousHash !== newChain[i - 1].hash) {
+						throw new Error('broken link: previous hash does not match');
+					}
+					const known = this._index.get(block.hash);
+					if (known?.isInvalid) throw new Error('block is known to be invalid');
+					if (known) continue;
+					this._acceptBlock(block);
+				} catch (error) {
+					throw new Error(`Invalid chain: block ${i}: ${(error as Error).message}`);
 				}
 			}
-
-			// Persist the new chain
-			this.blockStore.replaceAll(this.chain);
 		} finally {
 			release();
 		}

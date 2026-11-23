@@ -345,10 +345,9 @@ export class P2PServer {
 		try {
 			const block = parseBlock(blockData);
 			// Ignore blocks we already have (e.g. our own block echoed back by a peer)
-			if (this.blockchain.getChain()[block.index]?.hash === block.hash) return;
-			// Check if we need to sync first
-			const currentChainLength = this.blockchain.getChain().length;
-			if (block.index > currentChainLength) {
+			if (this.blockchain.hasBlock(block.hash)) return;
+			// Unknown parent: we are missing blocks and need to sync first
+			if (!this.blockchain.hasBlock(block.previousHash)) {
 				// Request the latest block; a higher index suggests we should sync chain elsewhere
 				const msg: GetLatestBlockMessage = {
 					type: MessageType.GET_LATEST_BLOCK,
@@ -357,8 +356,9 @@ export class P2PServer {
 				return;
 			}
 			// addMinedBlock handles its own locking
-			await this.blockchain.addMinedBlock(block);
-			console.log(`Accepted block ${block.index} (${block.hash.slice(0, 16)}) from peer`);
+			const outcome = await this.blockchain.addMinedBlock(block);
+			const label = outcome === 'side' ? 'Stored side-branch block' : 'Accepted block';
+			console.log(`${label} ${block.index} (${block.hash.slice(0, 16)}) from peer`);
 			// Only broadcast if we successfully added the block
 			const out: BlockMessage = { type: MessageType.BLOCK, data: block };
 			this.broadcast(out);

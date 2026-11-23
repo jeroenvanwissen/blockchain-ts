@@ -85,6 +85,7 @@ export class BlockStore {
 		return this._readBlockAt(this._entries[idx]);
 	}
 
+	/** Most recently stored block at this height (side branches can share heights). */
 	getBlockByHeight(height: number): Block | null {
 		const idx = this._heightMap.get(height);
 		if (idx === undefined) return null;
@@ -103,28 +104,6 @@ export class BlockStore {
 
 	getBlockCount(): number {
 		return this._entries.length;
-	}
-
-	replaceAll(blocks: Block[]): void {
-		// Delete all existing blk files and index
-		if (fs.existsSync(this._blocksDir)) {
-			const files = fs.readdirSync(this._blocksDir);
-			for (const file of files) {
-				fs.unlinkSync(path.join(this._blocksDir, file));
-			}
-		}
-
-		// Reset state
-		this._entries = [];
-		this._hashMap.clear();
-		this._heightMap.clear();
-		this._currentFileNumber = 0;
-		this._currentFileSize = 0;
-
-		// Write all blocks
-		for (const block of blocks) {
-			this.appendBlock(block);
-		}
 	}
 
 	rebuildIndex(): void {

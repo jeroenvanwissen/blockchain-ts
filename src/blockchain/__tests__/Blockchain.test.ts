@@ -499,7 +499,7 @@ describe('Blockchain', () => {
 			badBlock.hash = badBlock.calculateHash();
 
 			await expect(blockchain.addMinedBlock(badBlock))
-				.rejects.toThrow('broken link');
+				.rejects.toThrow('unknown parent block');
 		});
 
 		it('should serialize concurrent addTransaction calls', async () => {

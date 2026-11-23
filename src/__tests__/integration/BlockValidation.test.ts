@@ -123,10 +123,13 @@ describe('Block validation (single path)', () => {
 				`Invalid chain: block 4: ${reason}`,
 			);
 
-			// Write it to disk behind the validator's back: startup load refuses it
+			// Write it to disk behind the validator's back: startup load rejects it for the same
+			// reason and falls back to the best valid chain
 			new BlockStore(path.join(dir, 'blocks')).appendBlock(bad);
-			jest.spyOn(console, 'error').mockImplementation(() => {});
-			expect(() => openChain(dir)).toThrow(`invalid stored chain: block 4: ${reason}`);
+			const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+			const reopened = openChain(dir);
+			expect(errors).toHaveBeenCalledWith(`[Blockchain] invalid stored block: block 4: ${reason}`);
+			expect(reopened.getLatestBlock().hash).toBe(chain.getLatestBlock().hash);
 		} finally {
 			removeTempDir(otherDir);
 		}
