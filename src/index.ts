@@ -96,8 +96,11 @@ api
 	.catch((error: Error) => log.error(`API could not listen on ${API_HOST}:${API_PORT}:`, error.message));
 
 
-// Start P2P server
-void p2pServer.listen();
+// Start P2P server; a node that can't accept peers stops instead of running half-alive
+p2pServer.listen().catch((error: Error) => {
+	log.error(`P2P server could not listen on port ${P2P_PORT}: ${error.message}`);
+	void shutdown(1);
+});
 
 // Load peers from peer data file
 let filePeers: string[] = [];
@@ -138,15 +141,22 @@ if (isStaking) {
 	staking.start();
 }
 
-// Handle process termination
-process.on('SIGINT', () => {
+// Stop cleanly on SIGINT (Ctrl+C) and SIGTERM (systemd, Docker, kill): stop producing blocks,
+// save the chainstate (the next start validates only newer blocks), close peers and the API.
+// A second signal exits at once.
+let stopping = false;
+async function shutdown(code = 0): Promise<void> {
+	if (stopping) process.exit(code || 1);
+	stopping = true;
 	log.info('Stopping blockchain node...');
 	staking.stop();
-	void miner.stop().finally(() => {
-		blockchain.saveChainstate(); // the next start validates only newer blocks
-		process.exit(0);
-	});
-});
+	await miner.stop().catch(() => {});
+	blockchain.saveChainstate();
+	await Promise.allSettled([p2pServer.close(), api.close()]);
+	process.exit(code);
+}
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());
 
 // Export for testing
 export { api, blockchain, p2pServer, wallet, miner, staking };

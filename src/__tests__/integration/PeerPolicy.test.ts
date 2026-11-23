@@ -135,6 +135,14 @@ describe('Peer limits and misbehavior', () => {
 		await expect(rawPeer(40_002)).resolves.toBeDefined();
 	});
 
+	it('should reject listen() when the port is taken, instead of running without accepting peers', async () => {
+		const second = new P2PServer(chain, port, path.join(dir, 'peers2.json'));
+
+		await expect(second.listen()).rejects.toThrow('EADDRINUSE');
+		await second.close();
+		expect(node.getSockets()).toHaveLength(0); // the first server is unaffected
+	});
+
 	it('should drop expired bans when loading the ban list', () => {
 		fs.writeFileSync(banListPath, JSON.stringify({ '10.0.0.1': Date.now() - 1, '10.0.0.2': Date.now() + 60_000 }));
 

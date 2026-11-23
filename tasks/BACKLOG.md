@@ -1,7 +1,7 @@
 # Backlog
 
 Status values: `pending`, `in-progress`, `done`, `blocked`. Priority: P0 now, P1 next, P2 planned, P3 later.
-Task IDs are permanent. Don't renumber when priorities change. Findings F-001 to F-020 refer to [assessment-2026-11-23.md](assessment-2026-11-23.md), F-021 and later to [reassessment-2026-11-23.md](reassessment-2026-11-23.md).
+Task IDs are permanent. Don't renumber when priorities change. Findings F-001 to F-020 refer to [assessment-2026-11-23.md](assessment-2026-11-23.md), F-021 to F-030 to [reassessment-2026-11-23.md](reassessment-2026-11-23.md), F-031 and later to [reassessment-2026-11-23-2.md](reassessment-2026-11-23-2.md).
 
 The goal of the ordering is a node that actually works end to end: it starts, mines, restarts, enforces consensus, moves to PoS, and syncs with peers. Each milestone ends in something you can run.
 
@@ -78,6 +78,21 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes (expand into task files when picked up):
 
+
+## Milestone 7: running the node as a service (from reassessment 2)
+
+| ID | Task | Status | Priority | Size | Depends on | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| [TASK-0037](TASK-0037-process-lifecycle.md) | Graceful shutdown on SIGTERM; fail fast when the P2P port is taken | done | P2 | small | none | F-031, F-032 |
+| TASK-0038 | Declare and test the supported Node versions | pending | P2 | small | TASK-0033 | F-033 |
+| TASK-0039 | Peer address book: evict failing addresses, choose outbound peers at random | pending | P2 | medium | TASK-0020 | F-034 |
+| TASK-0040 | Staking status in the API and CLI | pending | P3 | small | TASK-0016 | F-035 |
+
+Scope notes (expand into task files when picked up):
+
+- **TASK-0038:** `engines.node` set to the real minimum (ESLint 10: `^20.19 || ^22.13 || >=24`; Node 20 is end of life, so `>=22.13`); README prerequisites; CI check job on Node 22 and 26.
+- **TASK-0039:** per-address attempts and last success; drop addresses after repeated failures; pick outbound candidates at random, preferring ones that worked; cap addresses taken from one `PEERS` message.
+- **TASK-0040:** `GET /staking` (enabled, wallet locked or staking-only, eligible outputs and value, last staked block) and `cli staking`.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

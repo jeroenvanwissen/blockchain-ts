@@ -197,12 +197,12 @@ export class P2PServer {
 			this.connectSocket(socket, remoteAddress);
 		});
 
-		server.on('error', (error) => {
-			log.error('WebSocket Server error:', error);
-		});
-
-		return new Promise((resolve) => {
-			server.on('listening', () => {
+		// Until it listens, an error (port taken, no permission) rejects; afterwards it's logged
+		return new Promise((resolve, reject) => {
+			server.once('error', reject);
+			server.once('listening', () => {
+				server.off('error', reject);
+				server.on('error', (error) => log.error('WebSocket Server error:', error));
 				log.info(`P2P Server listening on 0.0.0.0:${this.p2pPort}`);
 				this._startPeerBroadcast();
 				resolve();

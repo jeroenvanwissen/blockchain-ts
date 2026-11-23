@@ -192,6 +192,8 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 npm run dev
 ```
 
+Stop it with Ctrl+C or SIGTERM (what systemd and Docker send). Either way it stops producing blocks, saves its chainstate and closes its connections before exiting; a second signal exits at once.
+
 ### Step 2: Start Additional Nodes (P2P)
 
 Each node needs a unique P2P port, its own data directory, and at least one peer to connect to:
@@ -378,6 +380,8 @@ Block and transaction formats change while the project is pre-release, and each 
 Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
 
 ### Port Already in Use
+
+If the P2P port is taken, the node logs `P2P server could not listen on port ...` and exits with code 1. Free the port or choose another with `P2P_PORT`:
 
 ```bash
 # Find and kill the process using the port

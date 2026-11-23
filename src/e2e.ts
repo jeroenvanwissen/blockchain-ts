@@ -176,7 +176,7 @@ async function main(): Promise<void> {
 		process.exitCode = 1;
 	} finally {
 		await harness.close();
-		await Promise.all(running.map(stopNode));
+		await Promise.all(running.map((node) => stopNode(node)));
 		if (keep) step(`kept ${root}`);
 		else fs.rmSync(root, { recursive: true, force: true });
 	}

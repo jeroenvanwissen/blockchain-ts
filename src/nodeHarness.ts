@@ -88,9 +88,10 @@ export async function waitUntil(
 	throw new Error(`timed out waiting for ${what}`);
 }
 
-export async function stopNode(node: NodeProcess): Promise<void> {
+/** Stop a node the way an operator would: SIGINT (Ctrl+C) or SIGTERM (systemd, Docker, kill). */
+export async function stopNode(node: NodeProcess, signal: 'SIGINT' | 'SIGTERM' = 'SIGINT'): Promise<void> {
 	if (node.child.exitCode !== null || node.child.signalCode !== null) return;
-	node.child.kill('SIGINT');
+	node.child.kill(signal);
 	const timer = setTimeout(() => node.child.kill('SIGKILL'), 5_000);
 	await node.exited;
 	clearTimeout(timer);

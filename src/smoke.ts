@@ -137,9 +137,18 @@ async function main(): Promise<void> {
 			throw new Error('unencrypted wallet backups were left behind');
 		}
 
-		step('restart node A without mining; expect the same chain and wallet');
+		step('a second node on A\'s P2P port must exit instead of running without peers');
+		const duplicate = startNode('duplicate', cwd, path.join(root, 'node-dup'), portA);
+		running.push(duplicate);
+		const exitCode = await duplicate.exited;
+		if (exitCode !== 1 || !duplicate.output().includes(`P2P server could not listen on port ${portA}`)) {
+			throw new Error(`a node on a taken P2P port exited with ${String(exitCode)}: ${lastLines(duplicate, 5)}`);
+		}
+		running.splice(running.indexOf(duplicate), 1); // its error line is the expected outcome
+
+		step('stop node A with SIGTERM and restart it without mining; expect the same chain and wallet');
 		await stopNode(nodeB);
-		await stopNode(nodeA);
+		await stopNode(nodeA, 'SIGTERM'); // what systemd and Docker send: must save the chainstate
 		const minedHeights = [...nodeA.output().matchAll(/mined block (\d+) \((\w+)\)/g)];
 		const [, lastHeight, lastHash] = minedHeights[minedHeights.length - 1];
 		nodeA = startNode('node A (restart)', cwd, dataA, portA);
@@ -182,7 +191,7 @@ async function main(): Promise<void> {
 		}
 		process.exitCode = 1;
 	} finally {
-		await Promise.all(running.map(stopNode));
+		await Promise.all(running.map((node) => stopNode(node)));
 		if (keep) step(`kept ${root}`);
 		else fs.rmSync(root, { recursive: true, force: true });
 	}
