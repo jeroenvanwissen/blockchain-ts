@@ -5,7 +5,7 @@
 A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, WebSocket peers, protobuf block storage. **It doesn't work end to end yet.** See [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) for what is broken and [tasks/BACKLOG.md](tasks/BACKLOG.md) for the plan.
 
 - `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts` (in-node staking loop, enabled with `--stake`)
-- `src/networking/P2PServer.ts`: WebSocket peers, chain sync, peer discovery
+- `src/networking/P2PServer.ts`: WebSocket peers: VERSION/VERACK handshake, locator-based sync (`GET_BLOCKS`/`BLOCKS`), block and transaction broadcast, peer discovery. `listen()` resolves when listening; `close()` stops everything (integration tests run real nodes in-process, see `Sync.test.ts`)
 - `src/config.ts`: all constants and the data-dir and port settings
 - `src/index.ts`: node entry point (`--data-dir`, `--peers`, `--mine`, `--stake`); `src/smoke.ts`: runtime smoke check
 - `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)

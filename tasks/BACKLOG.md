@@ -41,7 +41,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0012](TASK-0012-block-tree-reorg.md) | Block tree, chain-work selection and reorganizations | done | P1 | large | TASK-0006, TASK-0007 | F-010, old C1 |
-| [TASK-0013](TASK-0013-handshake-sync.md) | Version handshake and incremental block sync | pending | P1 | large | TASK-0012 | F-013, old E5 |
+| [TASK-0013](TASK-0013-handshake-sync.md) | Version handshake and incremental block sync | done | P1 | large | TASK-0012 | F-013, old E5 |
 | [TASK-0014](TASK-0014-relay.md) | Relay validated transactions and blocks | pending | P1 | medium | TASK-0005, TASK-0013 | F-011, F-013, old D2 |
 | [TASK-0015](TASK-0015-multi-node-e2e.md) | Multi-node end-to-end test | pending | P1 | medium | TASK-0004, TASK-0010, TASK-0013, TASK-0014 | F-016 |
 

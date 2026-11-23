@@ -590,6 +590,37 @@ export class Blockchain {
 		return this._index.has(hash);
 	}
 
+	/**
+	 * Block locator for sync: active-chain hashes from the tip back, one per block for the first
+	 * ten, then exponentially sparser, ending with genesis.
+	 */
+	public getBlockLocator(): string[] {
+		const hashes: string[] = [];
+		let step = 1;
+		for (let height = this.chain.length - 1; height > 0; height -= step) {
+			hashes.push(this.chain[height].hash);
+			if (hashes.length >= 10) step *= 2;
+		}
+		hashes.push(this.chain[0].hash);
+		return hashes;
+	}
+
+	/**
+	 * Active-chain blocks after the first locator hash found on the active chain (genesis if
+	 * none), at most `max`.
+	 */
+	public getBlocksAfter(locator: string[], max: number): Block[] {
+		let start = 1;
+		for (const hash of locator) {
+			const entry = this._index.get(hash);
+			if (entry && this._isActive(entry)) {
+				start = entry.height + 1;
+				break;
+			}
+		}
+		return this.chain.slice(start, start + max);
+	}
+
 	/** Add a block (mined, staked or received): extends the tip, a side branch, or reorganizes. */
 	public async addMinedBlock(block: Block): Promise<BlockOutcome> {
 		const release = await this._lock.acquire();

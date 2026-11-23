@@ -142,7 +142,7 @@ async function main(): Promise<void> {
 		await waitFor(nodeB, /Successfully connected to peer/, 'connecting to node A');
 		const [, syncedHeight, syncedTip] = await waitFor(
 			nodeB,
-			/Synced chain from peer: height (\d+), tip (\w+)/,
+			/Synced \d+ block\(s\) from peer: height (\d+), tip (\w+)/,
 			'sync',
 		);
 		assertMined(nodeA, syncedHeight, syncedTip);

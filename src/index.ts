@@ -50,7 +50,7 @@ const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH);
 
 
 // Start P2P server
-p2pServer.listen();
+void p2pServer.listen();
 
 // Load peers from peer data file
 let filePeers: string[] = [];

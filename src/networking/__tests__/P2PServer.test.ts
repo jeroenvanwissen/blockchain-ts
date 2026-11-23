@@ -1,4 +1,5 @@
-import { P2PServer, MessageType, isValidPeerAddress } from '../P2PServer.js';
+import { P2PServer, MessageType, isValidPeerAddress, type VersionPayload } from '../P2PServer.js';
+import { NETWORK_MAGIC, PROTOCOL_VERSION, HANDSHAKE_TIMEOUT } from '../../config.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
 import { Block } from '../../blockchain/Block.js';
 import { NULL_HASH, Transaction } from '../../blockchain/Transaction.js';
@@ -34,12 +35,21 @@ class MockWebSocket extends EventEmitter {
 	public url: string;
 	public readyState: number;
 	public send: jest.Mock;
+	public close: jest.Mock;
+	public terminate: jest.Mock;
 
 	constructor(url: string) {
 		super();
 		this.url = url;
 		this.readyState = WebSocket.OPEN;
 		this.send = jest.fn();
+		this.close = jest.fn();
+		this.terminate = jest.fn();
+	}
+
+	/** Messages this socket was asked to send, parsed. */
+	sent(): { type: string; data?: unknown }[] {
+		return this.send.mock.calls.map((call: [string]) => JSON.parse(call[0]) as { type: string; data?: unknown });
 	}
 }
 
@@ -53,6 +63,28 @@ describe('P2PServer', () => {
 	let p2pServer: P2PServer;
 	let mockSocket: MockWebSocket;
 	const peerDataPath = 'peers.json';
+
+	const peerVersion = (overrides: Partial<VersionPayload> = {}): string =>
+		JSON.stringify({
+			type: MessageType.VERSION,
+			data: {
+				magic: NETWORK_MAGIC,
+				version: PROTOCOL_VERSION,
+				genesisHash: blockchain.getChain()[0].hash,
+				height: 0,
+				tip: blockchain.getChain()[0].hash,
+				nonce: 'peer-nonce',
+				listenPort: 0,
+				...overrides,
+			},
+		});
+
+	/** Connect a mock socket and complete the VERSION/VERACK handshake from the peer's side. */
+	const connectReady = (socket: MockWebSocket): void => {
+		p2pServer['connectSocket'](socket as unknown as WebSocket);
+		socket.emit('message', peerVersion());
+		socket.emit('message', JSON.stringify({ type: MessageType.VERACK }));
+	};
 
 	beforeEach(() => {
 		blockchain = new Blockchain();
@@ -129,59 +161,6 @@ describe('P2PServer', () => {
 		addSpy.mockRestore();
 	});
 
-	it('should handle chain replacement correctly', async () => {
-		// Create a mock chain
-		const mockTransaction = new Transaction([], []);
-		const mockBlock1 = new Block(
-			Date.now(),
-			[mockTransaction],
-			NULL_HASH, // Genesis block previous hash
-			0,
-			undefined,
-			0
-		);
-		const mockBlock2 = new Block(
-			Date.now(),
-			[mockTransaction],
-			mockBlock1.hash,
-			0,
-			undefined,
-			1
-		);
-		const mockChain = [mockBlock1, mockBlock2];
-
-		// Mock blockchain methods with longer incoming chain
-		const getChainSpy = jest
-			.spyOn(blockchain, 'getChain')
-			.mockReturnValue([mockBlock1]);
-		const replaceChainSpy = jest
-			.spyOn(blockchain, 'replaceChain')
-			.mockResolvedValue(undefined);
-
-		await p2pServer['handleChainMessage'](mockChain);
-
-		// Verify replaceChain was called with the new blocks
-		expect(replaceChainSpy).toHaveBeenCalled();
-
-		// Cleanup
-		getChainSpy.mockRestore();
-		replaceChainSpy.mockRestore();
-	});
-
-	it('should handle errors during chain message processing', async () => {
-		const invalidChain = [{}] as Block[];
-		const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-		await p2pServer['handleChainMessage'](invalidChain);
-
-		expect(consoleSpy).toHaveBeenCalledWith(
-			'Error handling chain message:',
-			expect.any(Error)
-		);
-
-		consoleSpy.mockRestore();
-	});
-
 	// Fix the network disconnection test
 	it('should handle network disconnection', () => {
 		const reconnectSpy = jest
@@ -199,8 +178,10 @@ describe('P2PServer', () => {
 	it('should broadcast messages to all connected sockets', () => {
 		const mockSocket1 = new MockWebSocket('ws://peer1');
 		const mockSocket2 = new MockWebSocket('ws://peer2');
-
-		p2pServer['sockets'] = [mockSocket1, mockSocket2] as unknown as WebSocket[];
+		const notReady = new MockWebSocket('ws://peer3');
+		connectReady(mockSocket1);
+		connectReady(mockSocket2);
+		p2pServer['connectSocket'](notReady as unknown as WebSocket); // no handshake yet
 
 		const transaction = new Transaction([], []);
 		const message = {
@@ -216,6 +197,7 @@ describe('P2PServer', () => {
 		const sentMessage = JSON.stringify(message);
 		expect(mockSocket1.send).toHaveBeenCalledWith(sentMessage);
 		expect(mockSocket2.send).toHaveBeenCalledWith(sentMessage);
+		expect(notReady.send).not.toHaveBeenCalledWith(sentMessage);
 	});
 
 	// Add test for socket error handling with proper error event
@@ -383,7 +365,7 @@ describe('P2PServer', () => {
 			p2pServer['_knownPeers'].add('ws://known-peer:5001');
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
-			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			connectReady(mockSocket);
 
 			const sentMessages: { type: string; data?: string[] }[] = mockSocket.send.mock.calls.map(
 				(call: [string]) => JSON.parse(call[0]) as { type: string; data?: string[] }
@@ -399,7 +381,7 @@ describe('P2PServer', () => {
 			const noUrlSocket = new MockWebSocket('');
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
-			p2pServer['connectSocket'](noUrlSocket as unknown as WebSocket);
+			connectReady(noUrlSocket);
 
 			const sentMessages: { type: string }[] = noUrlSocket.send.mock.calls.map(
 				(call: [string]) => JSON.parse(call[0]) as { type: string }
@@ -423,7 +405,8 @@ describe('P2PServer', () => {
 		it('should broadcast peer list at configured interval', () => {
 			p2pServer['_knownPeers'].add('ws://peer1:5001');
 			const mockSocket1 = new MockWebSocket('ws://peer1:5001');
-			p2pServer['sockets'] = [mockSocket1] as unknown as WebSocket[];
+			connectReady(mockSocket1);
+			mockSocket1.send.mockClear();
 
 			p2pServer['_startPeerBroadcast']();
 			jest.advanceTimersByTime(60_000);
@@ -437,13 +420,14 @@ describe('P2PServer', () => {
 		});
 
 		it('should not broadcast when no known peers', () => {
-			const mockSocket1 = new MockWebSocket('ws://peer1:5001');
-			p2pServer['sockets'] = [mockSocket1] as unknown as WebSocket[];
+			const noUrlSocket = new MockWebSocket('');
+			connectReady(noUrlSocket);
+			noUrlSocket.send.mockClear();
 
 			p2pServer['_startPeerBroadcast']();
 			jest.advanceTimersByTime(60_000);
 
-			expect(mockSocket1.send).not.toHaveBeenCalled();
+			expect(noUrlSocket.send).not.toHaveBeenCalled();
 		});
 
 		it('should not start multiple broadcast intervals', () => {
@@ -460,7 +444,7 @@ describe('P2PServer', () => {
 			const handleSpy = jest.spyOn(p2pServer as any, '_handlePeersMessage');
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
-			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			connectReady(mockSocket);
 
 			const peersMsg = JSON.stringify({
 				type: MessageType.PEERS,
@@ -524,6 +508,110 @@ describe('P2PServer', () => {
 			p2pServer.connectToPeers(['ws://remote:5002']);
 			expect(p2pServer.getKnownPeers()).toContain('ws://remote:5002');
 			expect(p2pServer['connectedPeers'].has('ws://remote:5002')).toBe(true);
+		});
+	});
+	describe('handshake', () => {
+		it('should send VERSION on connect and VERACK after a valid VERSION', () => {
+			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			expect(mockSocket.sent()[0]).toMatchObject({
+				type: MessageType.VERSION,
+				data: { magic: NETWORK_MAGIC, genesisHash: blockchain.getChain()[0].hash },
+			});
+
+			mockSocket.emit('message', peerVersion());
+			expect(mockSocket.sent().map((m) => m.type)).toContain(MessageType.VERACK);
+			expect(p2pServer['_isReady'](mockSocket as unknown as WebSocket)).toBe(false); // no VERACK yet
+			mockSocket.emit('message', JSON.stringify({ type: MessageType.VERACK }));
+			expect(p2pServer['_isReady'](mockSocket as unknown as WebSocket)).toBe(true);
+		});
+
+		it.each([
+			['a different genesis', { genesisHash: 'ab'.repeat(32) }],
+			['a different network', { magic: 'other-net' }],
+			['another protocol version', { version: PROTOCOL_VERSION + 1 }],
+			['a malformed VERSION', { tip: 'not-a-hash' }],
+		])('should disconnect a peer with %s', (_what, overrides) => {
+			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			mockSocket.emit('message', peerVersion(overrides as Partial<VersionPayload>));
+			expect(mockSocket.close).toHaveBeenCalled();
+			expect(mockSocket.sent().map((m) => m.type)).not.toContain(MessageType.VERACK);
+		});
+
+		it('should detect a connection to itself and stop dialling that address', () => {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const reconnectSpy = jest.spyOn(p2pServer as any, 'reconnectToPeer').mockImplementation();
+			const selfSocket = new MockWebSocket('ws://my-lan-ip:5001');
+			p2pServer['connectSocket'](selfSocket as unknown as WebSocket);
+			selfSocket.emit('message', peerVersion({ nonce: p2pServer['_nonce'] }));
+			selfSocket.emit('close');
+
+			expect(selfSocket.close).toHaveBeenCalled();
+			expect(p2pServer['_ownAddresses'].has('ws://my-lan-ip:5001')).toBe(true);
+			expect(p2pServer.getKnownPeers()).not.toContain('ws://my-lan-ip:5001');
+			expect(reconnectSpy).not.toHaveBeenCalled();
+			reconnectSpy.mockRestore();
+		});
+
+		it('should ignore other messages before the handshake completes', () => {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const handleSpy = jest.spyOn(p2pServer as any, '_handlePeersMessage');
+			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			mockSocket.emit('message', JSON.stringify({ type: MessageType.PEERS, data: ['ws://x:1'] }));
+			expect(handleSpy).not.toHaveBeenCalled();
+		});
+
+		it('should drop a peer that does not complete the handshake in time', () => {
+			jest.useFakeTimers();
+			try {
+				p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+				jest.advanceTimersByTime(HANDSHAKE_TIMEOUT + 1);
+				expect(mockSocket.close).toHaveBeenCalled();
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+	});
+
+	describe('block sync', () => {
+		it('should request blocks when the peer has a tip we do not know', () => {
+			p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
+			mockSocket.emit('message', peerVersion({ height: 5, tip: 'cd'.repeat(32) }));
+			mockSocket.emit('message', JSON.stringify({ type: MessageType.VERACK }));
+
+			const request = mockSocket.sent().find((m) => m.type === (MessageType.GET_BLOCKS as string));
+			expect(request?.data).toEqual({ locator: [blockchain.getChain()[0].hash] });
+		});
+
+		it('should answer GET_BLOCKS and ignore malformed requests', () => {
+			connectReady(mockSocket);
+			mockSocket.send.mockClear();
+			for (const locator of ['nope', ['zz'], new Array(65).fill('ab'.repeat(32))]) {
+				mockSocket.emit('message', JSON.stringify({ type: MessageType.GET_BLOCKS, data: { locator } }));
+			}
+			expect(mockSocket.send).not.toHaveBeenCalled();
+
+			mockSocket.emit(
+				'message',
+				JSON.stringify({ type: MessageType.GET_BLOCKS, data: { locator: [blockchain.getChain()[0].hash] } }),
+			);
+			expect(mockSocket.sent()).toEqual([{ type: MessageType.BLOCKS, data: { blocks: [], more: false } }]);
+		});
+
+		it('should ignore malformed BLOCKS, BLOCK and TRANSACTION payloads', async () => {
+			connectReady(mockSocket);
+			const addSpy = jest.spyOn(blockchain, 'addMinedBlock');
+			for (const message of [
+				{ type: MessageType.BLOCKS, data: 'nope' },
+				{ type: MessageType.BLOCKS, data: { blocks: [{ junk: true }], more: true } },
+				{ type: MessageType.BLOCK, data: { index: 'x' } },
+				{ type: MessageType.TRANSACTION, data: [] },
+				{ type: 'UNKNOWN', data: 1 },
+				42,
+			]) {
+				mockSocket.emit('message', JSON.stringify(message));
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(addSpy).not.toHaveBeenCalled();
 		});
 	});
 });

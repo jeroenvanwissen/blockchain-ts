@@ -45,6 +45,14 @@ export const P2P_PORT = process.env.P2P_PORT
 	? parseInt(process.env.P2P_PORT)
 	: DEFAULT_P2P_PORT;
 
+// Peer protocol (TASK-0013)
+export const NETWORK_MAGIC = 'blockchain-ts/devnet'; // peers on another network are dropped
+export const PROTOCOL_VERSION = 1;
+export const HANDSHAKE_TIMEOUT = 10_000; // ms to complete VERSION/VERACK before disconnecting
+export const SYNC_BATCH_SIZE = 200; // max blocks per BLOCKS reply
+export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS locator
+export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024; // larger WebSocket messages close the socket
+
 // Peer discovery
 export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
 export const MAX_KNOWN_PEERS = 128; // Maximum number of peer addresses to track
