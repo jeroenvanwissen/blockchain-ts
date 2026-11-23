@@ -345,7 +345,7 @@ export class Blockchain {
 					}
 				}
 			} catch (error) {
-				throw new Error(`transaction ${t}: ${(error as Error).message}`);
+				throw new Error(`transaction ${t}: ${(error as Error).message}`, { cause: error });
 			}
 			const txHash = tx.calculateHash();
 			const isCoinstake = t === 1 && block.isProofOfStake();
@@ -437,7 +437,7 @@ export class Blockchain {
 		) {
 			throw new Error('kernel input public key does not own the stake');
 		}
-		let isSigned = false;
+		let isSigned: boolean;
 		try {
 			isSigned =
 				/^[0-9a-f]{128}$/.test(block.signature) &&
@@ -447,7 +447,7 @@ export class Blockchain {
 					Buffer.from(publicKey, 'hex'),
 				);
 		} catch {
-			isSigned = false;
+			isSigned = false; // malformed signature or key bytes
 		}
 		if (!isSigned) {
 			throw new Error('invalid block signature');
@@ -642,7 +642,7 @@ export class Blockchain {
 			for (let i = 0; i < connected; i++) this._disconnectTip();
 			for (const block of disconnected) this._connectTip(block); // known valid
 			const reason = (error as Error).message;
-			throw new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`);
+			throw new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`, { cause: error });
 		}
 
 		log.info(
@@ -1231,7 +1231,7 @@ export class Blockchain {
 					if (known) continue;
 					this._acceptBlock(block);
 				} catch (error) {
-					throw new Error(`Invalid chain: block ${i}: ${(error as Error).message}`);
+					throw new Error(`Invalid chain: block ${i}: ${(error as Error).message}`, { cause: error });
 				}
 			}
 		} finally {

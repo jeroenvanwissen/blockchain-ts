@@ -29,7 +29,7 @@ Run npm scripts from the repository root.
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
 - Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 10 s; `-- --keep` keeps the temp dir)
 - End-to-end: `npm run e2e` (three `--regtest` node processes plus an in-process harness peer: payment, PoW→PoS, both A and C staking, partition and reorg, restart, convergence; about 2 minutes; prints each node's tip and last log lines on failure). Run it for changes to consensus, P2P or staking
-- Lint: `npm run lint` (must pass; ignores the generated `dist/` and `coverage/`)
+- Lint: `npm run lint` (must pass). ESLint 10 flat config in `eslint.config.js`: type-aware typescript-eslint rules on `.ts`, Jest rules on tests, base rules on `.cjs`; ignores the generated `dist/` and `coverage/`
 - Standard check: `npm run check` (build, test, lint)
 - Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. `--regtest` selects the regression-test network (own network id, 20 PoW blocks, no minimum stake age). `--reindex` ignores the saved chainstate and validates every stored block. Port comes from the `P2P_PORT` env var (default 5001). The HTTP API listens on `API_HOST` (default `127.0.0.1`) and `API_PORT` (default P2P port + 1000; `0` picks a free port and logs it). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 

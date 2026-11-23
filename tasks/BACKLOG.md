@@ -71,6 +71,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0033](TASK-0033-ci.md) | CI: check, smoke and e2e on every push and pull request | done | P2 | small | TASK-0021 | F-030 |
 | [TASK-0034](TASK-0034-dependency-security.md) | Security updates for runtime dependencies (protobufjs, ws) | done | P1 | small | none | npm audit, GitHub Dependabot alerts |
 | [TASK-0035](TASK-0035-typescript-6.md) | TypeScript 6.0; hold back TypeScript 7 (Dependabot PR #113) | done | P2 | small | none | Dependabot PR #113 |
+| [TASK-0036](TASK-0036-eslint-10.md) | ESLint 10 with a flat config (ESLint 8 is unsupported) | done | P2 | small | TASK-0021 | Dependabot PR #119 |
 | [TASK-0030](TASK-0030-request-limits.md) | Throttle block requests; persist bans | done | P3 | small | TASK-0020 | F-026, F-027 |
 | [TASK-0031](TASK-0031-tx-index.md) | Transaction index | done | P3 | small | TASK-0016 | F-028 |
 | [TASK-0032](TASK-0032-change-passphrase.md) | Change the wallet passphrase | done | P3 | small | TASK-0024 | F-029 |

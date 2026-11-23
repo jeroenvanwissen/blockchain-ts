@@ -26,18 +26,19 @@
 	},
 	"homepage": "https://github.com/jeroenvanwissen/blockchain-ts#readme",
 	"devDependencies": {
+		"@eslint/js": "^10.0.1",
 		"@types/jest": "^30.0.0",
 		"@types/node": "^26.6.6",
 		"@types/secp256k1": "^4.0.7",
 		"@types/ws": "^8.18.2",
-		"@typescript-eslint/eslint-plugin": "^8.73.0",
-		"@typescript-eslint/parser": "^8.73.0",
-		"eslint": "^8.57.1",
+		"eslint": "^10.15.0",
 		"eslint-plugin-jest": "^29.17.1",
+		"globals": "^17.14.0",
 		"jest": "^30.5.2",
 		"ts-jest": "^29.4.15",
 		"tsx": "^4.23.15",
-		"typescript": "~6.0.3"
+		"typescript": "~6.0.3",
+		"typescript-eslint": "^8.74.0"
 	},
 	"dependencies": {
 		"async-mutex": "^0.5.0",
