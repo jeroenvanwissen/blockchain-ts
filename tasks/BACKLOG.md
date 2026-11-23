@@ -74,7 +74,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes (expand into task files when picked up):
 
-- **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.
+- **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise. Measured 2026-11-23: reopening a 2,011-block chain with 2,000 transactions takes 579 ms (about 0.29 ms per block), so startup reaches about 30 s at 100,000 blocks. Deferred until chains approach that size; a snapshot adds state that must never drift from the blocks.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 
