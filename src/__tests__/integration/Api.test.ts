@@ -133,7 +133,7 @@ describe('HTTP API', () => {
 			address: recipient.address,
 			amount: COIN.toString(),
 		});
-		expect((await get('/mempool')).body).toEqual({ size: 1, txids: [txid] });
+		expect((await get('/mempool')).body).toEqual({ size: 1, bytes: payment.size(), txids: [txid] });
 
 		await buildBlocks(chain, miner.address, 1);
 
@@ -144,7 +144,7 @@ describe('HTTP API', () => {
 			height: chain.getLatestBlock().index,
 			confirmations: 1,
 		});
-		expect((await get('/mempool')).body).toEqual({ size: 0, txids: [] });
+		expect((await get('/mempool')).body).toEqual({ size: 0, bytes: 0, txids: [] });
 	});
 
 	it('should report balances and outputs, separating immature coinbases', async () => {

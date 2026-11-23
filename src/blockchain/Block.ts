@@ -95,6 +95,12 @@ export class Block {
 		return Block.hashHeader(this.headerPrefix(), this.nonce);
 	}
 
+	/** Serialized size in bytes: header, PoS signature and transactions (MAX_BLOCK_SIZE applies). */
+	size(): number {
+		const header = this.headerPrefix().length + 4; // + nonce
+		return header + this.signature.length / 2 + this.transactions.reduce((sum, tx) => sum + tx.size(), 0);
+	}
+
 	target(): bigint {
 		return bitsToTarget(this.bits);
 	}

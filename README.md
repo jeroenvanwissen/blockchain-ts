@@ -19,7 +19,8 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- the mempool has no size limit, fee-rate ordering or conflict eviction (TASK-0019).
+- no caps on peer connections and no bans for misbehaving peers (TASK-0020);
+- wallet keys are stored unencrypted (TASK-0024).
 
 Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api).
 
@@ -153,6 +154,9 @@ Key constants in `src/config.ts`:
 | `POS_BLOCK_REWARD`              | 10 coins | Staking reward per block (PoS)                |
 | `COIN_MATURITY`                 | 10      | Blocks before coinbase/coinstake outputs are spendable |
 | `MIN_RELAY_FEE_PER_KB`          | 0.0001 coin | Minimum fee per 1000 bytes the mempool accepts and the wallet pays |
+| `MAX_BLOCK_SIZE`                | 1 MB    | Largest valid block (header, signature, transactions) |
+| `MAX_BLOCK_TRANSACTIONS`        | 1000    | Most transactions per block, coinbase included |
+| `MAX_MEMPOOL_BYTES`             | 8 MB    | Pending transactions beyond this evict the lowest fee rates |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
 | `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
@@ -272,7 +276,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations; `block: null` while in the mempool. Scans the chain (no transaction index yet) |
 | `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs |
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
-| `GET /mempool` | Pending txids |
+| `GET /mempool` | Number and total size of pending transactions, and their txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
 | `GET /wallet` | The node wallet's address, balance, spendable balance and number of outputs (token required) |
 | `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}` (token required) |

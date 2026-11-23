@@ -275,7 +275,7 @@ export class ApiServer {
 
 	private _mempool() {
 		const txids = this._blockchain.getPendingTransactions().map((tx) => tx.calculateHash());
-		return { size: txids.length, txids };
+		return { size: txids.length, bytes: this._blockchain.getMempoolBytes(), txids };
 	}
 
 	private _checkAddress(address: string): void {

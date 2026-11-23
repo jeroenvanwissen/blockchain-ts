@@ -7,6 +7,7 @@ import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
+import { Mempool } from './Mempool.js';
 import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import {
 	GENESIS_STAKE_MODIFIER,
@@ -24,7 +25,10 @@ import {
 	BLOCK_TIME,
 	GENESIS_TIMESTAMP,
 	MEDIAN_TIME_SPAN,
+	BLOCK_RESERVED_BYTES,
+	MAX_BLOCK_SIZE,
 	MAX_BLOCK_TRANSACTIONS,
+	MAX_MEMPOOL_BYTES,
 	MAX_FUTURE_BLOCK_TIME,
 	MAX_TRANSACTION_INPUTS,
 	MAX_TRANSACTION_OUTPUTS,
@@ -45,6 +49,8 @@ export interface BlockchainOptions {
 	blocksDir?: string;
 	/** Mempool and wallet minimum fee in base units per 1000 bytes (default MIN_RELAY_FEE_PER_KB) */
 	minRelayFeePerKb?: bigint;
+	/** Mempool size limit in bytes (default MAX_MEMPOOL_BYTES) */
+	maxMempoolBytes?: number;
 }
 
 /** What happened to a block passed to addMinedBlock. */
@@ -73,8 +79,7 @@ export class Blockchain {
 	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
 	private _index = new Map<string, IndexEntry>(); // every known block, by hash
 	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
-	private _pendingUTXOSpends: Set<string> = new Set();
-	private pendingTransactions: Transaction[];
+	private _mempool!: Mempool;
 	private lastBlockTime: number = Date.now();
 	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
@@ -88,13 +93,14 @@ export class Blockchain {
 			powCutoffBlock: POW_CUTOFF_BLOCK,
 			blocksDir: BLOCKS_DIR,
 			minRelayFeePerKb: MIN_RELAY_FEE_PER_KB,
+			maxMempoolBytes: MAX_MEMPOOL_BYTES,
 			...options,
 		};
 		this.blockStore = new BlockStore(this._options.blocksDir);
 		const genesisBlock = this.createGenesisBlock();
 		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
 		this.chain = [genesisBlock];
-		this.pendingTransactions = [];
+		this._mempool = new Mempool(this._options.maxMempoolBytes);
 
 		// Initialize UTXO set and block index with the genesis block
 		this._utxos.addOutputs(genesisBlock.transactions[0], 0);
@@ -135,7 +141,7 @@ export class Blockchain {
 		const height = this.chain.length;
 		return this.getUTXOs(address).filter(
 			(utxo) =>
-				!this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex)) &&
+				!this._mempool.isSpent(utxo.txHash, utxo.outputIndex) &&
 				this._isMature(utxo, height),
 		);
 	}
@@ -219,6 +225,9 @@ export class Blockchain {
 		// Structure and linkage (cheap checks first)
 		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 			throw new Error('block exceeds maximum transaction count');
+		}
+		if (block.size() > MAX_BLOCK_SIZE) {
+			throw new Error(`block exceeds maximum size of ${MAX_BLOCK_SIZE} bytes`);
 		}
 		if (block.index !== height) {
 			throw new Error(`incorrect block index: expected ${height}, got ${block.index}`);
@@ -492,9 +501,8 @@ export class Blockchain {
 
 	/** Re-check pending transactions (plus `extra`, e.g. from disconnected blocks) against the tip. */
 	private _readmitTransactions(extra: Transaction[] = []): void {
-		const candidates = [...extra, ...this.pendingTransactions];
-		this.pendingTransactions = [];
-		this._pendingUTXOSpends.clear();
+		const candidates = [...extra, ...this._mempool.transactions()];
+		this._mempool.clear();
 		for (const tx of candidates) {
 			if (tx.isCoinbase() || tx.isCoinStake()) continue;
 			try {
@@ -548,6 +556,9 @@ export class Blockchain {
 		const height = parent.height + 1;
 		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 			throw new Error('block exceeds maximum transaction count');
+		}
+		if (block.size() > MAX_BLOCK_SIZE) {
+			throw new Error(`block exceeds maximum size of ${MAX_BLOCK_SIZE} bytes`);
 		}
 		if (block.isProofOfWork() ? height > this._options.powCutoffBlock : height <= this._options.powCutoffBlock) {
 			throw new Error('wrong consensus type for this height');
@@ -639,8 +650,8 @@ export class Blockchain {
 	 * Scans the chain from the tip: there is no transaction index yet.
 	 */
 	public findTransaction(txid: string): { transaction: Transaction; block: Block | null } | undefined {
-		const pending = this.pendingTransactions.find((tx) => tx.calculateHash() === txid);
-		if (pending) return { transaction: pending, block: null };
+		const pending = this._mempool.get(txid);
+		if (pending) return { transaction: pending.transaction, block: null };
 		for (let height = this.chain.length - 1; height >= 0; height--) {
 			const block = this.chain[height];
 			const transaction = block.transactions.find((tx) => tx.calculateHash() === txid);
@@ -691,8 +702,7 @@ export class Blockchain {
 	}
 
 	private _clearPendingTransactionsInternal(): void {
-		this.pendingTransactions = [];
-		this._pendingUTXOSpends.clear();
+		this._mempool.clear();
 	}
 
 	public async clearPendingTransactions(): Promise<void> {
@@ -810,25 +820,28 @@ export class Blockchain {
 		return requiredBits(this.chain, this.chain.length, proofOfStake);
 	}
 
-	/** Fees of the pending transactions (their inputs are confirmed outputs, checked at admission). */
-	private _pendingFees(): bigint {
-		const lookup = (txHash: string, outputIndex: number) => this._utxos.get(txHash, outputIndex);
-		return this.pendingTransactions.reduce(
-			(total, tx) => total + this._checkInputs(tx, lookup, this.chain.length),
-			0n,
-		);
+	/**
+	 * Pending transactions for a new block, highest fee rate first, within the block limits
+	 * (`slots` transactions are taken by the coinbase and, for PoS, the coinstake).
+	 */
+	private _selectForBlock(slots: number): { transactions: Transaction[]; fees: bigint } {
+		const chosen = this._mempool.select(MAX_BLOCK_TRANSACTIONS - slots, MAX_BLOCK_SIZE - BLOCK_RESERVED_BYTES);
+		return {
+			transactions: chosen.map((entry) => entry.transaction),
+			fees: chosen.reduce((total, entry) => total + entry.fee, 0n),
+		};
 	}
 
 	/**
-	 * Unsolved PoW block on the current tip: pending transactions plus a coinbase to
-	 * `rewardAddress` for the reward and their fees.
+	 * Unsolved PoW block on the current tip: the best-paying pending transactions that fit,
+	 * plus a coinbase to `rewardAddress` for the reward and their fees.
 	 */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
-		const reward = POW_BLOCK_REWARD + this._pendingFees();
-		const coinbase = Transaction.coinbase(rewardAddress, reward, this.chain.length, timestamp);
+		const { transactions, fees } = this._selectForBlock(1);
+		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD + fees, this.chain.length, timestamp);
 		return new Block(
 			timestamp,
-			[coinbase, ...this.pendingTransactions],
+			[coinbase, ...transactions],
 			this.getLatestBlock().hash,
 			0,
 			this.getRequiredBits(false),
@@ -865,7 +878,7 @@ export class Blockchain {
 		const modifier = this._modifiers[height - 1];
 
 		for (const utxo of this.getUTXOs(wallet.address)) {
-			if (this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex))) continue;
+			if (this._mempool.isSpent(utxo.txHash, utxo.outputIndex)) continue;
 			if (!this._isMature(utxo, height)) continue;
 			if (height - utxo.blockIndex < STAKE_MIN_CONFIRMATIONS) continue;
 			if (timestamp - utxo.txTimestamp < this._options.minStakeAge * 1000) continue;
@@ -881,13 +894,10 @@ export class Blockchain {
 				timestamp,
 			);
 			wallet.signTransaction(coinstake);
+			const { transactions, fees } = this._selectForBlock(2);
 			const block = new Block(
 				timestamp,
-				[
-					Transaction.coinbase(wallet.address, POS_BLOCK_REWARD + this._pendingFees(), height, timestamp),
-					coinstake,
-					...this.pendingTransactions,
-				],
+				[Transaction.coinbase(wallet.address, POS_BLOCK_REWARD + fees, height, timestamp), coinstake, ...transactions],
 				this.getLatestBlock().hash,
 				0,
 				bits,
@@ -945,16 +955,9 @@ export class Blockchain {
 			throw new Error(`fee ${fee} is below the minimum relay fee ${minimum} for ${transaction.size()} bytes`);
 		}
 
-		for (const input of transaction.inputs) {
-			if (this._pendingUTXOSpends.has(outpointKey(input.previousTx, input.outputIndex))) {
-				throw new Error('utxo already spent by pending transaction');
-			}
-		}
-		for (const input of transaction.inputs) {
-			this._pendingUTXOSpends.add(outpointKey(input.previousTx, input.outputIndex));
-		}
-
-		this.pendingTransactions.push(transaction);
+		// Conflicts, duplicates and the size limit (may evict lower fee rates)
+		const evicted = this._mempool.add({ transaction, txid: transaction.calculateHash(), fee, size: transaction.size() });
+		if (evicted.length > 0) console.log(`[Mempool] evicted ${evicted.length} lower-fee transaction(s)`);
 	}
 
 	async addTransaction(transaction: Transaction): Promise<void> {
@@ -980,8 +983,13 @@ export class Blockchain {
 		return this.chain;
 	}
 
+	/** Serialized size of all pending transactions (bounded by maxMempoolBytes). */
+	getMempoolBytes(): number {
+		return this._mempool.bytes;
+	}
+
 	getPendingTransactions(): Transaction[] {
-		return [...this.pendingTransactions];
+		return this._mempool.transactions();
 	}
 
 	private loadBlockchain(): void {
