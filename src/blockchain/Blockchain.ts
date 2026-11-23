@@ -668,26 +668,6 @@ export class Blockchain {
 		return this.chain[this.chain.length - 1];
 	}
 
-	getTotalBalance(address: string): bigint {
-		const confirmed = new Map<string, Transaction>();
-		let balance = 0n;
-		for (const block of this.chain) {
-			for (const trans of block.transactions) {
-				confirmed.set(trans.calculateHash(), trans);
-				// Coins spent (a coinbase input spends nothing)
-				for (const input of trans.isCoinbase() ? [] : trans.inputs) {
-					const prevOutput = confirmed.get(input.previousTx)?.outputs[input.outputIndex];
-					if (prevOutput?.address === address) balance -= prevOutput.amount;
-				}
-				// Coins received
-				for (const output of trans.outputs) {
-					if (output.address === address) balance += output.amount;
-				}
-			}
-		}
-		return balance;
-	}
-
 	public getBalance(address: string): bigint {
 		return this.getUTXOs(address).reduce((sum, utxo) => sum + utxo.output.amount, 0n);
 	}
