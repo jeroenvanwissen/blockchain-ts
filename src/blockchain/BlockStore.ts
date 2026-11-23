@@ -204,10 +204,11 @@ export class BlockStore {
 
 	private _deserializeBlock(buffer: Buffer): Block {
 		const SerializedBlock = getBlockProto();
-		const decoded = SerializedBlock.decode(buffer as Uint8Array);
+		const decoded = SerializedBlock.decode(buffer);
 		// arrays: true — proto3 omits empty repeated fields on decode
-		// longs: String — amounts are uint64 and must not pass through a JS number
-		const data = SerializedBlock.toObject(decoded, { longs: String, arrays: true }) as {
+		// longs: String — amounts are uint64 and must not pass through a JS number.
+		// defaults: proto3 omits zero values (nonce 0, height 0, ...) from the encoding
+		const data = SerializedBlock.toObject(decoded, { longs: String, arrays: true, defaults: true }) as {
 			timestamp: string;
 			transactions: {
 				version: number;
@@ -276,8 +277,9 @@ export class BlockStore {
 			if (!fileBuffer || fileBuffer.length === 0) return;
 
 			const IndexType = getIndexProto();
-			const decoded = IndexType.decode(fileBuffer as Uint8Array);
-			const obj = IndexType.toObject(decoded, { longs: Number, arrays: true }) as {
+			const decoded = IndexType.decode(fileBuffer);
+			// defaults: proto3 omits zero values (file number 0, height 0, ...) from the encoding
+			const obj = IndexType.toObject(decoded, { longs: Number, arrays: true, defaults: true }) as {
 				entries: IndexEntry[];
 				currentFileNumber: number;
 				currentFileSize: number;

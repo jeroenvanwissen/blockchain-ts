@@ -61,8 +61,8 @@ export interface UnlockOptions {
 
 function decodeWalletData(buffer: Buffer): StoredWalletData {
 	const WalletDataType = getWalletProto();
-	const decoded = WalletDataType.decode(buffer as Uint8Array);
-	return WalletDataType.toObject(decoded) as StoredWalletData;
+	const decoded = WalletDataType.decode(buffer);
+	return WalletDataType.toObject(decoded);
 }
 
 let _walletProtoRoot: protobuf.Root | null = null;
@@ -282,7 +282,7 @@ export class Wallet {
 	private loadWallet(): void {
 		let fileBuffer: Buffer;
 		try {
-			fileBuffer = fs.readFileSync(this.walletPath) as Buffer;
+			fileBuffer = fs.readFileSync(this.walletPath);
 		} catch (error) {
 			log.error('failed to read wallet file:', error);
 			log.warn('generating new wallet');
@@ -421,7 +421,7 @@ export class Wallet {
 	static importWallet(importPath: string, targetPath?: string): Wallet {
 		let importedData: StoredWalletData;
 		try {
-			importedData = decodeWalletData(fs.readFileSync(importPath) as Buffer);
+			importedData = decodeWalletData(fs.readFileSync(importPath));
 		} catch {
 			throw new Error('failed to read or parse import file');
 		}

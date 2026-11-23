@@ -371,7 +371,7 @@ export class P2PServer {
 			if (url && !state.isSelf && !this._isClosing) this.reconnectToPeer(this.normalizePeerUrl(url));
 		});
 
-		this.logPeerConnection(socket as unknown as WebSocket);
+		this.logPeerConnection(socket);
 		this.messageHandler(socket);
 		this._send(socket, { type: MessageType.VERSION, data: this._versionPayload() });
 	}
