@@ -92,7 +92,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0041](TASK-0041-wallet-addresses.md) | HD wallet: any number of addresses from one seed | done | P2 | large | TASK-0024 | owner request |
 | [TASK-0042](TASK-0042-block-explorer.md) | Block explorer page served by the node | done | P2 | medium | TASK-0016 | owner request |
 | [TASK-0043](TASK-0043-docker.md) | Docker image and compose file | done | P2 | medium | TASK-0037 | owner request |
-| [TASK-0044](TASK-0044-one-connection-per-node.md) | One connection per peer node, whatever address reaches it | pending | P2 | small | TASK-0039 | found in TASK-0043 |
+| [TASK-0044](TASK-0044-one-connection-per-node.md) | One connection per peer node, whatever address reaches it | done | P2 | small | TASK-0039 | found in TASK-0043 |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

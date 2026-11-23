@@ -65,6 +65,7 @@ interface PeerState {
 	versionReceived: boolean;
 	verackReceived: boolean;
 	isSelf: boolean;
+	isDuplicate: boolean; // a second connection to a node we're connected to; being closed
 	version?: VersionPayload; // the peer's VERSION, kept until its VERACK arrives
 	remoteAddress?: string; // inbound connections: the peer's IP
 	handshakeTimer: NodeJS.Timeout | null;
@@ -130,6 +131,7 @@ export class P2PServer {
 	private _peerBroadcastInterval: NodeJS.Timeout | null = null;
 	private readonly _peerState = new Map<WebSocket, PeerState>();
 	private readonly _nonce = crypto.randomBytes(8).toString('hex');
+	private readonly _aliases = new Map<string, string>(); // address → nonce of the node it reached, after a duplicate
 	private _server: WebSocketServer | null = null;
 	private _isClosing = false;
 	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
@@ -264,8 +266,47 @@ export class P2PServer {
 			this._addresses.has(url) &&
 			!this._ownAddresses.has(url) &&
 			!this.isBanned(url) &&
+			!this._reachesConnectedNode(url) &&
 			this._countPeers(false) < MAX_OUTBOUND_PEERS
 		);
+	}
+
+	/** Whether `url` is known to reach a node we're already connected to (under another address). */
+	private _reachesConnectedNode(url: string): boolean {
+		const nonce = this._aliases.get(url);
+		if (nonce === undefined) return false;
+		if (this._readyPeerWithNonce(nonce)) return true;
+		this._aliases.delete(url); // that node left (or restarted with a new nonce)
+		return false;
+	}
+
+	private _readyPeerWithNonce(nonce: string, except?: WebSocket): WebSocket | undefined {
+		return this.sockets.find((s) => s !== except && this._isReady(s) && this._peerState.get(s)?.version?.nonce === nonce);
+	}
+
+	/**
+	 * One connection per node (TASK-0044). A node can be reachable under several addresses (a
+	 * hostname and an IP), and two nodes may dial each other. When a second connection to a node
+	 * (same VERSION nonce) completes its handshake, only a dialing side closes one, so both ends
+	 * agree on the survivor: a node that dialed another twice closes its newer dial; when two
+	 * nodes dialed each other, the one with the higher nonce closes its dial. The closed address
+	 * isn't redialed while that node stays connected. Returns true if `socket` was closed.
+	 */
+	private _dropDuplicate(socket: WebSocket, nonce: string): boolean {
+		const other = this._readyPeerWithNonce(nonce, socket);
+		if (!other) return false;
+		const outbound = !!(socket as unknown as { url?: string }).url;
+		const otherOutbound = !!(other as unknown as { url?: string }).url;
+		let drop: WebSocket | undefined;
+		if (outbound && otherOutbound) drop = socket;
+		else if (outbound !== otherOutbound && this._nonce > nonce) drop = outbound ? socket : other;
+		if (!drop) return false; // the other node closes one
+		const url = this.normalizePeerUrl((drop as unknown as { url: string }).url);
+		this._peerState.get(drop)!.isDuplicate = true;
+		this._aliases.set(url, nonce);
+		log.info(`Disconnecting peer: already connected to this node (${url})`);
+		drop.close();
+		return drop === socket;
 	}
 
 	/** Open an outbound connection; `onFail` runs if it never opens. */
@@ -360,6 +401,7 @@ export class P2PServer {
 			versionReceived: false,
 			verackReceived: false,
 			isSelf: false,
+			isDuplicate: false,
 			remoteAddress,
 			handshakeTimer: setTimeout(() => {
 				if (!this._isReady(socket)) {
@@ -382,7 +424,7 @@ export class P2PServer {
 		socket.on('close', () => {
 			this._forget(socket);
 			const url = (socket as unknown as { url?: string }).url;
-			if (url && !state.isSelf && !this._isClosing) this.reconnectToPeer(this.normalizePeerUrl(url));
+			if (url && !state.isSelf && !state.isDuplicate && !this._isClosing) this.reconnectToPeer(this.normalizePeerUrl(url));
 		});
 
 		this.logPeerConnection(socket);
@@ -400,7 +442,7 @@ export class P2PServer {
 
 	private _isReady(socket: WebSocket): boolean {
 		const state = this._peerState.get(socket);
-		return !!state && state.versionReceived && state.verackReceived && !state.isSelf;
+		return !!state && state.versionReceived && state.verackReceived && !state.isSelf && !state.isDuplicate;
 	}
 
 	private _versionPayload(): VersionPayload {
@@ -570,6 +612,7 @@ export class P2PServer {
 			this._addresses.markSuccess(this.normalizePeerUrl(dialed), Date.now());
 			this._persistPeers();
 		}
+		if (this._dropDuplicate(socket, version.nonce)) return;
 		this._sendPeerList(socket);
 		if (!this.blockchain.hasBlock(version.tip)) this._requestBlocks(socket);
 	}

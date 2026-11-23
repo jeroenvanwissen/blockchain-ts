@@ -79,10 +79,13 @@ describe('P2PServer', () => {
 			},
 		});
 
-	/** Connect a mock socket and complete the VERSION/VERACK handshake from the peer's side. */
+	/**
+	 * Connect a mock socket and complete the VERSION/VERACK handshake from the peer's side. Each
+	 * socket is a different node (its own nonce): one node twice would be a duplicate (TASK-0044).
+	 */
 	const connectReady = (socket: MockWebSocket): void => {
 		p2pServer['connectSocket'](socket as unknown as WebSocket);
-		socket.emit('message', peerVersion());
+		socket.emit('message', peerVersion({ nonce: `peer-nonce:${socket.url}` }));
 		socket.emit('message', JSON.stringify({ type: MessageType.VERACK }));
 	};
 
