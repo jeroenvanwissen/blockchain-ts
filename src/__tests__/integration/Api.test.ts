@@ -314,6 +314,14 @@ describe('HTTP API', () => {
 
 			expect((await post('/wallet/lock', {})).body).toMatchObject({ locked: true });
 			expect((await send(payment)).status).toBe(423);
+
+			// Change the passphrase: wrong current 403, weak new 400, then only the new one unlocks
+			expect((await post('/wallet/passphrase', { passphrase: 'nope nope nope', newPassphrase: 'fresh passphrase' })).status).toBe(403);
+			expect((await post('/wallet/passphrase', { passphrase, newPassphrase: 'short' })).status).toBe(400);
+			expect((await post('/wallet/passphrase', { passphrase })).status).toBe(400);
+			expect((await post('/wallet/passphrase', { passphrase, newPassphrase: 'fresh passphrase' })).status).toBe(200);
+			expect((await post('/wallet/unlock', { passphrase })).status).toBe(403);
+			expect((await post('/wallet/unlock', { passphrase: 'fresh passphrase' })).status).toBe(200);
 		});
 
 		it('should refuse wallet routes to clients on other machines, even with the token', async () => {

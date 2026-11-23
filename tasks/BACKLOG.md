@@ -70,13 +70,12 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
 | [TASK-0030](TASK-0030-request-limits.md) | Throttle block requests; persist bans | done | P3 | small | TASK-0020 | F-026, F-027 |
 | TASK-0031 | Transaction index | pending | P3 | small | TASK-0016 | F-028 |
-| TASK-0032 | Change the wallet passphrase | pending | P3 | small | TASK-0024 | F-029 |
+| [TASK-0032](TASK-0032-change-passphrase.md) | Change the wallet passphrase | done | P3 | small | TASK-0024 | F-029 |
 
 Scope notes (expand into task files when picked up):
 
 - **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.
 - **TASK-0031:** txid → block index maintained on connect and disconnect.
-- **TASK-0032:** `POST /wallet/passphrase { old, new }` and `cli change-passphrase`.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

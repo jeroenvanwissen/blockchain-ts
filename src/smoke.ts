@@ -164,6 +164,10 @@ async function main(): Promise<void> {
 			throw new Error(`cli unlock failed: ${unlocked.stdout.trim()} ${unlocked.stderr.trim()}`);
 		}
 		if (!(await cli(['lock'])).stdout.includes('wallet: encrypted, locked')) throw new Error('cli lock failed');
+		const changed = await cli(['change-passphrase'], `${PASSPHRASE}\n${PASSPHRASE} changed\n`);
+		if (changed.code !== 0 || !(await cli(['unlock'], `${PASSPHRASE} changed\n`)).stdout.includes('wallet: encrypted, unlocked')) {
+			throw new Error(`cli change-passphrase failed: ${changed.stderr.trim()}`);
+		}
 		if (running.some((node) => node.output().includes(PASSPHRASE))) throw new Error('the passphrase appeared in output');
 
 		running.forEach(noErrors);

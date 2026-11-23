@@ -17,6 +17,8 @@ commands:
                                             unlock an encrypted wallet (staking-only: can stake,
                                             can't send)
   lock                                      lock an encrypted wallet
+  change-passphrase                         re-encrypt the wallet under a new passphrase (current
+                                            and new are asked for; two stdin lines otherwise)
 
 options:
   --data-dir <dir>   the node's data dir, for its api.cookie (default: the default data dir)
@@ -50,13 +52,18 @@ function walletState(w: WalletInfo): string {
 	return `encrypted, ${scope}${w.unlockedUntil ? ` until ${w.unlockedUntil}` : ''}`;
 }
 
-/** Read a passphrase without echo from a terminal, or the first line of stdin otherwise. */
+let stdinLines: string[] | null = null; // piped input, one passphrase per line
+
+/** Read a passphrase without echo from a terminal, or the next line of stdin otherwise. */
 async function readPassphrase(prompt: string): Promise<string> {
 	const stdin = process.stdin;
 	if (!stdin.isTTY) {
-		const chunks: Buffer[] = [];
-		for await (const chunk of stdin as AsyncIterable<Buffer>) chunks.push(chunk);
-		return Buffer.concat(chunks).toString('utf8').split(/\r?\n/)[0];
+		if (!stdinLines) {
+			const chunks: Buffer[] = [];
+			for await (const chunk of stdin as AsyncIterable<Buffer>) chunks.push(chunk);
+			stdinLines = Buffer.concat(chunks).toString('utf8').split(/\r?\n/);
+		}
+		return stdinLines.shift() ?? '';
 	}
 	process.stderr.write(prompt);
 	return new Promise((resolve, reject) => {
@@ -179,6 +186,18 @@ async function run(argv: string[]): Promise<void> {
 		case 'lock': {
 			const w = await request<WalletInfo>(api, 'POST', '/wallet/lock', {});
 			console.log(`wallet: ${walletState(w)}`);
+			return;
+		}
+		case 'change-passphrase': {
+			if (rest.length > 0) throw new UsageError('change-passphrase takes no arguments');
+			const passphrase = await readPassphrase('Current passphrase: ');
+			const newPassphrase = await readPassphrase('New passphrase: ');
+			if (process.stdin.isTTY && (await readPassphrase('Repeat new passphrase: ')) !== newPassphrase) {
+				throw new Error('passphrases do not match');
+			}
+			const w = await request<WalletInfo>(api, 'POST', '/wallet/passphrase', { passphrase, newPassphrase });
+			console.log(`wallet: ${walletState(w)}`);
+			console.log('Passphrase changed; backups made under the old passphrase were deleted.');
 			return;
 		}
 		default:

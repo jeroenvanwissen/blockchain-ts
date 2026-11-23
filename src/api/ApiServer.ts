@@ -77,6 +77,7 @@ export class ApiServer {
 		{ method: 'POST', pattern: /^\/wallet\/encrypt$/, wallet: true, handle: (_, body) => this._encrypt(body) },
 		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
 		{ method: 'POST', pattern: /^\/wallet\/lock$/, wallet: true, handle: () => this._lock() },
+		{ method: 'POST', pattern: /^\/wallet\/passphrase$/, wallet: true, handle: (_, body) => this._changePassphrase(body) },
 	];
 
 	constructor(
@@ -234,6 +235,15 @@ export class ApiServer {
 		if (typeof stakingOnly !== 'boolean') throw new HttpError(400, 'stakingOnly must be true or false');
 		this._walletCall(() => this._wallet().unlock(passphrase, { timeoutMs: timeout * 1000, stakingOnly }));
 		log.info(`wallet unlocked${stakingOnly ? ' for staking only' : ''}${timeout ? ` for ${timeout} s` : ''}`);
+		return this._walletInfo();
+	}
+
+	/** POST /wallet/passphrase { passphrase, newPassphrase }: re-encrypt under a new passphrase. */
+	private _changePassphrase(body: unknown) {
+		const passphrase = parsePassphrase(body);
+		const newPassphrase = parsePassphrase({ passphrase: (body as { newPassphrase?: unknown }).newPassphrase });
+		this._walletCall(() => this._wallet().changePassphrase(passphrase, newPassphrase));
+		log.info('wallet passphrase changed');
 		return this._walletInfo();
 	}
 

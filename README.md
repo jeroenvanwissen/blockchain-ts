@@ -238,6 +238,7 @@ npm run cli -- encrypt-wallet                    # asks for the passphrase twice
 npm run cli -- unlock --staking-only             # stake, but no payments
 npm run cli -- unlock --timeout 300              # full unlock for 5 minutes
 npm run cli -- lock
+npm run cli -- change-passphrase                 # re-encrypts; old backups are deleted
 ```
 
 An encrypted wallet is locked whenever the node starts. While locked the node doesn't stake and `send` is refused; mining rewards still arrive. Without a terminal the CLI reads the passphrase from the first line of stdin. There's no passphrase recovery: losing it means losing the coins.
@@ -295,6 +296,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the key at rest and locks the wallet (token required) |
 | `POST /wallet/unlock` | Body `{"passphrase": "...", "timeout": <seconds, 0 = no limit>, "stakingOnly": <bool>}`; 403 for a wrong passphrase (token required) |
 | `POST /wallet/lock` | Wipes the key from memory (token required) |
+| `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the key under the new passphrase and deletes backups (token required) |
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 

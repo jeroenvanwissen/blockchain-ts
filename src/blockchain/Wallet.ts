@@ -182,10 +182,35 @@ export class Wallet {
 	 */
 	encrypt(passphrase: string): void {
 		if (this.encryptedKey) throw new WalletError('already-encrypted', 'wallet is already encrypted');
+		this.encryptedKey = this.encryptKey(this.key('spend'), passphrase);
+		this.saveWallet({ backup: false });
+		const removed = this.removeBackups();
+		log.info(`wallet encrypted; removed ${removed} unencrypted backup(s)`);
+		this.lock();
+	}
+
+	/**
+	 * Re-encrypt the key under a new passphrase (fresh salt and nonce). The lock state doesn't
+	 * change. Backups are deleted: they would still open with the old passphrase.
+	 */
+	changePassphrase(passphrase: string, newPassphrase: string): void {
+		if (!this.encryptedKey) throw new WalletError('not-encrypted', 'wallet is not encrypted');
+		const privateKey = decryptKey(passphrase, this.encryptedKey, this.publicKey);
+		try {
+			this.encryptedKey = this.encryptKey(privateKey, newPassphrase);
+		} finally {
+			if (privateKey !== this.privateKey) privateKey.fill(0);
+		}
+		this.saveWallet({ backup: false });
+		const removed = this.removeBackups();
+		log.info(`wallet passphrase changed; removed ${removed} backup(s) under the old passphrase`);
+	}
+
+	/** Encrypt `privateKey` under `passphrase` and check that it decrypts. */
+	private encryptKey(privateKey: Buffer, passphrase: string): EncryptedKey {
 		if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
 			throw new WalletError('weak-passphrase', `passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
 		}
-		const privateKey = this.key('spend');
 		const params = {
 			salt: crypto.randomBytes(16),
 			scryptLogN: WALLET_SCRYPT.logN,
@@ -199,16 +224,12 @@ export class Wallet {
 		const ciphertext = Buffer.concat([cipher.update(privateKey), cipher.final()]);
 		key.fill(0);
 		const encrypted: EncryptedKey = { ...params, nonce, ciphertext, authTag: cipher.getAuthTag() };
-		// Prove the passphrase opens it before the unencrypted key leaves the disk
-		if (!decryptKey(passphrase, encrypted, this.publicKey).equals(privateKey)) {
-			throw new Error('wallet encryption check failed');
-		}
-
-		this.encryptedKey = encrypted;
-		this.saveWallet({ backup: false });
-		const removed = this.removeBackups();
-		log.info(`wallet encrypted; removed ${removed} unencrypted backup(s)`);
-		this.lock();
+		// Prove the passphrase opens it before anything is written
+		const check = decryptKey(passphrase, encrypted, this.publicKey);
+		const matches = check.equals(privateKey);
+		check.fill(0);
+		if (!matches) throw new Error('wallet encryption check failed');
+		return encrypted;
 	}
 
 	/** Decrypt the key into memory. Throws 'wrong-passphrase' or 'not-encrypted'. */

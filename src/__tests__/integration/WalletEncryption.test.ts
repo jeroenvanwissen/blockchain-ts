@@ -124,6 +124,26 @@ describe('Wallet encryption', () => {
 		expect(() => new Wallet(file).unlock(PASSPHRASE)).toThrow('wrong passphrase');
 	});
 
+	it('should change the passphrase: the old one stops working, backups go, the lock state stays', () => {
+		const wallet = openWallet(dir, 'node');
+		const file = path.join(dir, 'node.dat');
+		wallet.encrypt(PASSPHRASE);
+		wallet.unlock(PASSPHRASE);
+		fs.copyFileSync(file, `${file}.2000.backup`); // still opens with the old passphrase
+
+		expect(() => wallet.changePassphrase('wrong passphrase', 'a new passphrase')).toThrow('wrong passphrase');
+		expect(() => wallet.changePassphrase(PASSPHRASE, 'short')).toThrow('at least 8 characters');
+		wallet.changePassphrase(PASSPHRASE, 'a new passphrase');
+
+		expect(wallet.isLocked()).toBe(false); // was unlocked, still is
+		expect(fs.existsSync(`${file}.2000.backup`)).toBe(false);
+		const reopened = new Wallet(file);
+		expect(() => reopened.unlock(PASSPHRASE)).toThrow('wrong passphrase');
+		reopened.unlock('a new passphrase');
+		expect(reopened.isLocked()).toBe(false);
+		expect(() => openWallet(dir, 'plain').changePassphrase(PASSPHRASE, 'a new passphrase')).toThrow('not encrypted');
+	});
+
 	it('should import an encrypted wallet and keep it locked', () => {
 		const wallet = openWallet(dir, 'node');
 		wallet.encrypt(PASSPHRASE);
