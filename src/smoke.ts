@@ -1,6 +1,7 @@
 // Smoke check against the real runtime (native ESM, real filesystem, real protobuf).
-// Starts a node in a temporary data dir from an unrelated working directory, restarts it,
-// and connects a second node to it. Run with `npm run smoke`; pass --keep to keep the temp dir.
+// From an unrelated working directory and temp data dirs: node A mines, node B syncs from it
+// and accepts A's next block live, then A restarts and keeps its chain. Takes ~40 s because
+// consecutive blocks must be BLOCK_TIME apart. Run with `npm run smoke`; --keep keeps the dir.
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -10,6 +11,7 @@ import { fileURLToPath } from 'url';
 
 const READY = /P2P Server listening/;
 const TIMEOUT_MS = 30_000;
+const NEXT_BLOCK_TIMEOUT_MS = 90_000; // BLOCK_TIME (30 s) plus hashing and relay
 const SELF = fileURLToPath(import.meta.url);
 // index.ts under tsx, index.js when run from dist/
 const ENTRY = path.join(path.dirname(SELF), `index${path.extname(SELF)}`);
@@ -39,10 +41,9 @@ function startNode(
 	cwd: string,
 	dataDir: string,
 	port: number,
-	peers?: string,
+	extraArgs: string[] = [],
 ): NodeProcess {
-	const args = ['--import', TSX_LOADER, ENTRY, '--data-dir', dataDir];
-	if (peers) args.push('--peers', peers);
+	const args = ['--import', TSX_LOADER, ENTRY, '--data-dir', dataDir, ...extraArgs];
 	const child = spawn(process.execPath, args, {
 		cwd,
 		env: { ...process.env, P2P_PORT: String(port), SEED_NODES: '' },
@@ -55,13 +56,18 @@ function startNode(
 	return { name, child, output: () => buffer, exited };
 }
 
-async function waitFor(node: NodeProcess, pattern: RegExp, what: string): Promise<string> {
-	const deadline = Date.now() + TIMEOUT_MS;
+async function waitFor(
+	node: NodeProcess,
+	pattern: RegExp,
+	what: string,
+	timeoutMs = TIMEOUT_MS,
+): Promise<RegExpMatchArray> {
+	const deadline = Date.now() + timeoutMs;
 	let hasExited = false;
 	void node.exited.then(() => (hasExited = true));
 	while (Date.now() < deadline) {
 		const match = node.output().match(pattern);
-		if (match) return match[0];
+		if (match) return match;
 		if (hasExited) throw new Error(`${node.name} exited before ${what}`);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
@@ -92,6 +98,11 @@ function noLoadErrors(node: NodeProcess): void {
 	}
 }
 
+function noErrors(node: NodeProcess): void {
+	const line = node.output().split('\n').find((l) => /Error|rejected/.test(l));
+	if (line) throw new Error(`${node.name}: logged an error: ${line.trim()}`);
+}
+
 async function main(): Promise<void> {
 	const keep = process.argv.includes('--keep');
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'blockchain-ts-smoke-'));
@@ -104,33 +115,48 @@ async function main(): Promise<void> {
 	const step = (message: string) => console.log(`[smoke] ${message}`);
 
 	try {
-		step(`start node A on port ${portA} (data dir ${dataA}, cwd ${cwd})`);
-		let nodeA = startNode('node A', cwd, dataA, portA);
+		step(`start mining node A on port ${portA} (data dir ${dataA}, cwd ${cwd})`);
+		let nodeA = startNode('node A', cwd, dataA, portA, ['--mine']);
 		running.push(nodeA);
 		await waitFor(nodeA, READY, 'listening');
 		noLoadErrors(nodeA);
 		const address = walletAddress(nodeA);
+		const block1 = (await waitFor(nodeA, /mined block 1 \((\w+)\)/, 'mining block 1'))[1];
 		assertFile(path.join(dataA, 'wallet.dat'));
 		assertFile(path.join(dataA, 'blocks', 'index.dat'));
 		assertFile(path.join(dataA, 'blocks', 'blk00000.dat'));
 		if (fs.existsSync(path.join(cwd, 'data'))) throw new Error('node wrote data into its cwd');
 
-		step('restart node A on the same data dir');
+		step(`start node B on port ${portB} with --peers ws://127.0.0.1:${portA}; expect sync`);
+		const nodeB = startNode('node B', cwd, dataB, portB, ['--peers', `ws://127.0.0.1:${portA}`]);
+		running.push(nodeB);
+		await waitFor(nodeB, READY, 'listening');
+		await waitFor(nodeB, /Successfully connected to peer/, 'connecting to node A');
+		await waitFor(nodeB, new RegExp(`Synced chain from peer: height 1, tip ${block1}`), 'sync');
+		noLoadErrors(nodeB);
+
+		step('wait for node A to mine block 2 and node B to accept it');
+		const block2Pattern = /mined block 2 \((\w+)\)/;
+		const block2 = (await waitFor(nodeA, block2Pattern, 'block 2', NEXT_BLOCK_TIMEOUT_MS))[1];
+		await waitFor(nodeB, new RegExp(`Accepted block 2 \\(${block2}\\) from peer`), 'relay');
+
+		step('restart node A without mining; expect the same chain and wallet');
+		await stopNode(nodeB);
 		await stopNode(nodeA);
+		const minedHeights = [...nodeA.output().matchAll(/mined block (\d+) \((\w+)\)/g)];
+		const [, lastHeight, lastHash] = minedHeights[minedHeights.length - 1];
 		nodeA = startNode('node A (restart)', cwd, dataA, portA);
 		running.push(nodeA);
 		await waitFor(nodeA, READY, 'listening');
 		noLoadErrors(nodeA);
+		await waitFor(
+			nodeA,
+			new RegExp(`Chain loaded: height ${lastHeight}, tip ${lastHash}`),
+			'loading the mined chain',
+		);
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
 
-		step(`start node B on port ${portB} with --peers ws://127.0.0.1:${portA}`);
-		const nodeB = startNode('node B', cwd, dataB, portB, `ws://127.0.0.1:${portA}`);
-		running.push(nodeB);
-		await waitFor(nodeB, READY, 'listening');
-		await waitFor(nodeB, /Successfully connected to peer/, 'connecting to node A');
-		await waitFor(nodeA, /New connection from/, 'accepting node B');
-		noLoadErrors(nodeB);
-
+		running.forEach(noErrors);
 		step('PASS');
 	} catch (error) {
 		console.error(`[smoke] FAIL: ${(error as Error).message}`);

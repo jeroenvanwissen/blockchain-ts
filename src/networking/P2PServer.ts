@@ -425,6 +425,10 @@ export class P2PServer {
 			if (receivedWeight > this.blockchain.getChainWeight()) {
 				// replaceChain handles its own locking and validation
 				await this.blockchain.replaceChain(blocks);
+				const tip = this.blockchain.getLatestBlock();
+				console.log(
+					`Synced chain from peer: height ${tip.index}, tip ${tip.hash.slice(0, 16)}`,
+				);
 			}
 		} catch (error) {
 			console.error('Error handling chain message:', error);
@@ -454,6 +458,8 @@ export class P2PServer {
 				blockData.powDifficulty,
 				blockData.index
 			);
+			// Ignore blocks we already have (e.g. our own block echoed back by a peer)
+			if (this.blockchain.getChain()[block.index]?.hash === block.hash) return;
 			// Check if we need to sync first
 			const currentChainLength = this.blockchain.getChain().length;
 			if (block.index > currentChainLength) {
@@ -466,6 +472,7 @@ export class P2PServer {
 			}
 			// addMinedBlock handles its own locking
 			await this.blockchain.addMinedBlock(block);
+			console.log(`Accepted block ${block.index} (${block.hash.slice(0, 16)}) from peer`);
 			// Only broadcast if we successfully added the block
 			const out: BlockMessage = { type: MessageType.BLOCK, data: block };
 			this.broadcast(out);

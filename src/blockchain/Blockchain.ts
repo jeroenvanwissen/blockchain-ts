@@ -884,10 +884,30 @@ export class Blockchain {
 		);
 	}
 
+	/** Earliest timestamp the next block may carry (minimum block interval and median time past). */
+	public getNextBlockMinTimestamp(): number {
+		return Math.max(
+			this.getLatestBlock().timestamp + this._options.minBlockInterval,
+			this.getMedianTimePast() + 1,
+		);
+	}
+
+	/** Unsolved PoW block on the current tip: coinbase to `rewardAddress` plus pending transactions. */
+	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
+		const coinbase = new Transaction([], [{ address: rewardAddress, amount: POW_BLOCK_REWARD }]);
+		return new Block(
+			timestamp,
+			[coinbase, ...this.pendingTransactions],
+			this.getLatestBlock().hash,
+			0,
+			this._options.validateDifficulty ? this.calculateNewDifficulty() : 1,
+			this.chain.length,
+		);
+	}
+
 	public async minePendingTransactions(minerAddress: string, wallet?: Wallet): Promise<Block> {
 		// Switch to PoS only after cutoff block has been added (length > POW_CUTOFF_BLOCK)
 		const isPoSPhase = this.chain.length > POW_CUTOFF_BLOCK;
-		const lastBlock = this.getLatestBlock();
 
 		// Always use Date.now() for timestamp so tests can control time
 		const timestamp = Date.now();
@@ -908,21 +928,7 @@ export class Blockchain {
 		}
 
 		// PoW phase
-		const coinbaseTransaction = new Transaction(
-			[],
-			[{ address: minerAddress, amount: POW_BLOCK_REWARD }]
-		);
-
-		const transactions = [coinbaseTransaction, ...this.pendingTransactions];
-
-		const block = new Block(
-			timestamp,
-			transactions,
-			lastBlock.hash,
-			0,
-			this._options.validateDifficulty ? this.calculateNewDifficulty() : 1,
-			this.chain.length
-		);
+		const block = this.createBlockTemplate(minerAddress, timestamp);
 
 		while (!block.isValid()) {
 			block.nonce++;

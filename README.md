@@ -17,9 +17,8 @@
 
 ## Status
 
-**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, and connect to each other (`npm run smoke`), but:
+**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`) and pass them to connected peers (`npm run smoke`), but:
 
-- nothing produces blocks the node accepts (TASK-0004);
 - signatures are not verified, and block transactions are not checked against the UTXO set (TASK-0005, TASK-0006);
 - stake state is node-local, so nodes disagree after restarts (TASK-0009, TASK-0011).
 
@@ -33,7 +32,7 @@ The feature list below describes the intended design. See the [assessment](tasks
 1. Install dependencies:     npm install
 2. Start a node:             npm run dev
 3. Start a second node:      P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001
-4. Run the miner:            npm run mine
+4. Start a mining node:      npm run dev -- --mine
 5. Run tests:                npm test
 6. Run the smoke check:      npm run smoke
 7. Build for production:     npm run build
@@ -99,7 +98,6 @@ src/
 │   └── __tests__/            # Unit tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Main entry point
-├── mine.ts                   # Standalone miner entry point
 └── test-consensus.ts         # Consensus transition demo
 ```
 
@@ -112,7 +110,7 @@ src/
 | **BlockStore**     | `BlockStore.ts`       | Chunked block persistence with protobuf index        |
 | **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
 | **Wallet**         | `Wallet.ts`           | Key management, address encoding, protobuf storage   |
-| **Miner**          | `Miner.ts`            | Worker thread PoW mining, job management             |
+| **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | Periodic PoS block generation                        |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
 
@@ -173,19 +171,21 @@ P2P_PORT=5003 npm run dev -- --data-dir ./data/node3 --peers ws://localhost:5001
 
 Peers can also come from the `SEED_NODES` env var (comma-separated) or from `peers.json` in the data directory.
 
-### Step 3: Run the Miner
+### Step 3: Mine Blocks
 
-The standalone miner connects to a running node via WebSocket:
+Start a node with `--mine` to mine PoW blocks inside the node. Rewards go to the node's wallet, and mined blocks are broadcast to connected peers:
 
 ```bash
-npm run mine
+npm run dev -- --mine
 ```
+
+Blocks are at least 30 seconds apart (`BLOCK_TIME`). Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
 
 ### Step 4: Verify
 
 ```bash
 npm test                # Run test suite
-npm run smoke           # Start, restart and connect real nodes in a temp dir
+npm run smoke           # Real nodes: mine, sync, relay, restart (~35 s)
 npm run build           # Compile TypeScript
 ```
 
@@ -251,7 +251,7 @@ await blockchain.stake(wallet.address, 50, wallet);
 | ----------------- | ------------------------------------------------------------- |
 | Dev mode (watch)  | `npm run dev`                                                 |
 | Run node          | `npm start`                                                   |
-| Run miner         | `npm run mine`                                                |
+| Mining node       | `npm start -- --mine`                                         |
 | Run tests         | `npm test`                                                    |
 | Smoke check       | `npm run smoke`                                               |
 | Build             | `npm run build`                                               |

@@ -4,10 +4,10 @@
 
 A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, WebSocket peers, protobuf block storage. **It doesn't work end to end yet.** See [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) for what is broken and [tasks/BACKLOG.md](tasks/BACKLOG.md) for the plan.
 
-- `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` with `miningWorker.cjs`, `StakingService.ts`
+- `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts`
 - `src/networking/P2PServer.ts`: WebSocket peers, chain sync, peer discovery
 - `src/config.ts`: all constants and the data-dir and port settings
-- `src/index.ts`: node entry point; `src/mine.ts`: standalone miner; `src/smoke.ts`: runtime smoke check
+- `src/index.ts`: node entry point (`--data-dir`, `--peers`, `--mine`); `src/smoke.ts`: runtime smoke check
 - `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)
 - `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
@@ -20,9 +20,9 @@ Run npm scripts from the repository root.
 - Install: `npm install`
 - Build: `npm run build` (tsc)
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
-- Smoke: `npm run smoke` (real node processes in a temp dir: start, restart, second node connects; about 10 s; `-- --keep` keeps the temp dir)
+- Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 35 s because blocks are 30 s apart; `-- --keep` keeps the temp dir)
 - Lint: `npm run lint` (currently fails on pre-existing errors, see TASK-0021); lint touched files with `npx eslint <files>`
-- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
+- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node and `--mine` to mine PoW blocks. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
 ## Conventions
 

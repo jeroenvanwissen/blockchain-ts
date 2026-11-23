@@ -1,16 +1,23 @@
+import * as fs from 'fs';
+import { fileURLToPath } from 'url';
 import { Blockchain } from './blockchain/Blockchain.js';
+import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
 import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
-import * as fs from 'fs';
 import { DATA_DIR, P2P_PORT, PEER_DATA_PATH, SEED_NODES } from './config.js';
+
+// miningWorker.cjs sits next to Miner (copied to dist/ by tsc via allowJs)
+const MINING_WORKER_PATH = fileURLToPath(
+	new URL('./blockchain/miningWorker.cjs', import.meta.url),
+);
 
 // Ensure the data directory exists
 if (!fs.existsSync(DATA_DIR)) {
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Parse command line arguments for peers
+// Parse command line arguments
 const args = process.argv.slice(2);
 let cliPeers: string[] = [];
 args.forEach((arg, index) => {
@@ -18,6 +25,7 @@ args.forEach((arg, index) => {
 		cliPeers = args[index + 1].split(',');
 	}
 });
+const isMining = args.includes('--mine');
 
 let blockchain: Blockchain;
 try {
@@ -27,6 +35,10 @@ try {
 	console.error('Failed to load blockchain:', error);
 	process.exit(1);
 }
+const loadedTip = blockchain.getLatestBlock();
+console.log(
+	`Chain loaded: height ${loadedTip.index}, tip ${loadedTip.hash.slice(0, 16)}`,
+);
 
 // Initialize wallet
 const wallet = new Wallet();
@@ -64,11 +76,20 @@ p2pServer.connectToPeers(allPeers);
 
 console.log('Blockchain node started. Listening for peers...');
 
+// Optional proof-of-work mining (--mine); rewards go to this node's wallet
+const miner = new Miner(blockchain, wallet.address, MINING_WORKER_PATH, (block) =>
+	p2pServer.broadcastBlock(block),
+);
+if (isMining) {
+	console.log('Mining enabled');
+	miner.start();
+}
+
 // Handle process termination
 process.on('SIGINT', () => {
 	console.log('\nStopping blockchain node...');
-	process.exit(0);
+	void miner.stop().finally(() => process.exit(0));
 });
 
 // Export for testing
-export { blockchain, p2pServer, wallet };
+export { blockchain, p2pServer, wallet, miner };

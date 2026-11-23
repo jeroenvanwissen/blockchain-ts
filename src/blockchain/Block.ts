@@ -22,25 +22,33 @@ export class Block {
 		this.hash = this.calculateHash();
 	}
 
-	calculateHash(): string {
-		// Create a deterministic representation of transactions
-
+	/**
+	 * Hashed block data up to (not including) the nonce value. The block hash is
+	 * SHA-256 of `prefix + nonce + '}'`, so the mining worker can vary only the nonce
+	 * and still hash exactly what validation hashes.
+	 */
+	powPrefix(): string {
 		const txData = this.transactions.map((tx) => ({
 			inputs: tx.inputs,
 			outputs: tx.outputs,
-			timestamp: tx.timestamp, // Use the original timestamp
+			timestamp: tx.timestamp,
 			nonce: tx.nonce,
 		}));
-
-		// Match the mining worker's data structure exactly
 		const data = JSON.stringify({
 			timestamp: this.timestamp,
 			transactions: txData,
 			previousHash: this.previousHash,
-			nonce: this.nonce,
+			nonce: 0,
 		});
+		return data.slice(0, -2); // strip the placeholder `0}`
+	}
 
-		return crypto.createHash('sha256').update(data).digest('hex');
+	static hashWithNonce(prefix: string, nonce: number): string {
+		return crypto.createHash('sha256').update(`${prefix}${nonce}}`).digest('hex');
+	}
+
+	calculateHash(): string {
+		return Block.hashWithNonce(this.powPrefix(), this.nonce);
 	}
 
 	hasValidTransactions(): boolean {

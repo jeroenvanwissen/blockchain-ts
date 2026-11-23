@@ -1,310 +1,133 @@
-// In Miner.ts
-import { Block } from './Block.js';
-import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
-import { Blockchain } from './Blockchain.js';
-import { Wallet } from './Wallet.js';
 import { Worker } from 'worker_threads';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import WebSocket from 'ws';
+import type { Block } from './Block.js';
+import type { Blockchain } from './Blockchain.js';
+import { MAX_BLOCK_NONCE, MINER_RETRY_DELAY, MINER_TIP_POLL_INTERVAL } from '../config.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+type WorkerResult = { type: 'found'; nonce: number; hash: string } | { type: 'exhausted' };
 
-interface MinedBlock {
-	timestamp: number;
-	transactions: {
-		inputs: TxInput[];
-		outputs: TxOutput[];
-		timestamp?: number;
-		nonce?: number;
-	}[];
-	previousHash: string;
+interface Solution {
 	nonce: number;
-	difficulty: number;
 	hash: string;
 }
 
-interface MinedBlockMessage {
-	type: 'block';
-	data: MinedBlock;
-}
-
-interface ProgressMessage {
-	type: 'progress';
-	progress: number;
-}
-
-interface ErrorMessage {
-	type: 'error';
-	error: string;
-}
-
-type WorkerMessage = MinedBlockMessage | ProgressMessage | ErrorMessage;
-
+/**
+ * Proof-of-work miner running inside the node. Builds each block from the node's own
+ * chain state, hashes in a worker thread, and abandons the job when the tip changes.
+ * `workerPath` points at miningWorker.cjs (resolved by the entry point).
+ */
 export class Miner {
-	private worker: Worker | null = null;
-	private mining = false;
-	private targetBlockTime: number;
-	private difficulty = 4;
-	private miningTimeout: NodeJS.Timeout | null = null;
-	private minerAddress: string;
-	private wsClient: WebSocket | null = null;
+	private _running = false;
+	private _loop: Promise<void> | null = null;
+	private _cancelSearch: (() => void) | null = null;
+	private _sleepTimer: NodeJS.Timeout | null = null;
+	private _wake: (() => void) | null = null;
 
-	constructor(private blockchain: Blockchain) {
-		this.targetBlockTime = blockchain.BLOCK_TIME * 1000;
-		this.minerAddress = this.getMinerAddressFromWallet();
-		this.connectToNode();
+	constructor(
+		private readonly _blockchain: Blockchain,
+		private readonly _rewardAddress: string,
+		private readonly _workerPath: string,
+		private readonly _onBlockMined: (block: Block) => void = () => {},
+	) {}
+
+	isRunning(): boolean {
+		return this._running;
 	}
 
-	private getMinerAddressFromWallet(): string {
-		try {
-			const wallet = new Wallet();
-			return wallet.getAddress();
-		} catch (error) {
-			console.error('Error reading wallet:', error);
-			throw new Error('failed to read miner address from wallet');
-		}
+	start(): void {
+		if (this._running) return;
+		this._running = true;
+		this._loop = this._run();
 	}
 
-	private connectToNode(): void {
-		this.wsClient = new WebSocket('ws://localhost:5001');
-
-		this.wsClient.on('open', () => {
-			console.log('Connected to blockchain node');
-			this.startMining(); // Start mining when connected
-		});
-
-		this.wsClient.on('error', (error) => {
-			console.error('WebSocket error:', error);
-		});
-
-		this.wsClient.on('close', () => {
-			console.log(
-				'Disconnected from blockchain node, attempting to reconnect...'
-			);
-			this.mining = false; // Stop mining when disconnected
-			setTimeout(() => this.connectToNode(), 5000);
-		});
+	async stop(): Promise<void> {
+		this._running = false;
+		this._cancelSearch?.();
+		if (this._sleepTimer) clearTimeout(this._sleepTimer);
+		this._wake?.();
+		await this._loop;
 	}
 
-	public startMining(minerAddress?: string): void {
-		if (this.mining) return;
-
-		// Check WebSocket connection first
-		if (!this.wsClient || this.wsClient.readyState !== WebSocket.OPEN) {
-			console.log('No connection to blockchain node, skipping mining');
-			return;
-		}
-
-		// First, request the latest block from the node
-		this.wsClient.send(
-			JSON.stringify({
-				type: 'GET_LATEST_BLOCK',
-			})
-		);
-
-		// Add handler for the latest block response
-		this.wsClient.once('message', (data) => {
-			const response = JSON.parse(data.toString());
-			console.log('Received response:', response);
-
-			if (response.type === 'LATEST_BLOCK') {
-				const lastBlock = response.data;
-				console.log('Using previous hash:', lastBlock.hash);
-				this.startMiningWithLastBlock(lastBlock, minerAddress);
-			} else if (response.type === 'CHAIN') {
-				// If we receive the full chain, use the last block
-				const chain = response.data;
-				if (chain && chain.length > 0) {
-					const lastBlock = chain[chain.length - 1];
-					console.log('Using previous hash from chain:', lastBlock.hash);
-					this.startMiningWithLastBlock(lastBlock, minerAddress);
-				} else {
-					console.log('Received empty chain');
-					this.mining = false;
-				}
-			} else {
-				console.log('Unexpected response type:', response.type);
-				this.mining = false;
+	private async _run(): Promise<void> {
+		while (this._running) {
+			try {
+				await this._mineOne();
+			} catch (error) {
+				console.error('[Miner] block rejected:', (error as Error).message);
+				await this._sleep(MINER_RETRY_DELAY);
 			}
-		});
+		}
 	}
 
-	private startMiningWithLastBlock(
-		lastBlock: any,
-		minerAddress?: string
-	): void {
-		// Check if PoW is still allowed
-		if (!this.blockchain.canAcceptPowBlock()) {
-			console.log('PoW mining no longer accepted after block 100');
+	private async _mineOne(): Promise<void> {
+		if (!this._blockchain.canAcceptPowBlock()) {
+			console.log('[Miner] PoW phase is over; stopping');
+			this._running = false;
 			return;
 		}
 
-		const timeSinceLastBlock = Date.now() - lastBlock.timestamp;
-
-		// Check if enough time has passed since the last block
-		if (timeSinceLastBlock < this.targetBlockTime) {
-			const delay = this.targetBlockTime - timeSinceLastBlock;
-			console.log(`Waiting ${delay}ms before mining next block...`);
-			setTimeout(() => this.startMining(minerAddress), delay);
-			return;
+		const minTimestamp = this._blockchain.getNextBlockMinTimestamp();
+		if (minTimestamp > Date.now()) {
+			await this._sleep(minTimestamp - Date.now());
+			return; // re-check the tip and phase before building a template
 		}
 
-		this.mining = true;
-		const addressToUse = minerAddress || this.minerAddress;
-
-		// Create coinbase transaction with 100 coin reward
-		const now = Date.now();
-		const coinbaseTransaction = new Transaction(
-			[],
-			[{ address: addressToUse, amount: 100 }],
-			now
+		const block = this._blockchain.createBlockTemplate(
+			this._rewardAddress,
+			Math.max(Date.now(), minTimestamp),
 		);
+		const solution = await this._search(block);
+		if (!solution || !this._running) return; // tip changed, stopped, or nonces exhausted
 
-		try {
-			console.log('Starting mining process with address:', addressToUse);
-			const currentDifficulty = this.blockchain.calculateNewDifficulty();
+		block.nonce = solution.nonce;
+		block.hash = solution.hash;
+		await this._blockchain.addMinedBlock(block);
+		console.log(`[Miner] mined block ${block.index} (${block.hash.slice(0, 16)})`);
+		this._onBlockMined(block);
+	}
 
-			// Ensure we have the hash from the last block
-			if (!lastBlock.hash) {
-				throw new Error('Invalid last block: missing hash');
-			}
-
-			console.log('Mining with previous hash:', lastBlock.hash);
-
-			this.worker = new Worker(path.join(__dirname, 'miningWorker.cjs'), {
+	private _search(block: Block): Promise<Solution | null> {
+		return new Promise((resolve, reject) => {
+			const worker = new Worker(this._workerPath, {
 				workerData: {
-					minerAddress: addressToUse,
-					difficulty: currentDifficulty,
-					previousHash: lastBlock.hash, // Use the hash from the latest block
-					pendingTransactions: [
-						coinbaseTransaction,
-						...this.blockchain.getPendingTransactions(),
-					],
-					minTimestamp: lastBlock.timestamp + this.targetBlockTime,
+					prefix: block.powPrefix(),
+					difficulty: block.powDifficulty,
+					startNonce: 0,
+					maxNonce: MAX_BLOCK_NONCE,
 				},
 			});
+			let isDone = false;
 
-			// Handle worker messages
-			this.worker.on('message', (message: WorkerMessage) => {
-				try {
-					if (message.type === 'progress') {
-						console.log('Mining progress:', message);
-						return;
-					}
+			const finish = (result: Solution | null, error?: Error) => {
+				if (isDone) return;
+				isDone = true;
+				clearInterval(tipWatch);
+				this._cancelSearch = null;
+				void worker.terminate();
+				if (error) reject(error);
+				else resolve(result);
+			};
 
-					if (message.type === 'block') {
-						const minedBlock = message.data;
-						console.log('Block mined:', minedBlock);
+			// Abandon the job if another block extended the chain meanwhile
+			const tipWatch = setInterval(() => {
+				if (this._blockchain.getLatestBlock().hash !== block.previousHash) finish(null);
+			}, MINER_TIP_POLL_INTERVAL);
 
-						// Create transactions with exact data from mined block
-						const transactions = minedBlock.transactions.map((tx) => {
-							const txTimestamp = tx.timestamp ?? Number(minedBlock.timestamp);
-
-							// Create a new Transaction instance with the exact data
-							const transaction = new Transaction(
-								tx.inputs,
-								tx.outputs,
-								txTimestamp,
-								tx.nonce
-							);
-
-							// Ensure the transaction properties match exactly
-							transaction.timestamp = txTimestamp;
-							if (tx.nonce !== undefined) {
-								transaction.nonce = tx.nonce;
-							}
-
-							// Make it immutable after setting all properties
-							Object.freeze(transaction);
-
-							return transaction;
-						});
-
-						console.log(
-							'Reconstructed transactions:',
-							JSON.stringify(transactions, null, 2)
-						);
-						console.log('block transactions:', transactions);
-
-						const block = new Block(
-							Number(minedBlock.timestamp),
-							transactions,
-							String(minedBlock.previousHash),
-							Number(minedBlock.nonce),
-							Number(minedBlock.difficulty),
-							this.blockchain.getChain().length
-						);
-
-						// Set hash manually to avoid recalculation
-						block.hash = minedBlock.hash;
-
-						console.log('block tx.Nonce:', block.transactions[0].nonce);
-						console.log('block tx.Timestamp:', block.transactions[0].timestamp);
-
-						// Instead of adding to blockchain directly, send through WebSocket
-						if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
-							this.wsClient.send(
-								JSON.stringify({
-									type: 'BLOCK',
-									data: block,
-								})
-							);
-							console.log('Block sent to blockchain node');
-						} else {
-							console.error('WebSocket not connected, cannot send block');
-						}
-
-						this.mining = false;
-						this.scheduleMining();
-					}
-
-					if (message.type === 'error') {
-						throw new Error(message.error);
-					}
-				} catch (error) {
-					console.error('Error processing mined block:', error);
-					this.mining = false;
-				}
+			this._cancelSearch = () => finish(null);
+			worker.once('message', (message: WorkerResult) => {
+				finish(message.type === 'found' ? { nonce: message.nonce, hash: message.hash } : null);
 			});
-
-			this.worker.on('error', (error) => {
-				console.error('Mining worker error:', error);
-				this.mining = false;
-			});
-		} catch (error) {
-			console.error('Mining error:', error);
-			this.mining = false;
-		}
-	}
-	private scheduleMining(): void {
-		if (this.miningTimeout) {
-			clearTimeout(this.miningTimeout);
-		}
-
-		// Only schedule next mining if we have a connection
-		if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
-			this.miningTimeout = setTimeout(() => {
-				this.startMining();
-			}, this.targetBlockTime);
-		}
+			worker.once('error', (error) => finish(null, error));
+		});
 	}
 
-	public stopMining(): void {
-		this.mining = false;
-		if (this.worker) {
-			this.worker.terminate();
-			this.worker = null;
-		}
-		if (this.miningTimeout) {
-			clearTimeout(this.miningTimeout);
-			this.miningTimeout = null;
-		}
-		if (this.wsClient) {
-			this.wsClient.close();
-			this.wsClient = null;
-		}
+	private _sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			this._wake = () => {
+				this._wake = null;
+				this._sleepTimer = null;
+				resolve();
+			};
+			this._sleepTimer = setTimeout(this._wake, ms);
+		});
 	}
 }

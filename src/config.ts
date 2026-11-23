@@ -72,6 +72,11 @@ export const MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60 * 1000; // 2 hours in ms
 // Block timing
 export const BLOCK_TIME = 30; // Target time between blocks in seconds
 
+// Mining
+export const MAX_BLOCK_NONCE = 0xffffffff; // Block nonce is stored as uint32
+export const MINER_TIP_POLL_INTERVAL = 500; // ms between checks for a new tip while hashing
+export const MINER_RETRY_DELAY = 1000; // ms to wait after a rejected block before retrying
+
 // Wallet configuration
 export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
