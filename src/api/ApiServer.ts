@@ -55,9 +55,10 @@ interface Route {
 
 /**
  * HTTP API over the node's chain state: JSON responses, amounts as decimal strings. Chain
- * routes are public and read-only. /wallet routes act for the node's wallet and require the
- * token from the node's api.cookie as a bearer token; browsers can't send that header
- * cross-origin (no CORS), so web pages can't use them. Input is validated before use (400),
+ * routes are public and read-only. /wallet routes act for the node's wallet: they answer only
+ * loopback clients (even when API_HOST exposes the API) and require the token from the node's
+ * api.cookie as a bearer token; browsers can't send that header cross-origin (no CORS), so
+ * web pages can't use them. Input is validated before use (400),
  * unknown items are 404, wrong methods 405.
  */
 export class ApiServer {
@@ -124,6 +125,10 @@ export class ApiServer {
 			}
 			if (route.wallet) {
 				if (!this._walletAccess) throw new HttpError(404, 'this node has no wallet API');
+				// Plain HTTP: the token (and a passphrase) must not cross a network, whatever API_HOST is
+				if (!isLoopback(req.socket.remoteAddress)) {
+					throw new HttpError(403, 'wallet routes only answer requests from this machine');
+				}
 				if (!this._isAuthorized(req, this._walletAccess.token)) {
 					headers['www-authenticate'] = 'Bearer';
 					throw new HttpError(401, 'missing or wrong API token (see api.cookie in the data dir)');
@@ -352,6 +357,13 @@ export class ApiServer {
 	private _confirmations(height: number): number {
 		return this._blockchain.getLatestBlock().index - height + 1;
 	}
+}
+
+/** 127.0.0.0/8 and ::1, including IPv4-mapped IPv6 forms. */
+export function isLoopback(address: string | undefined): boolean {
+	if (!address) return false;
+	const ip = address.replace(/^::ffff:/i, '');
+	return ip === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
 }
 
 /** HTTP status for each wallet state error. */

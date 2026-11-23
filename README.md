@@ -278,7 +278,7 @@ const balance = blockchain.getBalance(wallet.address);
 
 ## HTTP API
 
-Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by default, 6002 for a node with `P2P_PORT=5002`). Amounts are decimal strings in base units (`COIN` = 10^8). The chain routes are public and read-only. Set `API_HOST` to expose them on other interfaces.
+Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by default, 6002 for a node with `P2P_PORT=5002`). Amounts are decimal strings in base units (`COIN` = 10^8). The chain routes are public and read-only. Set `API_HOST` to expose them on other interfaces. The wallet routes always answer only requests from the same machine (403 otherwise), because the API is plain HTTP.
 
 | Endpoint | Returns |
 | -------- | ------- |

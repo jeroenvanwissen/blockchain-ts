@@ -1,6 +1,6 @@
 // HTTP API (TASK-0016, wallet routes TASK-0017) against a real chain over real HTTP. Difficulty
 // validation is off so blocks build instantly; real timers (fetch needs them).
-import { ApiServer } from '../../api/ApiServer.js';
+import { ApiServer, isLoopback } from '../../api/ApiServer.js';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
@@ -314,6 +314,27 @@ describe('HTTP API', () => {
 
 			expect((await post('/wallet/lock', {})).body).toMatchObject({ locked: true });
 			expect((await send(payment)).status).toBe(423);
+		});
+
+		it('should refuse wallet routes to clients on other machines, even with the token', async () => {
+			// What a request from 10.0.0.5 looks like to the handler when API_HOST exposes the API
+			const remote = async (url: string) => {
+				let status = 0;
+				const res = { writeHead: (code: number) => (status = code), end: () => {} };
+				const req = { method: 'GET', url, headers: { authorization: `Bearer ${TOKEN}` }, socket: { remoteAddress: '10.0.0.5' } };
+				await api['_handle'](req as never, res as never);
+				return status;
+			};
+
+			expect(await remote('/wallet')).toBe(403);
+			expect(await remote('/status')).toBe(200); // chain routes stay public
+		});
+
+		it('should treat only 127.0.0.0/8 and ::1 as loopback', () => {
+			for (const address of ['127.0.0.1', '127.8.9.10', '::1', '::ffff:127.0.0.1']) expect(isLoopback(address)).toBe(true);
+			for (const address of ['10.0.0.5', '::ffff:10.0.0.5', '192.168.1.2', 'fe80::1', '127.0.0.1.example', undefined]) {
+				expect(isLoopback(address)).toBe(false);
+			}
 		});
 
 		it('should answer 405 for the wrong method and 404 on a node without wallet access', async () => {
