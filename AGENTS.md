@@ -26,7 +26,8 @@ Run npm scripts from the repository root.
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
 - Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 10 s; `-- --keep` keeps the temp dir)
 - End-to-end: `npm run e2e` (three `--regtest` node processes plus an in-process harness peer: payment, PoW→PoS, both A and C staking, partition and reorg, restart, convergence; about 2 minutes; prints each node's tip and last log lines on failure). Run it for changes to consensus, P2P or staking
-- Lint: `npm run lint` (currently fails on pre-existing errors, see TASK-0021); lint touched files with `npx eslint <files>`
+- Lint: `npm run lint` (must pass; ignores the generated `dist/` and `coverage/`)
+- Standard check: `npm run check` (build, test, lint)
 - Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. `--regtest` selects the regression-test network (own network id, 20 PoW blocks, no minimum stake age). Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
 ## Conventions
@@ -62,7 +63,7 @@ Run npm scripts from the repository root.
 
 ## Change verification
 
-- Run `npm run build` and `npm test` for every change. Also run `npm run lint` on the files you touched.
+- Run `npm run check` (build, test and lint) for every change; all three must pass.
 - Unit tests mock `fs`, `protobufjs` and time, so they don't prove the node runs. For anything touching startup, storage, wallet, mining, networking or imports, also run `npm run smoke`.
 - When an attack scenario from the assessment is fixed, turn its regression test from `test.failing` into `test`.
 

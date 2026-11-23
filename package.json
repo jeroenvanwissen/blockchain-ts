@@ -9,6 +9,7 @@
 		"build": "tsc",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
+		"check": "npm run build && npm test && npm run lint",
 		"test": "jest",
 		"smoke": "tsx src/smoke.ts",
 		"e2e": "tsx src/e2e.ts"

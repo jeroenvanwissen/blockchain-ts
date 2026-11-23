@@ -54,7 +54,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | TASK-0018 | Transaction fees | pending | P2 | medium | TASK-0006 | old E1 |
 | TASK-0019 | Mempool with conflict handling and revalidation | pending | P2 | medium | TASK-0006, TASK-0012 | old E2, F-007 |
 | TASK-0020 | Peer limits and reconnect policy | pending | P2 | small | TASK-0013 | old E4 |
-| TASK-0021 | Fix lint errors and gate changes on build, test and lint | pending | P2 | small | none | F-017 |
+| [TASK-0021](TASK-0021-lint.md) | Fix lint errors and gate changes on build, test and lint | done | P2 | small | none | F-017 |
 | [TASK-0022](TASK-0022-dead-code.md) | Remove dead code and stale files | done | P2 | small | none | F-018, old F1 |
 | TASK-0023 | Leveled logging | pending | P3 | small | TASK-0002 | old F2 |
 | TASK-0024 | Encrypt wallet keys at rest | pending | P3 | medium | TASK-0005 | — |
@@ -66,7 +66,6 @@ Scope notes for the later tasks (expand into task files when they're picked up):
 - **TASK-0018:** fee = inputs − outputs, claimed in the coinbase or coinstake, with a minimum relay fee.
 - **TASK-0019:** replace the pending array with a mempool: conflict detection, size limit with fee-rate eviction, revalidation on a new tip or reorg. A rejected block must never wedge block production (F-007 symptom).
 - **TASK-0020:** caps on inbound and outbound connections, capped backoff, and a misbehavior score that leads to a temporary ban.
-- **TASK-0021:** fix the 41 lint errors. Make `npm run build && npm test && npm run lint` the standard check. CI is recommended; adding it is the owner's call.
 - **TASK-0023:** replace `console.*` with a small leveled logger (debug output off by default). Never log key material.
 - **TASK-0024:** passphrase-based key encryption (scrypt + AES-256-GCM) with an unlock step for staking.
 

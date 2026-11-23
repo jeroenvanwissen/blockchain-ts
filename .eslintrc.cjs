@@ -1,5 +1,6 @@
 module.exports = {
 	root: true,
+	ignorePatterns: ['dist/', 'coverage/'], // generated output
 	parser: '@typescript-eslint/parser',
 	plugins: ['@typescript-eslint', 'jest'],
 	extends: [

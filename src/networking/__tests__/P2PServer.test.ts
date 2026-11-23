@@ -129,7 +129,7 @@ describe('P2PServer', () => {
 		const writeFileSyncMock = fs.writeFileSync as jest.Mock;
 		const lastWriteCall =
 			writeFileSyncMock.mock.calls[writeFileSyncMock.mock.calls.length - 1];
-		const writtenData = JSON.parse(lastWriteCall[1]);
+		const writtenData = JSON.parse(lastWriteCall[1] as string) as string[];
 
 		expect(writtenData).toHaveLength(1);
 		expect(writtenData[0]).toBe('valid-peer:5002');
@@ -168,7 +168,7 @@ describe('P2PServer', () => {
 	// Fix the network disconnection test
 	it('should handle network disconnection', () => {
 		const reconnectSpy = jest
-			.spyOn(p2pServer as any, 'reconnectToPeer')
+			.spyOn(p2pServer as unknown as { reconnectToPeer(peer: string): Promise<void> }, 'reconnectToPeer')
 			.mockImplementation();
 		p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
 

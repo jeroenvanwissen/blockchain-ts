@@ -256,18 +256,16 @@ describe('Blockchain', () => {
 			jest.setSystemTime(new Date(blockTime));
 			await blockchain.minePendingTransactions(minerAddr);
 
-			// Pending pool is now empty; the change UTXO should be available
-			// The sender should be able to spend remaining balance
+			// Pending pool is now empty; the sender can spend its 5-coin change
 			const remainingBalance = blockchain.getBalance(senderAddr);
-			if (remainingBalance > 0) {
-				const tx2 = blockchain.createTransaction(
-					senderAddr,
-					receiverWallet2.getAddress(),
-					remainingBalance,
-					senderWallet
-				);
-				await expect(blockchain.addTransaction(tx2)).resolves.not.toThrow();
-			}
+			expect(remainingBalance).toBe(POW_BLOCK_REWARD - coins(5));
+			const tx2 = blockchain.createTransaction(
+				senderAddr,
+				receiverWallet2.getAddress(),
+				remainingBalance,
+				senderWallet
+			);
+			await expect(blockchain.addTransaction(tx2)).resolves.not.toThrow();
 		});
 
 		it('should allow spending after clearPendingTransactions', async () => {

@@ -175,7 +175,7 @@ describe('Wallet', () => {
 
 	describe('file permissions', () => {
 		it('should set 0600 permissions on wallet file after save', () => {
-			const wallet = new Wallet(testPath);
+			new Wallet(testPath);
 			expect(fs.chmodSync).toHaveBeenCalledWith(testPath, 0o600);
 		});
 
@@ -213,7 +213,7 @@ describe('Wallet', () => {
 			(fs.unlinkSync as jest.Mock).mockImplementation(() => {});
 			(fs.copyFileSync as jest.Mock).mockImplementation(() => {});
 
-			const wallet = new Wallet(testPath);
+			new Wallet(testPath);
 
 			const deletedCount = 5 - MAX_WALLET_BACKUPS;
 			expect(fs.unlinkSync).toHaveBeenCalledTimes(deletedCount);
@@ -232,7 +232,7 @@ describe('Wallet', () => {
 			(fs.copyFileSync as jest.Mock).mockImplementation(() => {});
 			(fs.unlinkSync as jest.Mock).mockImplementation(() => {});
 
-			const wallet = new Wallet(testPath);
+			new Wallet(testPath);
 
 			expect(fs.unlinkSync).not.toHaveBeenCalled();
 		});

@@ -204,10 +204,9 @@ npm run dev -- --stake
 ### Step 4: Verify
 
 ```bash
-npm test                # Run test suite
+npm run check           # Build, test suite and lint
 npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
-npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~4 min)
-npm run build           # Compile TypeScript
+npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~2 min)
 ```
 
 ---
@@ -260,11 +259,10 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 ```
 1. Create a branch:    git checkout -b feature/<name>
 2. Make changes
-3. Run tests:          npm test
-4. Lint code:          npm run lint:fix
-5. Build:              npm run build
-6. Commit and push
-7. Create PR:          gh pr create --title "..." --body "..."
+3. Check:              npm run check   (build, test, lint; npm run lint:fix for fixable issues)
+4. Real runtime:       npm run smoke   (and npm run e2e for consensus, P2P or staking)
+5. Commit and push
+6. Create PR:          gh pr create --title "..." --body "..."
 ```
 
 ### Quick Reference
@@ -280,6 +278,7 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | End-to-end        | `npm run e2e`                                                 |
 | Regtest node      | `npm start -- --regtest --data-dir <dir> --mine --stake`      |
 | Build             | `npm run build`                                               |
+| Build, test, lint | `npm run check`                                               |
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |
 | Start 2nd node    | `P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001` |
@@ -326,7 +325,7 @@ npm run lint                      # Check for code issues
 
 **Do:**
 - Keep PRs small and focused
-- Run `npm test` and `npm run build` before committing
+- Run `npm run check` before committing
 - Use feature branches, never commit directly to main
 - Write tests for new functionality
 
