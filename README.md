@@ -6,12 +6,25 @@
 
 ## Contents
 
-| Resource                       | Purpose                                   |
-| ------------------------------ | ----------------------------------------- |
-| [.claude/CLAUDE.md](.claude/CLAUDE.md) | Project instructions and conventions |
-| [.agent/TASKS.md](.agent/TASKS.md) | Project backlog with detailed task files |
-| [src/](src/)                   | TypeScript source code                    |
-| [data/](data/)                 | Runtime data (chain, wallet, peers)       |
+| Resource                                                     | Purpose                                     |
+| ------------------------------------------------------------ | ------------------------------------------- |
+| [AGENTS.md](AGENTS.md)                                       | Instructions for coding agents              |
+| [tasks/BACKLOG.md](tasks/BACKLOG.md)                         | Prioritized backlog (`TASK-####`)           |
+| [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) | Latest project assessment with evidence |
+| [src/](src/)                                                 | TypeScript source code                      |
+
+---
+
+## Status
+
+**Not functional end to end yet (assessed 2026-11-23).** The build and unit tests pass, but:
+
+- the node crashes on first start and on restart (fixes: TASK-0001);
+- nothing produces blocks the node accepts (TASK-0004);
+- signatures are not verified, and block transactions are not checked against the UTXO set (TASK-0005, TASK-0006);
+- stake state is node-local, so nodes disagree after restarts (TASK-0009, TASK-0011).
+
+The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
 ---
 
@@ -20,7 +33,7 @@
 ```
 1. Install dependencies:     npm install
 2. Start a node:             npm run dev
-3. Start a second node:      P2P_PORT=5002 PEERS=ws://localhost:5001 npm run dev
+3. Start a second node:      P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001
 4. Run the miner:            npm run mine
 5. Run tests:                npm test
 6. Build for production:     npm run build
@@ -151,12 +164,14 @@ npm run dev
 
 ### Step 2: Start Additional Nodes (P2P)
 
-Each node needs a unique P2P port and at least one peer to connect to:
+Each node needs a unique P2P port, its own data directory, and at least one peer to connect to:
 
 ```bash
-P2P_PORT=5002 PEERS=ws://localhost:5001 npm run dev
-P2P_PORT=5003 PEERS=ws://localhost:5001,ws://localhost:5002 npm run dev
+P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001
+P2P_PORT=5003 npm run dev -- --data-dir ./data/node3 --peers ws://localhost:5001,ws://localhost:5002
 ```
+
+Peers can also come from the `SEED_NODES` env var (comma-separated) or from `peers.json` in the data directory.
 
 ### Step 3: Run the Miner
 
@@ -240,7 +255,7 @@ await blockchain.stake(wallet.address, 50, wallet);
 | Build             | `npm run build`                                               |
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |
-| Start 2nd node    | `P2P_PORT=5002 PEERS=ws://localhost:5001 npm run dev`         |
+| Start 2nd node    | `P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001` |
 
 ---
 
@@ -257,7 +272,7 @@ kill -9 <PID>
 ### Node Can't Connect to Peers
 
 - Verify the peer node is running
-- Check the `PEERS` environment variable format: `ws://host:port`
+- Check the `--peers` argument format: `ws://host:port`, comma-separated
 - Ensure firewall allows WebSocket connections
 
 ### Tests Failing
@@ -294,7 +309,7 @@ npm run lint                      # Check for code issues
 
 ## Project Tasks
 
-See [.agent/TASKS.md](.agent/TASKS.md) for the full project backlog organized by phase, with dependency graphs and guardrails.
+See [tasks/BACKLOG.md](tasks/BACKLOG.md) for the prioritized backlog, grouped into milestones that each end in something runnable. Evidence for each task is in the [assessment](tasks/assessment-2026-11-23.md).
 
 ---
 
