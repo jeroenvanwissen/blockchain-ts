@@ -220,12 +220,41 @@ describe('HTTP API', () => {
 			const wallet = await get('/wallet', { headers: { authorization: `Bearer ${TOKEN}` } });
 			expect(wallet.status).toBe(200);
 			expect(wallet.body).toEqual({
-				...(await get(`/addresses/${miner.address}`)).body,
+				...(await get(`/addresses/${miner.address}`)).body, // all coins are on the primary address
+				addresses: 1,
 				encrypted: false,
 				locked: false,
 				stakingOnly: false,
 				unlockedUntil: null,
 			});
+		});
+
+		it('should hand out new addresses and list them with their balances', async () => {
+			const auth = { authorization: `Bearer ${TOKEN}` };
+			const create = (headers: Record<string, string>) =>
+				get('/wallet/addresses', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
+			expect((await create({})).status).toBe(401);
+
+			const created = await create(auth);
+			expect(created.status).toBe(200);
+			const address = created.body.address as string;
+			expect(miner.owns(address)).toBe(true);
+			await buildBlocks(chain, address, 1); // a reward to the new address
+
+			const list = (await get('/wallet/addresses', { headers: auth })).body as unknown as {
+				address: string;
+				balance: string;
+				index: number | null;
+				primary: boolean;
+			}[];
+			expect(list.map((entry) => [entry.address, entry.index, entry.primary])).toEqual([
+				[miner.address, 0, true],
+				[address, 1, false],
+			]);
+			expect(list[1].balance).toBe(POW_BLOCK_REWARD.toString());
+			const wallet = (await get('/wallet', { headers: auth })).body;
+			expect(wallet.addresses).toBe(2);
+			expect(wallet.balance).toBe((BigInt(list[0].balance) + POW_BLOCK_REWARD).toString());
 		});
 
 		it('should pay several outputs with change back to the wallet, and relay the payment', async () => {
@@ -334,7 +363,7 @@ describe('HTTP API', () => {
 				phase: 'pow', // this chain stays in the PoW phase
 				locked: false,
 				stakingOnly: false,
-				eligibleOutputs: chain.getStakeableUTXOs(miner.address, Date.now()).length,
+				eligibleOutputs: chain.getStakeableUTXOs(miner.addresses(), Date.now()).length,
 				eligibleValue: expect.any(String) as string,
 				chancePerSlot: 0,
 				expectedSeconds: null,

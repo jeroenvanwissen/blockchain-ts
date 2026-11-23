@@ -7,7 +7,11 @@ const USAGE = `usage: npm run cli -- [--data-dir <dir>] [--api <url>] <command>
 
 commands:
   status                                    chain status of the node
-  balance                                   the node wallet's address and balance
+  balance                                   the wallet's primary address and its balance over
+                                            all addresses
+  new-address                               hand out a new receiving address (no passphrase
+                                            needed)
+  addresses                                 the wallet's addresses with their balances
   send <address> <coins> [<address> <coins> ...]
                                             pay from the node's wallet plus the minimum fee;
                                             prints the txid (and the fee on stderr)
@@ -38,6 +42,7 @@ interface Status {
 }
 interface WalletInfo {
 	address: string;
+	addresses: number;
 	balance: string;
 	spendable: string;
 	utxos: number;
@@ -45,6 +50,15 @@ interface WalletInfo {
 	locked: boolean;
 	stakingOnly: boolean;
 	unlockedUntil: string | null;
+}
+
+interface AddressInfo {
+	address: string;
+	balance: string;
+	spendable: string;
+	utxos: number;
+	index: number | null;
+	primary: boolean;
 }
 
 interface StakingInfo {
@@ -165,10 +179,26 @@ async function run(argv: string[]): Promise<void> {
 		case 'balance': {
 			const w = await request<WalletInfo>(api, 'GET', '/wallet');
 			console.log(`address: ${w.address}`);
+			console.log(`addresses: ${w.addresses}`);
 			console.log(`wallet: ${walletState(w)}`);
 			console.log(`balance: ${formatCoins(BigInt(w.balance))}`);
 			console.log(`spendable: ${formatCoins(BigInt(w.spendable))}`);
 			console.log(`outputs: ${w.utxos}`);
+			return;
+		}
+		case 'new-address': {
+			if (rest.length > 0) throw new UsageError('new-address takes no arguments');
+			const { address } = await request<{ address: string }>(api, 'POST', '/wallet/addresses', {});
+			console.log(address);
+			return;
+		}
+		case 'addresses': {
+			if (rest.length > 0) throw new UsageError('addresses takes no arguments');
+			const list = await request<AddressInfo[]>(api, 'GET', '/wallet/addresses');
+			for (const a of list) {
+				const note = a.primary ? '  (primary)' : a.index === null ? '' : `  #${a.index}`;
+				console.log(`${a.address}  ${formatCoins(BigInt(a.balance)).padStart(16)}${note}`);
+			}
 			return;
 		}
 		case 'send': {

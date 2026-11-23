@@ -839,26 +839,32 @@ export class Blockchain {
 		return this.getUTXOs(address).reduce((sum, utxo) => sum + utxo.output.amount, 0n);
 	}
 
-	/** Single-recipient payment from `from` (the wallet's address); see createPayment. */
+	/** Single-recipient payment spending only `from`'s outputs, change back to it; see createPayment. */
 	createTransaction(from: string, to: string, amount: bigint, wallet: Wallet): Transaction {
 		if (!this.validateAddress(from)) {
 			throw new Error('invalid sender address');
 		}
-		return this.buildPayment(from, [{ address: to, amount }], wallet).transaction;
+		return this.buildPayment([from], from, [{ address: to, amount }], wallet).transaction;
 	}
 
 	/**
 	 * Build and sign a payment from `wallet` to one or more outputs, paying the minimum relay
-	 * fee for its size. Spendable outputs are taken largest first until they cover the amount
-	 * plus fee; change goes back to the wallet (no change output when nothing is left). The
-	 * result still has to go through addTransaction.
+	 * fee for its size. Spendable outputs of all the wallet's addresses are taken largest first
+	 * until they cover the amount plus fee; change goes to the wallet's primary address (no
+	 * change output when nothing is left). The result still has to go through addTransaction.
 	 */
 	public createPayment(wallet: Wallet, payTo: TxOutput[]): { transaction: Transaction; fee: bigint } {
-		return this.buildPayment(wallet.address, payTo, wallet);
+		return this.buildPayment(wallet.addresses(), wallet.address, payTo, wallet);
+	}
+
+	/** Unspent outputs of all `addresses` (a wallet's). */
+	public getWalletUTXOs(addresses: readonly string[]): UTXO[] {
+		return addresses.flatMap((address) => this.getUTXOs(address));
 	}
 
 	private buildPayment(
-		from: string,
+		from: readonly string[],
+		changeAddress: string,
 		payTo: TxOutput[],
 		wallet: Wallet,
 	): { transaction: Transaction; fee: bigint } {
@@ -875,30 +881,32 @@ export class Blockchain {
 		const feeFor = (inputs: TxInput[], outputs: TxOutput[]) =>
 			minRelayFee(Blockchain._draftSize(inputs, outputs), this._options.minRelayFeePerKb);
 
-		const candidates = this.getSpendableUTXOs(from).sort((a, b) =>
-			a.output.amount === b.output.amount ? 0 : a.output.amount > b.output.amount ? -1 : 1,
-		);
+		const candidates = from
+			.flatMap((address) => this.getSpendableUTXOs(address))
+			.sort((a, b) => (a.output.amount === b.output.amount ? 0 : a.output.amount > b.output.amount ? -1 : 1));
 		let inputSum = 0n;
 		let timestamp = Date.now(); // never earlier than an output it spends (consensus)
 		const inputs: TxInput[] = [];
+		const owners: string[] = []; // the address whose key signs each input
 		for (const utxo of candidates) {
 			if (inputs.length === MAX_TRANSACTION_INPUTS) break;
 			inputSum += utxo.output.amount;
 			timestamp = Math.max(timestamp, utxo.txTimestamp);
 			inputs.push({ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' });
+			owners.push(utxo.output.address);
 
-			const changeOutput = { address: from, amount: 1n }; // amount doesn't affect the size
+			const changeOutput = { address: changeAddress, amount: 1n }; // amount doesn't affect the size
 			const feeWithChange = feeFor(inputs, [...recipients, changeOutput]);
 			let outputs: TxOutput[] | undefined;
 			if (inputSum >= amount + feeWithChange) {
 				const change = inputSum - amount - feeWithChange;
-				outputs = change > 0n ? [...recipients, { address: from, amount: change }] : recipients;
+				outputs = change > 0n ? [...recipients, { address: changeAddress, amount: change }] : recipients;
 			} else if (inputSum >= amount + feeFor(inputs, recipients)) {
 				outputs = recipients; // what's left over is too little for a change output: it's fee
 			}
 			if (outputs) {
 				const transaction = new Transaction(inputs, outputs, timestamp);
-				wallet.signTransaction(transaction);
+				wallet.signTransaction(transaction, 'spend', owners);
 				const outputSum = outputs.reduce((sum, output) => sum + output.amount, 0n);
 				return { transaction, fee: inputSum - outputSum };
 			}
@@ -978,10 +986,11 @@ export class Blockchain {
 	}
 
 	/**
-	 * Try to stake the next block at `timestamp` with the wallet's outputs. The timestamp must
-	 * be on the STAKE_TIMESTAMP_GRANULARITY grid and after the tip's timestamp. Returns a
-	 * signed PoS block (coinbase pays the fixed reward to the staker; the coinstake returns
-	 * the kernel output unchanged), or null if no output's kernel meets the target.
+	 * Try to stake the next block at `timestamp` with the outputs of any of the wallet's
+	 * addresses. The timestamp must be on the STAKE_TIMESTAMP_GRANULARITY grid and after the
+	 * tip's timestamp. Returns a block signed by the kernel output's key (the coinbase pays the
+	 * reward plus fees to that address; the coinstake returns the kernel output to it unchanged),
+	 * or null if no output's kernel meets the target.
 	 */
 	public createStakeBlock(wallet: Wallet, timestamp: number): Block | null {
 		const height = this.chain.length;
@@ -997,42 +1006,43 @@ export class Blockchain {
 		const bits = this.getRequiredBits(true);
 		const modifier = this._modifiers[height - 1];
 
-		for (const utxo of this.getStakeableUTXOs(wallet.address, timestamp)) {
+		for (const utxo of this.getStakeableUTXOs(wallet.addresses(), timestamp)) {
 			const hash = kernelHash(modifier, utxo.txTimestamp, utxo.txHash, utxo.outputIndex, timestamp);
 			if (!meetsKernelTarget(hash, bits, utxo.output.amount)) continue;
 
+			const staker = utxo.output.address;
 			const coinstake = new Transaction(
 				[{ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' }],
 				[
-					{ address: wallet.address, amount: 0n }, // coinstake marker
-					{ address: wallet.address, amount: utxo.output.amount },
+					{ address: staker, amount: 0n }, // coinstake marker
+					{ address: staker, amount: utxo.output.amount },
 				],
 				timestamp,
 			);
-			wallet.signTransaction(coinstake, 'stake');
+			wallet.signTransaction(coinstake, 'stake', [staker]);
 			const { transactions, fees } = this._selectForBlock(2, timestamp);
 			const block = new Block(
 				timestamp,
-				[Transaction.coinbase(wallet.address, POS_BLOCK_REWARD + fees, height, timestamp), coinstake, ...transactions],
+				[Transaction.coinbase(staker, POS_BLOCK_REWARD + fees, height, timestamp), coinstake, ...transactions],
 				this.getLatestBlock().hash,
 				0,
 				bits,
 				height,
 			);
-			block.signature = wallet.signDigest(Buffer.from(block.hash, 'hex'));
+			block.signature = wallet.signDigest(Buffer.from(block.hash, 'hex'), staker);
 			return block;
 		}
 		return null;
 	}
 
 	/**
-	 * Outputs of `address` that may stake a block at `timestamp`: mature, with
+	 * Outputs of `addresses` (a wallet's) that may stake a block at `timestamp`: mature, with
 	 * STAKE_MIN_CONFIRMATIONS, old enough by their block's time, and not claimed by the mempool.
 	 * createStakeBlock and the staking status use the same rules.
 	 */
-	public getStakeableUTXOs(address: string, timestamp: number): UTXO[] {
+	public getStakeableUTXOs(addresses: readonly string[], timestamp: number): UTXO[] {
 		const height = this.chain.length;
-		return this.getUTXOs(address).filter(
+		return this.getWalletUTXOs(addresses).filter(
 			(utxo) =>
 				!this._mempool.isSpent(utxo.txHash, utxo.outputIndex) &&
 				this._isMature(utxo, height) &&
@@ -1043,15 +1053,15 @@ export class Blockchain {
 	}
 
 	/**
-	 * Staking outlook for `address` at `timestamp`: its eligible outputs, the chance that one of
+	 * Staking outlook for `addresses` at `timestamp`: their eligible outputs, the chance that one of
 	 * them has a kernel meeting the current PoS target in a slot (each output: target × value /
 	 * 2^256), and the expected time to find one. Ignores other stakers, who may win a slot first.
 	 */
 	public getStakingOutlook(
-		address: string,
+		addresses: readonly string[],
 		timestamp: number,
 	): { outputs: number; value: bigint; chancePerSlot: number; expectedSeconds: number | null } {
-		const eligible = this.getStakeableUTXOs(address, timestamp);
+		const eligible = this.getStakeableUTXOs(addresses, timestamp);
 		const value = eligible.reduce((total, utxo) => total + utxo.output.amount, 0n);
 		if (!this.isProofOfStakePhase() || eligible.length === 0) {
 			return { outputs: eligible.length, value, chancePerSlot: 0, expectedSeconds: null };
@@ -1068,11 +1078,12 @@ export class Blockchain {
 		return { outputs: eligible.length, value, chancePerSlot, expectedSeconds };
 	}
 
-	/** The newest block on the active chain staked by `address`, looking back at most `depth` blocks. */
-	public findLastStakedBlock(address: string, depth = 10_000): Block | undefined {
+	/** The newest block on the active chain staked by one of `addresses`, looking back at most `depth` blocks. */
+	public findLastStakedBlock(addresses: readonly string[], depth = 10_000): Block | undefined {
+		const stakers = new Set(addresses);
 		for (let height = this.chain.length - 1; height > 0 && height >= this.chain.length - depth; height--) {
 			const block = this.chain[height];
-			if (block.isProofOfStake() && block.transactions[1].outputs[1]?.address === address) return block;
+			if (block.isProofOfStake() && stakers.has(block.transactions[1].outputs[1]?.address)) return block;
 		}
 		return undefined;
 	}

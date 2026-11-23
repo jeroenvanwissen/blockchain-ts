@@ -29,10 +29,10 @@ const NEXT_BLOCK_TIMEOUT_MS = 120_000; // up to a few target spacings once the r
 const PASSPHRASE = 'smoke test passphrase';
 
 /** The private key stored in a wallet file (empty once encrypted). */
-function storedPrivateKey(file: string): Buffer {
+function storedSeed(file: string): Buffer {
 	const type = protobuf.parse(WALLET_SCHEMA).root.lookupType('WalletData');
-	const { privateKey } = type.decode(fs.readFileSync(file)) as unknown as { privateKey?: Uint8Array };
-	return Buffer.from(privateKey ?? []);
+	const { seed } = type.decode(fs.readFileSync(file)) as unknown as { seed?: Uint8Array };
+	return Buffer.from(seed ?? []);
 }
 
 function assertFile(file: string): void {
@@ -116,6 +116,12 @@ async function main(): Promise<void> {
 		if (cliBalance.code !== 0 || !cliBalance.stdout.includes(`address: ${address}`)) {
 			throw new Error(`cli balance failed: ${cliBalance.stderr.trim()}`);
 		}
+		const newAddress = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'new-address']);
+		const created = newAddress.stdout.trim();
+		const listed = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'addresses']);
+		if (newAddress.code !== 0 || created === address || !listed.stdout.includes(created) || !listed.stdout.includes(address)) {
+			throw new Error(`cli new-address or addresses failed: ${newAddress.stderr.trim()} ${listed.stderr.trim()}`);
+		}
 		const cookie = path.join(dataA, 'api.cookie');
 		if ((fs.statSync(cookie).mode & 0o777) !== 0o600) throw new Error('api.cookie is not 0600');
 		const token = fs.readFileSync(cookie, 'utf8').trim();
@@ -123,15 +129,15 @@ async function main(): Promise<void> {
 			throw new Error('the API token appeared in output');
 		}
 
-		step("encrypt A's wallet with the CLI; the unencrypted key must leave the disk");
+		step("encrypt A's wallet with the CLI; the unencrypted seed must leave the disk");
 		const walletFile = path.join(dataA, 'wallet.dat');
-		const plainKey = storedPrivateKey(walletFile);
+		const plainSeed = storedSeed(walletFile);
 		const encrypted = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'encrypt-wallet'], `${PASSPHRASE}\n`);
 		if (encrypted.code !== 0 || !encrypted.stdout.includes('wallet: encrypted, locked')) {
 			throw new Error(`cli encrypt-wallet failed: ${encrypted.stderr.trim()}`);
 		}
-		if (plainKey.length !== 32 || fs.readFileSync(walletFile).includes(plainKey)) {
-			throw new Error('the unencrypted key is still in wallet.dat');
+		if (plainSeed.length !== 32 || fs.readFileSync(walletFile).includes(plainSeed)) {
+			throw new Error('the unencrypted seed is still in wallet.dat');
 		}
 		if (fs.readdirSync(dataA).some((f) => f.startsWith('wallet.dat.') && f.endsWith('.backup'))) {
 			throw new Error('unencrypted wallet backups were left behind');
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
 		await waitFor(nodeA, API_READY, 'API');
 		const cli = (args: string[], input?: string) => runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), ...args], input);
 		if (!(await cli(['balance'])).stdout.includes('wallet: encrypted, locked')) throw new Error('wallet not locked after restart');
+		if (!(await cli(['addresses'])).stdout.includes(created)) throw new Error('the new address is gone after restart');
 		const wrong = await cli(['unlock'], 'not the passphrase\n');
 		if (wrong.code === 0 || !wrong.stderr.includes('wrong passphrase')) throw new Error('a wrong passphrase unlocked the wallet');
 		const unlocked = await cli(['unlock', '--staking-only'], `${PASSPHRASE}\n`);

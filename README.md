@@ -21,7 +21,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`).
 
-Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed and can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
 
 ---
 
@@ -71,7 +71,7 @@ git --version          # Should be 2.30+
 | **Fork Resolution**      | Block tree; the branch with the most work wins (equal work: a tie-break block contents can't influence); reorgs with undo data |
 | **Digital Signatures**   | secp256k1 ECDSA per input (low-S), txid excludes signatures      |
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
-| **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |
+| **Wallet System**        | HD wallet (BIP32): any number of addresses from one seed, Base58Check, protobuf persistence |
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
 | **Staking**              | Kernel PoS: any mature UTXO can stake; PoS blocks signed by the staker; fixed 10-coin reward |
 | **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
@@ -90,7 +90,8 @@ src/
 │   ├── BlockStore.ts         # Append-only chunked block storage with protobuf index
 │   ├── Transaction.ts        # Transaction format, txid/witness hash, signing, verification
 │   ├── UtxoSet.ts            # Unspent outputs by outpoint, per-address index
-│   ├── Wallet.ts             # Key management, persistence (keys only)
+│   ├── Wallet.ts             # HD keys, addresses, encryption, persistence (keys only)
+│   ├── hd.ts                 # BIP32 key derivation
 │   ├── amount.ts             # Coin amounts: parse "1.5", format base units
 │   ├── address.ts            # Base58Check addresses
 │   ├── kernel.ts             # PoS kernel hash, kernel target, stake modifier
@@ -111,7 +112,7 @@ src/
 ├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Node entry point
-├── cli.ts                    # npm run cli: status, balance, send via the API
+├── cli.ts                    # npm run cli: status, balance, addresses, send via the API
 ├── smoke.ts                  # npm run smoke: two real nodes
 ├── e2e.ts                    # npm run e2e: three regtest nodes, partition, reorg
 └── nodeHarness.ts            # Helpers for driving node processes
@@ -125,7 +126,7 @@ src/
 | **Blockchain**     | `Blockchain.ts`       | Chain management, UTXO set, consensus, staking       |
 | **BlockStore**     | `BlockStore.ts`       | Chunked block persistence with protobuf index        |
 | **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
-| **Wallet**         | `Wallet.ts`           | Key management, address encoding, protobuf storage   |
+| **Wallet**         | `Wallet.ts`           | HD keys and addresses, encryption, protobuf storage  |
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
@@ -164,6 +165,8 @@ Key constants in `src/config.ts`:
 | `POS_LIMIT`                     | 2^236−1 | Easiest PoS target                             |
 | `MAX_BLOCK_FILE_SIZE`           | 128 MB  | Max size per chunked block data file           |
 | `MAX_WALLET_BACKUPS`            | 3       | Maximum wallet backup files to keep            |
+| `WALLET_ADDRESS_LOOKAHEAD`      | 20      | Addresses watched past the last one handed out |
+| `MAX_WALLET_ADDRESSES`          | 100,000 | Receiving addresses a wallet can hand out      |
 
 ### Data Files
 
@@ -177,7 +180,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
 | `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
-| `wallet.dat`            | Wallet keys and address (protobuf, 0600; the private key encrypted once you run `cli encrypt-wallet`) |
+| `wallet.dat`            | Wallet seed, account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
 | `banned.json`           | Banned peers and when their bans expire    |
@@ -215,7 +218,7 @@ npm run dev -- --mine
 
 The target is retargeted every block toward one block per `BLOCK_TIME` (30 s): a new chain mines its first blocks quickly until the target catches up with the miner's hash rate. Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
 
-After block 100 blocks are proof of stake. Start a node with `--stake` to stake with its wallet: every 16-second slot it checks whether one of its outputs (at least 10 confirmations and 8 hours old) has a kernel that meets the target, and if so signs and broadcasts a PoS block paying the fixed 10-coin reward to the wallet:
+After block 100 blocks are proof of stake. Start a node with `--stake` to stake with its wallet: every 16-second slot it checks whether one of its outputs (at least 10 confirmations and 8 hours old) has a kernel that meets the target, and if so signs and broadcasts a PoS block paying the fixed 10-coin reward to the address that staked. Outputs on any of the wallet's addresses can stake:
 
 ```bash
 npm run dev -- --stake
@@ -225,7 +228,7 @@ Check on it with `npm run cli -- staking`: whether staking is enabled, how many 
 
 ### Sending Coins
 
-The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, change back to the wallet) plus the minimum relay fee for the transaction's size, admits the payment to the mempool, relays it, and prints the txid (the fee goes to stderr). The fee goes to whoever produces the block. Amounts are in coins with up to 8 decimals:
+The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, from any of its addresses, change back to its primary address) plus the minimum relay fee for the transaction's size, admits the payment to the mempool, relays it, and prints the txid (the fee goes to stderr). The fee goes to whoever produces the block. Amounts are in coins with up to 8 decimals:
 
 ```bash
 npm run cli -- status
@@ -236,9 +239,23 @@ npm run cli -- send <address1> 1 <address2> 2.25     # several recipients in one
 
 For another node, pass its data dir (for its `api.cookie`) and API URL: `npm run cli -- --data-dir ./data/node2 --api http://127.0.0.1:6002 balance`.
 
+### Wallet Addresses
+
+The wallet is an HD wallet (BIP32): every address comes from one seed, at m/0'/0/i. Mining rewards and payment change go to its primary address; hand out a new address for each payer or purpose:
+
+```bash
+npm run cli -- new-address     # prints a new receiving address
+npm run cli -- addresses       # addresses with their balances, primary first
+npm run cli -- balance         # the primary address and the balance over all addresses
+```
+
+`new-address` needs no passphrase: the wallet keeps its account public key unencrypted, so a locked wallet can still hand out addresses. The wallet also watches the next 20 addresses after the last one it handed out (`WALLET_ADDRESS_LOOKAHEAD`), so a backup of `wallet.dat` still sees coins sent to up to 20 addresses created after it. Payments spend from any address and staking uses outputs on any address.
+
+A wallet made by an older version has one key. It keeps that key as its primary address and gets a seed for further addresses: at the next start if unencrypted, or at the first `unlock` if encrypted (until then `new-address` asks you to unlock once).
+
 ### Wallet Encryption
 
-`wallet.dat` holds the private key unencrypted (mode 0600) until you encrypt it. Encryption uses a passphrase (scrypt, AES-256-GCM), deletes the old unencrypted backups, and locks the wallet:
+`wallet.dat` holds the seed unencrypted (mode 0600) until you encrypt it. Encryption uses a passphrase (scrypt, AES-256-GCM), deletes the old unencrypted backups, and locks the wallet:
 
 ```bash
 npm run cli -- encrypt-wallet                    # asks for the passphrase twice
@@ -298,13 +315,15 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Number and total size of pending transactions, and their txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
-| `GET /wallet` | The node wallet's address, balance, spendable balance and number of outputs (token required) |
+| `GET /wallet` | The wallet's primary address, the number of addresses handed out, and the balance, spendable balance and number of outputs over all its addresses (token required) |
+| `GET /wallet/addresses` | The addresses handed out (plus watched ones holding coins), each with its receiving index, balance and outputs; the primary first (token required) |
+| `POST /wallet/addresses` | Body `{}`: hands out a new receiving address, also while locked; returns `{"address": "..."}` (token required) |
 | `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}`; 423 while the wallet is locked or unlocked for staking only (token required) |
-| `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the key at rest and locks the wallet (token required) |
+| `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the seed at rest and locks the wallet (token required) |
 | `POST /wallet/unlock` | Body `{"passphrase": "...", "timeout": <seconds, 0 = no limit>, "stakingOnly": <bool>}`; 403 for a wrong passphrase (token required) |
-| `POST /wallet/lock` | Wipes the key from memory (token required) |
+| `POST /wallet/lock` | Wipes the keys from memory (token required) |
 | `GET /wallet/staking` | Whether the node stakes, whether its wallet can sign, eligible outputs and value, the chance per 16 s slot of finding a kernel and the expected wait, blocks staked since start, and the last block it staked (token required) |
-| `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the key under the new passphrase and deletes backups (token required) |
+| `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the seed under the new passphrase and deletes backups (token required) |
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 
@@ -368,6 +387,8 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | Start 2nd node    | `P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001` |
 | Node status       | `npm run cli -- status`                                       |
 | Wallet balance    | `npm run cli -- balance`                                      |
+| New address       | `npm run cli -- new-address`                                  |
+| Wallet addresses  | `npm run cli -- addresses`                                    |
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
 | Staking status    | `npm run cli -- staking`                                      |
 

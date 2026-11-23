@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import protobuf from 'protobufjs';
 import { Wallet } from '../../blockchain/Wallet.js';
-import { WALLET_SCHEMA } from '../../blockchain/protoSchemas.js';
+import { addressFromPublicKey } from '../../blockchain/address.js';
+import { secp256k1 } from '../../blockchain/secp256k1.js';
 import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
 import {
 	makeTempDir,
@@ -92,14 +93,14 @@ describe('Persistence (real filesystem)', () => {
 			message WalletData { bytes private_key = 1; bytes public_key = 2; string address = 3;
 				repeated WalletTransaction transactions = 4; repeated WalletUtxo utxos = 5; }`;
 		const WalletData = protobuf.parse(oldSchema).root.lookupType('WalletData');
-		const original = openWallet(dir, 'old');
+		const privateKey = Buffer.alloc(32, 7);
+		const publicKey = Buffer.from(secp256k1.publicKeyCreate(privateKey, true));
+		const original = { publicKey, address: addressFromPublicKey(publicKey) };
 		const file = path.join(dir, 'old.dat');
-		const current = protobuf.parse(WALLET_SCHEMA).root.lookupType('WalletData');
-		const { privateKey } = current.decode(fs.readFileSync(file)) as unknown as { privateKey: Uint8Array };
 		const legacy = WalletData.encode(
 			WalletData.fromObject({
 				privateKey,
-				publicKey: original.publicKey,
+				publicKey,
 				address: original.address,
 				transactions: [{ hash: 'ab'.repeat(32), timestamp: '1', type: 'received', otherParty: 'x', amount: '5' }],
 				utxos: [{ txHash: 'ab'.repeat(32), outputIndex: 0, amount: '5' }],

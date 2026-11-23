@@ -168,15 +168,18 @@ export class Transaction {
 		return sha256d(Buffer.concat([Buffer.from(txid, 'hex'), index]));
 	}
 
-	/** Sign every input with one key (single-key wallet). */
+	/** Sign every input with one key (all inputs spend outputs of the same address). */
 	signTransaction(privateKey: Buffer): void {
-		const publicKey = Buffer.from(secp256k1.publicKeyCreate(privateKey, true)).toString('hex');
 		const txid = this.calculateHash(); // signatures aren't part of the txid
-		this.inputs.forEach((input, i) => {
-			const { signature } = secp256k1.ecdsaSign(this.sighash(i, txid), privateKey);
-			input.publicKey = publicKey;
-			input.signature = Buffer.from(signature).toString('hex');
-		});
+		this.inputs.forEach((_, i) => this.signInput(i, privateKey, txid));
+	}
+
+	/** Sign input `i` with the key that owns the output it spends. */
+	signInput(i: number, privateKey: Buffer, txid: string = this.calculateHash()): void {
+		const input = this.inputs[i];
+		const { signature } = secp256k1.ecdsaSign(this.sighash(i, txid), privateKey);
+		input.publicKey = Buffer.from(secp256k1.publicKeyCreate(privateKey, true)).toString('hex');
+		input.signature = Buffer.from(signature).toString('hex');
 	}
 
 	/**

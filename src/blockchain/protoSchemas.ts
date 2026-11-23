@@ -64,8 +64,8 @@ message BlockIndex {
 export const WALLET_SCHEMA = `
 syntax = "proto3";
 
-// The private key encrypted with a passphrase (TASK-0024): AES-256-GCM under a scrypt-derived key,
-// with the public key as additional authenticated data
+// The wallet's secrets encrypted with a passphrase (TASK-0024): AES-256-GCM under a scrypt-derived
+// key, with the wallet's public keys as additional authenticated data
 message EncryptedKey {
   bytes salt = 1;
   bytes nonce = 2;
@@ -76,11 +76,17 @@ message EncryptedKey {
   uint32 scrypt_p = 7;
 }
 
+// An HD wallet (TASK-0041): receiving addresses are m/0'/0/i from the seed. Wallets made before
+// it had one random key (fields 1 to 3); an upgraded one keeps that key as its primary address.
 message WalletData {
-  bytes private_key = 1; // empty when encrypted
-  bytes public_key = 2;
-  string address = 3;
+  bytes private_key = 1; // the single key of an older wallet; empty when encrypted
+  bytes public_key = 2; // its public key
+  string address = 3; // its address
   reserved 4, 5; // were transaction history and UTXOs; balances come from the chain (TASK-0017)
-  EncryptedKey encrypted_key = 6;
+  EncryptedKey encrypted_key = 6; // the seed, then the single key if any, encrypted
+  bytes seed = 7; // empty when encrypted
+  bytes account_public_key = 8; // m/0' public key and chain code: receiving addresses can be
+  bytes account_chain_code = 9; // derived while the wallet is locked
+  uint32 receive_count = 10; // receiving addresses handed out
 }
 `;

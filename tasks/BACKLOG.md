@@ -85,6 +85,14 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0039](TASK-0039-address-book.md) | Peer address book: evict failing addresses, choose outbound peers at random | done | P2 | medium | TASK-0020 | F-034 |
 | [TASK-0040](TASK-0040-staking-status.md) | Staking status in the API and CLI | done | P3 | small | TASK-0016 | F-035 |
 
+## Milestone 8: features (owner requests, 2026-11-23)
+
+| ID | Task | Status | Priority | Size | Depends on | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| [TASK-0041](TASK-0041-wallet-addresses.md) | HD wallet: any number of addresses from one seed | done | P2 | large | TASK-0024 | owner request |
+| [TASK-0042](TASK-0042-block-explorer.md) | Block explorer page served by the node | pending | P2 | medium | TASK-0016 | owner request |
+| [TASK-0043](TASK-0043-docker.md) | Docker image and compose file | pending | P2 | medium | TASK-0037 | owner request |
+
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 
 The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/` and are still in git history before this change.

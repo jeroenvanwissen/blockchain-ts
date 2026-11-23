@@ -21,11 +21,11 @@ import {
 
 const PASSPHRASE = 'correct horse battery';
 
-/** The stored private key bytes, read with the current schema (empty when encrypted). */
-function storedPrivateKey(file: string): Buffer {
+/** The stored seed bytes, read with the current schema (empty when encrypted). */
+function storedSeed(file: string): Buffer {
 	const type = protobuf.parse(WALLET_SCHEMA).root.lookupType('WalletData');
-	const { privateKey } = type.decode(fs.readFileSync(file)) as unknown as { privateKey: Uint8Array };
-	return Buffer.from(privateKey);
+	const { seed } = type.decode(fs.readFileSync(file)) as unknown as { seed: Uint8Array };
+	return Buffer.from(seed);
 }
 
 /** A transaction to sign (signing doesn't need a real output). */
@@ -52,18 +52,19 @@ describe('Wallet encryption', () => {
 		removeTempDir(dir);
 	});
 
-	it('should store only the encrypted key, delete unencrypted backups, and load locked', () => {
+	it('should store only the encrypted seed, delete unencrypted backups, and load locked', () => {
 		const wallet = openWallet(dir, 'node');
 		const file = path.join(dir, 'node.dat');
-		const privateKey = storedPrivateKey(file);
+		const seed = storedSeed(file);
+		expect(seed).toHaveLength(32);
 		const backup = `${file}.1000.backup`;
-		fs.copyFileSync(file, backup); // an older save: holds the key unencrypted
+		fs.copyFileSync(file, backup); // an older save: holds the seed unencrypted
 
 		wallet.encrypt(PASSPHRASE);
 
 		const contents = fs.readFileSync(file);
-		expect(contents.includes(privateKey)).toBe(false);
-		expect(storedPrivateKey(file)).toHaveLength(0);
+		expect(contents.includes(seed)).toBe(false);
+		expect(storedSeed(file)).toHaveLength(0);
 		expect(fs.existsSync(backup)).toBe(false);
 		expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 		expect(wallet.isLocked()).toBe(true);

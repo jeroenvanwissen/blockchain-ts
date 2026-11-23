@@ -147,6 +147,10 @@ export const MINER_RETRY_DELAY = 1000; // ms to wait after a rejected block befo
 // Wallet configuration
 export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
+// Receiving addresses the wallet watches beyond those it handed out (TASK-0041), so a backup
+// still sees coins on addresses created after it (the BIP44 gap limit)
+export const WALLET_ADDRESS_LOOKAHEAD = 20;
+export const MAX_WALLET_ADDRESSES = 100_000; // receiving addresses a wallet hands out (bounds load time)
 // Wallet encryption (TASK-0024): scrypt KDF + AES-256-GCM. log2(N) = 15, r = 8 → 32 MiB and about
 // 0.1 s per unlock attempt. Stored per wallet, so stronger settings apply to newly encrypted ones.
 export const WALLET_SCRYPT = { logN: 15, r: 8, p: 1 };

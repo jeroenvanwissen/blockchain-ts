@@ -74,6 +74,8 @@ export class ApiServer {
 		{ method: 'GET', pattern: /^\/mempool$/, handle: () => this._mempool() },
 		{ method: 'GET', pattern: /^\/peers$/, handle: () => this._peers.getPeerInfo() },
 		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._walletInfo() },
+		{ method: 'GET', pattern: /^\/wallet\/addresses$/, wallet: true, handle: () => this._walletAddresses() },
+		{ method: 'POST', pattern: /^\/wallet\/addresses$/, wallet: true, handle: () => this._newAddress() },
 		{ method: 'POST', pattern: /^\/wallet\/send$/, wallet: true, handle: (_, body) => this._sendPayment(body) },
 		{ method: 'POST', pattern: /^\/wallet\/encrypt$/, wallet: true, handle: (_, body) => this._encrypt(body) },
 		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
@@ -188,21 +190,43 @@ export class ApiServer {
 	}
 
 	/**
-	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet (plus the
-	 * minimum relay fee), admit to the mempool, relay. Returns the txid and fee. Chain-side
-	 * rejections (funds, mempool rules) are 422.
+	 * GET /wallet: the primary address, how many addresses were handed out, the balance over all
+	 * of them, and the encryption and lock state.
 	 */
-	/** GET /wallet: balances plus the encryption and lock state. */
 	private _walletInfo() {
 		const wallet = this._wallet();
 		const until = wallet.unlockedUntil();
+		const addresses = wallet.addresses();
+		const utxos = this._blockchain.getWalletUTXOs(addresses);
 		return {
-			...this._address(wallet.address),
+			address: wallet.address,
+			addresses: wallet.issuedCount(),
+			balance: sum(utxos).toString(),
+			spendable: sum(addresses.flatMap((address) => this._blockchain.getSpendableUTXOs(address))).toString(),
+			utxos: utxos.length,
 			encrypted: wallet.isEncrypted(),
 			locked: wallet.isLocked(),
 			stakingOnly: wallet.isStakingOnly(),
 			unlockedUntil: until === null ? null : new Date(until).toISOString(),
 		};
+	}
+
+	/**
+	 * GET /wallet/addresses: the addresses handed out, plus any watched lookahead address that
+	 * holds coins, with balances; the primary address first, then by receiving index.
+	 */
+	private _walletAddresses() {
+		const wallet = this._wallet();
+		return wallet
+			.listAddresses()
+			.filter((entry) => entry.issued || this._blockchain.getUTXOs(entry.address).length > 0)
+			.map((entry) => ({ ...this._address(entry.address), index: entry.index, primary: entry.address === wallet.address }))
+			.sort((a, b) => Number(b.primary) - Number(a.primary) || (a.index ?? -1) - (b.index ?? -1));
+	}
+
+	/** POST /wallet/addresses: hand out a new receiving address (works while locked). */
+	private _newAddress() {
+		return { address: this._walletCall(() => this._wallet().newAddress()) };
 	}
 
 	/** Run a wallet operation, mapping its WalletError codes to responses. */
@@ -248,8 +272,8 @@ export class ApiServer {
 	private _staking() {
 		const wallet = this._wallet();
 		const staking = this._walletAccess!.staking;
-		const outlook = this._blockchain.getStakingOutlook(wallet.address, Date.now());
-		const last = this._blockchain.findLastStakedBlock(wallet.address);
+		const outlook = this._blockchain.getStakingOutlook(wallet.addresses(), Date.now());
+		const last = this._blockchain.findLastStakedBlock(wallet.addresses());
 		return {
 			enabled: staking?.isRunning() ?? false,
 			phase: this._blockchain.isProofOfStakePhase() ? 'pos' : 'pow',
@@ -280,6 +304,11 @@ export class ApiServer {
 		return this._walletInfo();
 	}
 
+	/**
+	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet (plus the
+	 * minimum relay fee), admit to the mempool, relay. Returns the txid and fee. Chain-side
+	 * rejections (funds, mempool rules) are 422.
+	 */
 	private async _sendPayment(body: unknown) {
 		const payTo = parsePayment(body);
 		const wallet = this._wallet();

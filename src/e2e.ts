@@ -98,9 +98,12 @@ async function main(): Promise<void> {
 		await harness.listen();
 		harness.connectToPeers([`ws://127.0.0.1:${portA}`]);
 
-		step(`pay C ${PAYMENT_OUTPUTS} separate coins from A's wallet with the CLI once A can afford it`);
+		step(`pay ${PAYMENT_OUTPUTS} separate coins from A's wallet to a new address of C, with the CLI, once A can afford it`);
 		const addressA = walletAddress(nodeA);
-		const addressC = walletAddress(nodeC);
+		const created = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'new-address']);
+		if (created.code !== 0) throw new Error(`cli new-address failed: ${created.stderr.trim()}`);
+		const addressC = created.stdout.trim(); // C stakes these coins: staking from a non-primary address
+		if (addressC === walletAddress(nodeC)) throw new Error('cli new-address returned the primary address');
 		const paymentTotal = BigInt(PAYMENT_OUTPUTS) * COIN;
 		await waitUntil(
 			() =>
