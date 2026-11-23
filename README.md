@@ -21,7 +21,7 @@
 
 - stake changes made locally (`stake()` without a transaction, unstake, slashing) never reach the chain, so nodes can disagree about stake (TASK-0009, TASK-0011);
 - a pending stake transaction can turn a PoW-phase block into an unchecked PoS block (TASK-0009);
-- difficulty can't rise, and a node that misses a block only resyncs when it reconnects (TASK-0008, TASK-0013).
+- a node that misses a block only resyncs when it reconnects (TASK-0013).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
@@ -76,7 +76,8 @@ git --version          # Should be 2.30+
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
 | **Staking**              | Stake-weighted validator lottery, age multiplier, coinstake txs  |
 | **Stake Security**       | Delayed unstaking, double-sign slashing, age-capped weight      |
-| **Difficulty Adjustment**| Proportional adjustment every 10 blocks (clamped 4x max change) |
+| **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
+| **Block Header**         | Merkle root of full transactions, compact target (`bits`), sha256d |
 | **Persistence**          | Chunked block storage with protobuf index, wallet as protobuf   |
 
 ---
@@ -132,9 +133,10 @@ Key constants in `src/config.ts`:
 | `MIN_STAKE_AMOUNT`              | 100 coins | Minimum stake                                |
 | `COIN_MATURITY`                 | 10      | Blocks before coinbase outputs are spendable   |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
-| `DIFFICULTY_ADJUSTMENT_INTERVAL`| 10      | Blocks between difficulty recalculations       |
-| `MIN_DIFFICULTY`                | 4       | Minimum PoW difficulty                         |
-| `MAX_DIFFICULTY_CHANGE_FACTOR`  | 4       | Max 4x change per difficulty adjustment        |
+| `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
+| `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
+| `POW_LIMIT`                     | 2^240−1 | Easiest PoW target (~65k hashes per block)     |
+| `POS_LIMIT`                     | 2^236−1 | Easiest PoS target                             |
 | `UNSTAKE_DELAY`                 | 100     | Blocks before unstaked funds are released       |
 | `MAX_STAKE_AGE_MULTIPLIER`      | 4       | Maximum age multiplier for stake weight        |
 | `MAX_BLOCK_FILE_SIZE`           | 128 MB  | Max size per chunked block data file           |
@@ -183,13 +185,13 @@ Start a node with `--mine` to mine PoW blocks inside the node. Rewards go to the
 npm run dev -- --mine
 ```
 
-Blocks are at least 30 seconds apart (`BLOCK_TIME`). Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
+The target is retargeted every block toward one block per `BLOCK_TIME` (30 s): a new chain mines its first blocks quickly until the target catches up with the miner's hash rate. Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
 
 ### Step 4: Verify
 
 ```bash
 npm test                # Run test suite
-npm run smoke           # Real nodes: mine, sync, relay, restart (~35 s)
+npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
 npm run build           # Compile TypeScript
 ```
 

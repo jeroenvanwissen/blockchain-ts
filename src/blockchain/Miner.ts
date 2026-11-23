@@ -2,6 +2,7 @@ import { Worker } from 'worker_threads';
 import type { Block } from './Block.js';
 import type { Blockchain } from './Blockchain.js';
 import { MAX_BLOCK_NONCE, MINER_RETRY_DELAY, MINER_TIP_POLL_INTERVAL } from '../config.js';
+import { targetHex } from './target.js';
 
 type WorkerResult = { type: 'found'; nonce: number; hash: string } | { type: 'exhausted' };
 
@@ -89,8 +90,8 @@ export class Miner {
 		return new Promise((resolve, reject) => {
 			const worker = new Worker(this._workerPath, {
 				workerData: {
-					prefix: block.powPrefix(),
-					difficulty: block.powDifficulty,
+					prefix: block.headerPrefix(),
+					targetHex: targetHex(block.bits),
 					startNonce: 0,
 					maxNonce: MAX_BLOCK_NONCE,
 				},

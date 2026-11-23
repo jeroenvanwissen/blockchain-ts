@@ -71,8 +71,14 @@ export const MAX_TRANSACTION_OUTPUTS = 256;
 export const MAX_BLOCK_TRANSACTIONS = 1000;
 export const MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60 * 1000; // 2 hours in ms
 
-// Block timing
+// Block timing and targets
 export const BLOCK_TIME = 30; // Target time between blocks in seconds
+export const TARGET_SPACING = BLOCK_TIME * 1000; // ms the per-block retarget aims for
+export const RETARGET_WINDOW = 16; // N in the Peercoin-style retarget (smoothing)
+export const MAX_RETARGET_SPACING = 10 * TARGET_SPACING; // longer gaps count as this much
+export const POW_LIMIT = (1n << 240n) - 1n; // easiest PoW target (~65,536 hashes per block)
+export const POS_LIMIT = (1n << 236n) - 1n; // easiest PoS target
+export const GENESIS_TIMESTAMP = 1609459200000; // Jan 1, 2021, 00:00:00 UTC
 
 // Mining
 export const MAX_BLOCK_NONCE = 0xffffffff; // Block nonce is stored as uint32
@@ -87,8 +93,5 @@ export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to
 export const UNSTAKE_DELAY = 100; // Blocks before unstaked funds are released
 export const MAX_STAKE_AGE_MULTIPLIER = 4; // Maximum age multiplier for stake weight
 
-// Difficulty adjustment
-export const DIFFICULTY_ADJUSTMENT_INTERVAL = 10; // Adjust difficulty every N blocks
-export const MIN_DIFFICULTY = 4; // Minimum difficulty (same as genesis)
-export const MAX_DIFFICULTY_CHANGE_FACTOR = 4; // Max 4x change per adjustment
+// Timestamp rules
 export const MEDIAN_TIME_SPAN = 11; // Number of blocks for median time calculation

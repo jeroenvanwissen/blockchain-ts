@@ -2,16 +2,14 @@ import { jest } from '@jest/globals';
 import { Block } from '../Block.js';
 import { Blockchain, type BlockchainOptions } from '../Blockchain.js';
 import { Wallet } from '../Wallet.js';
-import { Transaction } from '../Transaction.js';
+import { NULL_HASH, Transaction } from '../Transaction.js';
+import { blockWork, MAX_TARGET_BITS, targetToBits } from '../target.js';
 import {
 	COIN,
 	POW_CUTOFF_BLOCK,
 	POW_BLOCK_REWARD,
 	COIN_MATURITY,
 	BLOCK_TIME,
-	DIFFICULTY_ADJUSTMENT_INTERVAL,
-	MIN_DIFFICULTY,
-	MAX_DIFFICULTY_CHANGE_FACTOR,
 	MAX_BLOCK_TRANSACTIONS,
 	UNSTAKE_DELAY,
 	MAX_STAKE_AGE_MULTIPLIER,
@@ -19,13 +17,15 @@ import {
 import * as fs from 'fs';
 
 const coins = (n: number): bigint => BigInt(n) * COIN;
+// Target equivalent to the old difficulty of `hexZeros` leading zero hex digits
+const bitsFor = (hexZeros: number): number =>
+	targetToBits((1n << BigInt(256 - 4 * hexZeros)) - 1n);
 // Well-formed but meaningless witness data, for structure tests that never reach signature checks
 const FAKE_PUBLIC_KEY = '02' + '11'.repeat(32);
 const FAKE_SIGNATURE = 'aa'.repeat(64);
 
 const testOptions: BlockchainOptions = {
 	minStakeAge: 0,
-	minBlockInterval: 0,
 	validateDifficulty: false,
 	validateTimestamps: false,
 	stakeCheckInterval: 0,
@@ -75,10 +75,6 @@ describe('Blockchain', () => {
 		(fs.readSync as jest.Mock).mockReturnValue(0);
 		(fs.closeSync as jest.Mock).mockImplementation(() => {});
 
-		// Mock Block's difficulty methods
-		jest.spyOn(Block.prototype, 'getDifficulty').mockImplementation(() => 1);
-		jest.spyOn(Block.prototype, 'setDifficulty').mockImplementation(() => {});
-
 		// Set initial time to match genesis block timestamp + 1 day to ensure enough spacing
 		const genesisTime = 1609459200000; // Jan 1, 2021
 		const initialTestTime = genesisTime + 24 * 60 * 60 * 1000; // Start 1 day after genesis
@@ -108,7 +104,7 @@ describe('Blockchain', () => {
 			const chain = blockchain.getChain();
 			expect(chain.length).toBe(1);
 			expect(chain[0].index).toBe(0);
-			expect(chain[0].previousHash).toBe('0');
+			expect(chain[0].previousHash).toBe(NULL_HASH);
 			expect(chain[0].isProofOfWork()).toBe(true);
 		});
 	});
@@ -474,7 +470,7 @@ describe('Blockchain', () => {
 				[notCoinbase],
 				lastBlock.hash,
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length
 			);
 			while (!block.isValid()) {
@@ -500,7 +496,7 @@ describe('Blockchain', () => {
 				[badCoinbase],
 				lastBlock.hash,
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length
 			);
 			while (!block.isValid()) {
@@ -526,7 +522,7 @@ describe('Blockchain', () => {
 				[coinbase1, coinbase2],
 				lastBlock.hash,
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length
 			);
 			while (!block.isValid()) {
@@ -551,7 +547,7 @@ describe('Blockchain', () => {
 				[zeroCoinbase],
 				lastBlock.hash,
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length
 			);
 			while (!block.isValid()) {
@@ -649,9 +645,9 @@ describe('Blockchain', () => {
 			const badBlock = new Block(
 				blockTime + 1,
 				[Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, blockchain.getChain().length)],
-				'wrong-hash',
+				'ab'.repeat(32), // not the tip
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length
 			);
 			badBlock.hash = badBlock.calculateHash();
@@ -1017,181 +1013,27 @@ describe('Blockchain', () => {
 		});
 	});
 
-	describe('Difficulty Adjustment', () => {
-		let diffBlockchain: Blockchain;
-		let diffMinerAddr: string;
-
-		beforeEach(() => {
-			// Restore real getDifficulty/setDifficulty for difficulty tests
-			(Block.prototype.getDifficulty as jest.Mock).mockRestore();
-			(Block.prototype.setDifficulty as jest.Mock).mockRestore();
-			diffBlockchain = new Blockchain(testOptions);
-			diffMinerAddr = minerWallet.getAddress();
-		});
-
-		const mineDiffBlocks = async (
-			bc: Blockchain,
-			count: number,
-			miner: string,
-			intervalMs: number,
-		): Promise<void> => {
-			for (let i = 0; i < count; i++) {
-				const lastBlock = bc.getLatestBlock();
-				const blockTime = lastBlock.timestamp + intervalMs;
-				jest.setSystemTime(new Date(blockTime));
-				await bc.minePendingTransactions(miner);
-			}
-		};
-
-		it('should return genesis difficulty when chain is short', () => {
-			// Chain has only genesis block (length 1)
-			expect(diffBlockchain.calculateNewDifficulty()).toBe(4);
-		});
-
-		it('should return genesis difficulty when chain equals adjustment interval', async () => {
-			// Mine exactly DIFFICULTY_ADJUSTMENT_INTERVAL blocks (need > interval)
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL,
-				diffMinerAddr,
-				BLOCK_TIME * 1000,
-			);
-			// Chain length = 11 (genesis + 10), which equals interval + 1
-			// Still returns genesis difficulty because condition is <=
-			expect(diffBlockchain.calculateNewDifficulty()).toBe(4);
-		});
-
-		it('should keep difficulty stable when blocks arrive on target', async () => {
-			// Mine enough blocks to trigger adjustment
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				BLOCK_TIME * 1000,
-			);
-			// Chain length = 12, enough for adjustment
-			const chain = diffBlockchain.getChain();
-			// Set all blocks to a known difficulty for predictable math
-			for (const block of chain) {
-				block.powDifficulty = 8;
-			}
-			// Blocks at exact target interval: ratio ~= 1, difficulty stays same
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBe(8);
-		});
-
-		it('should increase difficulty proportionally when blocks are too fast', async () => {
-			// Mine blocks 2x faster than target (half the target time)
-			const fastInterval = (BLOCK_TIME * 1000) / 2;
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				fastInterval,
-			);
-			const chain = diffBlockchain.getChain();
-			for (const block of chain) {
-				block.powDifficulty = 8;
-			}
-			// Blocks at half target time -> difficulty should roughly double
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBeGreaterThan(8);
-			expect(newDiff).toBe(16); // 8 * (target / (target/2)) = 8 * 2 = 16
-		});
-
-		it('should decrease difficulty proportionally when blocks are too slow', async () => {
-			// Mine blocks 2x slower than target
-			const slowInterval = BLOCK_TIME * 1000 * 2;
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				slowInterval,
-			);
-			const chain = diffBlockchain.getChain();
-			for (const block of chain) {
-				block.powDifficulty = 20;
-			}
-			// Blocks at 2x target time -> difficulty should halve
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBeLessThan(20);
-			expect(newDiff).toBe(10); // 20 * (target / (target*2)) = 20 * 0.5 = 10
-		});
-
-		it('should clamp difficulty increase to 4x maximum', async () => {
-			// Mine blocks extremely fast (1 second apart)
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				1000,
-			);
-			const chain = diffBlockchain.getChain();
-			for (const block of chain) {
-				block.powDifficulty = 8;
-			}
-			// 1s blocks vs 30s target = 30x ratio, but clamped to 4x
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBe(8 * MAX_DIFFICULTY_CHANGE_FACTOR); // 32
-		});
-
-		it('should clamp difficulty decrease to 1/4 minimum', async () => {
-			// Mine blocks extremely slow (10 minutes apart)
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				600_000,
-			);
-			const chain = diffBlockchain.getChain();
-			for (const block of chain) {
-				block.powDifficulty = 20;
-			}
-			// 600s blocks vs 30s target = 0.05 ratio, but clamped to 1/4
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBe(
-				Math.ceil(20 / MAX_DIFFICULTY_CHANGE_FACTOR),
-			); // ceil(5) = 5
-		});
-
-		it('should enforce minimum difficulty floor', async () => {
-			// Mine blocks very slowly with low starting difficulty
-			await mineDiffBlocks(
-				diffBlockchain,
-				DIFFICULTY_ADJUSTMENT_INTERVAL + 1,
-				diffMinerAddr,
-				600_000,
-			);
-			const chain = diffBlockchain.getChain();
-			for (const block of chain) {
-				block.powDifficulty = MIN_DIFFICULTY;
-			}
-			// Even with slow blocks, difficulty cannot go below MIN_DIFFICULTY
-			const newDiff = diffBlockchain.calculateNewDifficulty();
-			expect(newDiff).toBeGreaterThanOrEqual(MIN_DIFFICULTY);
-		});
-
+	describe('Timestamps', () => {
 		it('should compute median time past correctly', async () => {
-			// Mine 5 blocks with known timestamps
-			await mineDiffBlocks(diffBlockchain, 5, diffMinerAddr, 10_000);
-			const chain = diffBlockchain.getChain();
-			// Collect actual timestamps
-			const timestamps = chain.map((b) => b.timestamp).sort((a, b) => a - b);
-			const expectedMedian =
-				timestamps[Math.floor(timestamps.length / 2)];
-			expect(diffBlockchain.getMedianTimePast()).toBe(expectedMedian);
+			await minePowBlocks(5, minerWallet.getAddress());
+			const timestamps = blockchain
+				.getChain()
+				.map((b) => b.timestamp)
+				.sort((a, b) => a - b);
+			expect(blockchain.getMedianTimePast()).toBe(timestamps[Math.floor(timestamps.length / 2)]);
 		});
 
 		it('should use config BLOCK_TIME constant', () => {
-			// Verify the blockchain uses the config value
-			expect(diffBlockchain.BLOCK_TIME).toBe(BLOCK_TIME);
+			expect(blockchain.BLOCK_TIME).toBe(BLOCK_TIME);
 		});
 	});
 
 	describe('Fork Resolution', () => {
-		it('should compute block weight as 2^difficulty for PoW blocks', () => {
-			const block = new Block(Date.now(), [], '0', 0, 4, 0);
-			expect(Blockchain.blockWeight(block)).toBe(Math.pow(2, 4));
+		it('should compute block weight as the work of its target', () => {
+			const block = new Block(Date.now(), [], NULL_HASH, 0, bitsFor(4), 0);
+			expect(Blockchain.blockWeight(block)).toBe(blockWork(bitsFor(4)));
+			// ~2^16 expected hashes (65537: the compact encoding rounds the target down)
+			expect(blockWork(bitsFor(4))).toBe(65537n);
 		});
 
 		it('should set cumulative weight on mined blocks', async () => {
@@ -1199,20 +1041,18 @@ describe('Blockchain', () => {
 			await minePowBlocks(3, minerAddr);
 
 			const chain = blockchain.getChain();
-			// Genesis has cumulativeWeight = 2^4 = 16 (difficulty 4)
-			// Mined blocks have difficulty 1 (mocked), weight = 2^1 = 2
-			expect(chain[0].cumulativeWeight).toBe(16); // genesis: 2^4
-			expect(chain[1].cumulativeWeight).toBe(18); // 16 + 2^1
-			expect(chain[2].cumulativeWeight).toBe(20); // 18 + 2^1
-			expect(chain[3].cumulativeWeight).toBe(22); // 20 + 2^1
+			expect(chain[0].cumulativeWeight).toBe(chain[0].work());
+			for (let i = 1; i < chain.length; i++) {
+				expect(chain[i].cumulativeWeight).toBe(chain[i - 1].cumulativeWeight + chain[i].work());
+			}
 		});
 
 		it('should report chain weight from latest block', async () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(2, minerAddr);
 
-			// Genesis (2^4=16) + 2 blocks (2^1=2 each) = 20
-			expect(blockchain.getChainWeight()).toBe(20);
+			const totalWork = blockchain.getChain().reduce((sum, b) => sum + b.work(), 0n);
+			expect(blockchain.getChainWeight()).toBe(totalWork);
 		});
 
 		it('should prefer higher-difficulty chain over longer chain in replaceChain', async () => {
@@ -1231,7 +1071,7 @@ describe('Blockchain', () => {
 				[coinbase1],
 				genesisBlock.hash,
 				0,
-				2, // difficulty 2 → weight 4
+				bitsFor(2), // harder target: more work
 				1,
 			);
 			// Mine valid PoW
@@ -1248,7 +1088,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2, // difficulty 2 → weight 4
+				bitsFor(2), // harder target: more work
 				2,
 			);
 			while (!block2.isValid()) {
@@ -1257,8 +1097,8 @@ describe('Blockchain', () => {
 			}
 
 			const newChain = [genesisBlock, block1, block2];
-			// New chain: genesis(16) + 4 + 4 = 24, more than current 22
-			expect(Blockchain.blockWeight(block1)).toBe(4);
+			// Two harder blocks outweigh three easy ones
+			expect(Blockchain.blockWeight(block1)).toBe(blockWork(bitsFor(2)));
 
 			await blockchain.replaceChain(newChain);
 			expect(blockchain.getChain().length).toBe(3); // shorter than original 4
@@ -1291,7 +1131,7 @@ describe('Blockchain', () => {
 				[coinbase],
 				genesis.hash,
 				0,
-				1,
+				MAX_TARGET_BITS, // 1 unit of work: lighter than three mined blocks
 				1,
 			);
 			while (!block.isValid()) {
@@ -1345,7 +1185,7 @@ describe('Blockchain', () => {
 					[coinbase],
 					prevBlock.hash,
 					0,
-					2, // higher difficulty = more weight than difficulty-1 blocks
+					bitsFor(2), // harder target than mined blocks: more work
 					forkPoint + i,
 				);
 				while (!altBlock.isValid()) {
@@ -1366,18 +1206,17 @@ describe('Blockchain', () => {
 		});
 
 		it('should compute chain weights correctly via computeChainWeights', () => {
-			const genesis = new Block(Date.now(), [], '0', 0, 4, 0);
-			const block1 = new Block(Date.now(), [], genesis.hash, 0, 6, 1);
-			block1.hash = block1.calculateHash();
-			const block2 = new Block(Date.now(), [], block1.hash, 0, 8, 2);
-			block2.hash = block2.calculateHash();
+			const genesis = new Block(Date.now(), [], NULL_HASH, 0, bitsFor(4), 0);
+			const block1 = new Block(Date.now(), [], genesis.hash, 0, bitsFor(6), 1);
+			const block2 = new Block(Date.now(), [], block1.hash, 0, bitsFor(8), 2);
 
 			const chain = [genesis, block1, block2];
 			Blockchain.computeChainWeights(chain);
 
-			expect(chain[0].cumulativeWeight).toBe(16);  // 2^4
-			expect(chain[1].cumulativeWeight).toBe(80);  // 16 + 2^6
-			expect(chain[2].cumulativeWeight).toBe(336); // 80 + 2^8
+			const [w4, w6, w8] = [4, 6, 8].map((d) => blockWork(bitsFor(d)));
+			expect(chain[0].cumulativeWeight).toBe(w4);
+			expect(chain[1].cumulativeWeight).toBe(w4 + w6);
+			expect(chain[2].cumulativeWeight).toBe(w4 + w6 + w8);
 		});
 	});
 
@@ -1395,7 +1234,7 @@ describe('Blockchain', () => {
 				[coinbase1],
 				genesisBlock.hash,
 				0,
-				2,
+				bitsFor(2),
 				1,
 			);
 			while (!block1.isValid()) {
@@ -1410,7 +1249,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2,
+				bitsFor(2),
 				2,
 			);
 			while (!block2.isValid()) {
@@ -1437,7 +1276,7 @@ describe('Blockchain', () => {
 				[coinbase1],
 				genesisBlock.hash,
 				0,
-				2,
+				bitsFor(2),
 				99, // Wrong index — should be 1
 			);
 			while (!block1.isValid()) {
@@ -1452,7 +1291,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2,
+				bitsFor(2),
 				2,
 			);
 			while (!block2.isValid()) {
@@ -1472,9 +1311,9 @@ describe('Blockchain', () => {
 			const fakeGenesis = new Block(
 				999999,
 				[Transaction.coinbase('fake', 0n, 0)],
-				'0',
+				NULL_HASH,
 				0,
-				4,
+				bitsFor(4),
 				0,
 			);
 
@@ -1485,7 +1324,7 @@ describe('Blockchain', () => {
 				[coinbase1],
 				fakeGenesis.hash,
 				0,
-				2,
+				bitsFor(2),
 				1,
 			);
 			while (!block1.isValid()) {
@@ -1500,7 +1339,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2,
+				bitsFor(2),
 				2,
 			);
 			while (!block2.isValid()) {
@@ -1540,7 +1379,7 @@ describe('Blockchain', () => {
 				txs,
 				lastBlock.hash,
 				0,
-				1,
+				bitsFor(1),
 				blockchain.getChain().length,
 			);
 			block.hash = block.calculateHash();
@@ -1574,7 +1413,7 @@ describe('Blockchain', () => {
 				txs,
 				genesisBlock.hash,
 				0,
-				2,
+				bitsFor(2),
 				1,
 			);
 			block1.hash = block1.calculateHash();
@@ -1593,9 +1432,9 @@ describe('Blockchain', () => {
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
-				'wrong-previous-hash', // broken link
+				'ab'.repeat(32) /* not the previous block */, // broken link
 				0,
-				2,
+				bitsFor(2),
 				1,
 			);
 			while (!block1.isValid()) {
@@ -1610,7 +1449,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2,
+				bitsFor(2),
 				2,
 			);
 			while (!block2.isValid()) {
@@ -1635,7 +1474,7 @@ describe('Blockchain', () => {
 				[coinbase1],
 				genesisBlock.hash,
 				0,
-				2,
+				bitsFor(2),
 				1,
 			);
 			while (!block1.isValid()) {
@@ -1650,7 +1489,7 @@ describe('Blockchain', () => {
 				[coinbase2],
 				block1.hash,
 				0,
-				2,
+				bitsFor(2),
 				2,
 			);
 			while (!block2.isValid()) {

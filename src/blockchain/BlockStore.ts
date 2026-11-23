@@ -211,7 +211,8 @@ export class BlockStore {
 			})),
 			previousHash: block.previousHash,
 			nonce: block.nonce,
-			powDifficulty: block.powDifficulty,
+			bits: block.bits,
+			version: block.version,
 			index: block.index,
 			hash: block.hash,
 		});
@@ -233,7 +234,8 @@ export class BlockStore {
 			}[];
 			previousHash: string;
 			nonce: number;
-			powDifficulty: number;
+			bits: number;
+			version: number;
 			index: number;
 			hash: string;
 		};
@@ -261,8 +263,9 @@ export class BlockStore {
 			transactions,
 			data.previousHash,
 			data.nonce,
-			data.powDifficulty,
+			data.bits,
 			data.index,
+			data.version,
 		);
 		block.hash = data.hash;
 		return block;

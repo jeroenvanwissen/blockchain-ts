@@ -1,15 +1,15 @@
-// Real worker thread, real filesystem, real timers. minBlockInterval is 0 so blocks don't
-// wait 30 s (reopen with the same options: stored chains are revalidated); stay below
-// DIFFICULTY_ADJUSTMENT_INTERVAL blocks so difficulty stays at 4.
+// Real worker thread, real filesystem, real timers, real difficulty: a fresh chain starts
+// at POW_LIMIT (~65k hashes per block) and only a few blocks are mined, so the retarget
+// barely tightens the target.
 import * as path from 'path';
 import type { Block } from '../../blockchain/Block.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
 import { Miner } from '../../blockchain/Miner.js';
 import { POW_BLOCK_REWARD } from '../../config.js';
+import { targetToBits } from '../../blockchain/target.js';
 import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js';
 
 const WORKER_PATH = path.join(process.cwd(), 'src', 'blockchain', 'miningWorker.cjs');
-const FAST = { minBlockInterval: 0 };
 
 async function waitUntil(condition: () => boolean, timeoutMs = 20_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
@@ -28,7 +28,7 @@ describe('Miner (real worker thread)', () => {
 		process.env.NODE_ENV = 'test';
 		jest.spyOn(console, 'log').mockImplementation(() => {});
 		dir = makeTempDir();
-		chain = openChain(dir, FAST);
+		chain = openChain(dir);
 		miner = null;
 	});
 
@@ -55,7 +55,7 @@ describe('Miner (real worker thread)', () => {
 				{ address: wallet.address, amount: POW_BLOCK_REWARD },
 			]);
 		}
-		const reopened = openChain(dir, FAST);
+		const reopened = openChain(dir);
 		expect(reopened.getChain().map((b) => b.hash)).toEqual(chain.getChain().map((b) => b.hash));
 	});
 
@@ -92,7 +92,7 @@ describe('Miner (real worker thread)', () => {
 		// Make the worker slow to find a nonce so the tip changes first
 		jest.spyOn(chain, 'createBlockTemplate').mockImplementationOnce((address, timestamp) => {
 			const block = Blockchain.prototype.createBlockTemplate.call(chain, address, timestamp);
-			block.powDifficulty = 7; // ~268M hashes: will not finish before the tip changes
+			block.bits = targetToBits(1n << 220n); // ~2^36 hashes: won't finish before the tip changes
 			return block;
 		});
 		miner = new Miner(chain, wallet.address, WORKER_PATH);
@@ -103,6 +103,6 @@ describe('Miner (real worker thread)', () => {
 
 		expect(chain.getChain()[1].transactions[0].outputs[0].address).toBe(other.address);
 		expect(chain.getChain()[2].transactions[0].outputs[0].address).toBe(wallet.address);
-		expect(openChain(dir, FAST).getChain().length).toBeGreaterThanOrEqual(3);
+		expect(openChain(dir).getChain().length).toBeGreaterThanOrEqual(3);
 	});
 });

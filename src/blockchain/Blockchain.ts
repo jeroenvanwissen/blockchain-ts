@@ -1,22 +1,21 @@
 import { Block } from './Block.js';
-import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
+import { NULL_HASH, Transaction, type TxInput, type TxOutput } from './Transaction.js';
 import { Wallet } from './Wallet.js';
 import { BlockStore } from './BlockStore.js';
 import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
+import { requiredBits } from './retarget.js';
+import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import * as crypto from 'crypto';
 import {
 	BLOCKS_DIR,
-	COIN,
 	MIN_STAKE_AMOUNT,
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
 	COIN_MATURITY,
 	BLOCK_TIME,
-	DIFFICULTY_ADJUSTMENT_INTERVAL,
-	MIN_DIFFICULTY,
-	MAX_DIFFICULTY_CHANGE_FACTOR,
+	GENESIS_TIMESTAMP,
 	MEDIAN_TIME_SPAN,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_FUTURE_BLOCK_TIME,
@@ -40,7 +39,6 @@ import { Mutex } from 'async-mutex';
 
 export interface BlockchainOptions {
 	minStakeAge?: number;
-	minBlockInterval?: number;
 	validateDifficulty?: boolean;
 	validateTimestamps?: boolean;
 	stakeCheckInterval?: number;
@@ -78,7 +76,6 @@ export class Blockchain {
 	constructor(options?: BlockchainOptions) {
 		this._options = {
 			minStakeAge: 86400,
-			minBlockInterval: BLOCK_TIME * 1000,
 			validateDifficulty: true,
 			validateTimestamps: true,
 			stakeCheckInterval: 60 * 1000,
@@ -99,24 +96,20 @@ export class Blockchain {
 		this.loadBlockchain();
 	}
 
-	static blockWeight(block: Block): number {
-		if (block.isProofOfStake()) {
-			// PoS: use validator's stake amount from coinstake transaction
-			return Number(block.transactions[1].outputs[1].amount / COIN);
-		}
-		// PoW: 2^difficulty (exponential, matching Bitcoin)
-		return Math.pow(2, block.powDifficulty);
+	/** Chain work contributed by one block (PoW and PoS alike): 2^256 / (target + 1). */
+	static blockWeight(block: Block): bigint {
+		return block.work();
 	}
 
 	static computeChainWeights(chain: Block[]): void {
-		let cumWeight = 0;
+		let cumulativeWork = 0n;
 		for (const block of chain) {
-			cumWeight += Blockchain.blockWeight(block);
-			block.cumulativeWeight = cumWeight;
+			cumulativeWork += Blockchain.blockWeight(block);
+			block.cumulativeWeight = cumulativeWork;
 		}
 	}
 
-	getChainWeight(): number {
+	getChainWeight(): bigint {
 		return this.getLatestBlock().cumulativeWeight;
 	}
 
@@ -226,13 +219,7 @@ export class Blockchain {
 		}
 		this.validateBlockCoinbase(block);
 
-		// Timestamps
-		if (
-			this._options.minBlockInterval > 0 &&
-			block.timestamp - parent.timestamp < this._options.minBlockInterval
-		) {
-			throw new Error('block created too quickly');
-		}
+		// Timestamps (block spacing is governed by the retarget, not a minimum interval)
 		if (this._options.validateTimestamps) {
 			if (block.timestamp <= this.getMedianTimePastForChain(ctx.prevBlocks, height - 1)) {
 				throw new Error('block timestamp must be greater than median time past');
@@ -242,16 +229,16 @@ export class Blockchain {
 			}
 		}
 
-		// Consensus type
+		// Target (per-block retarget, separate for PoW and PoS) and consensus type
+		if (
+			this._options.validateDifficulty &&
+			block.bits !== requiredBits(ctx.prevBlocks, height, block.isProofOfStake())
+		) {
+			throw new Error('incorrect block difficulty');
+		}
 		if (block.isProofOfWork()) {
 			if (!this._options.allowPowAfterCutoff && height > POW_CUTOFF_BLOCK) {
 				throw new Error(`PoW blocks no longer accepted after block ${POW_CUTOFF_BLOCK}`);
-			}
-			if (
-				this._options.validateDifficulty &&
-				block.powDifficulty !== this.calculateDifficultyForChain(ctx.prevBlocks, height)
-			) {
-				throw new Error('incorrect block difficulty');
 			}
 			if (!block.isValid()) {
 				throw new Error('invalid proof of work');
@@ -453,9 +440,8 @@ export class Blockchain {
 	}
 
 	private createGenesisBlock(): Block {
-		const timestamp = 1609459200000; // Jan 1, 2021, 00:00:00 UTC
-		const genesisTransaction = Transaction.coinbase('genesis', 0n, 0, timestamp);
-		return new Block(timestamp, [genesisTransaction], '0', 0, 4, 0);
+		const coinbase = Transaction.coinbase('genesis', 0n, 0, GENESIS_TIMESTAMP);
+		return new Block(GENESIS_TIMESTAMP, [coinbase], NULL_HASH, 0, POW_LIMIT_BITS, 0);
 	}
 
 	getLatestBlock(): Block {
@@ -779,7 +765,7 @@ export class Blockchain {
 			transactions,
 			this.getLatestBlock().hash,
 			0,
-			this.calculateNewDifficulty(),
+			this.getRequiredBits(true),
 			this.chain.length
 		);
 
@@ -855,25 +841,37 @@ export class Blockchain {
 		);
 	}
 
-	/** Earliest timestamp the next block may carry (minimum block interval and median time past). */
+	/** Earliest timestamp the next block may carry (strictly after the median time past). */
 	public getNextBlockMinTimestamp(): number {
-		return Math.max(
-			this.getLatestBlock().timestamp + this._options.minBlockInterval,
-			this.getMedianTimePast() + 1,
-		);
+		return this.getMedianTimePast() + 1;
+	}
+
+	/**
+	 * Compact target the next block must carry. With difficulty validation off (tests) any
+	 * target is accepted, so templates use the easiest one and need no real mining.
+	 */
+	public getRequiredBits(proofOfStake = false): number {
+		if (!this._options.validateDifficulty) return MAX_TARGET_BITS;
+		return requiredBits(this.chain, this.chain.length, proofOfStake);
 	}
 
 	/** Unsolved PoW block on the current tip: coinbase to `rewardAddress` plus pending transactions. */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
 		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD, this.chain.length, timestamp);
-		return new Block(
+		const block = new Block(
 			timestamp,
 			[coinbase, ...this.pendingTransactions],
 			this.getLatestBlock().hash,
 			0,
-			this._options.validateDifficulty ? this.calculateNewDifficulty() : 1,
+			this.getRequiredBits(false),
 			this.chain.length,
 		);
+		// The target follows the block's type; a pending stake tx makes it look like PoS (F-007)
+		if (block.isProofOfStake()) {
+			block.bits = this.getRequiredBits(true);
+			block.hash = block.calculateHash();
+		}
+		return block;
 	}
 
 	public async minePendingTransactions(minerAddress: string, wallet?: Wallet): Promise<Block> {
@@ -1003,32 +1001,8 @@ export class Blockchain {
 		}
 	}
 
-	public getDifficulty(): number {
-		return this.getLatestBlock().getDifficulty();
-	}
-
-	public setDifficulty(difficulty: number): void {
-		this.getLatestBlock().setDifficulty(difficulty);
-
-		if (this.pendingTransactions.length > 0) {
-			const block = new Block(
-				Date.now(),
-				this.pendingTransactions,
-				this.getLatestBlock().hash,
-				0,
-				difficulty,
-				this.chain.length
-			);
-			this.pendingTransactions = block.transactions;
-		}
-	}
-
 	getMedianTimePast(): number {
 		return this.getMedianTimePastForChain(this.chain, this.chain.length - 1);
-	}
-
-	calculateNewDifficulty(): number {
-		return this.calculateDifficultyForChain(this.chain, this.chain.length);
 	}
 
 	private getMedianTimePastForChain(chain: Block[], upToIndex: number): number {
@@ -1040,30 +1014,6 @@ export class Blockchain {
 		}
 		timestamps.sort((a, b) => a - b);
 		return timestamps[Math.floor(timestamps.length / 2)];
-	}
-
-	private calculateDifficultyForChain(chain: Block[], atIndex: number): number {
-		if (atIndex <= DIFFICULTY_ADJUSTMENT_INTERVAL) {
-			return chain[0].getDifficulty();
-		}
-		const lastIndex = atIndex - 1;
-		const firstIndex = lastIndex - DIFFICULTY_ADJUSTMENT_INTERVAL;
-		const timeTaken = Math.max(
-			1,
-			chain[lastIndex].timestamp - chain[firstIndex].timestamp,
-		);
-		const timeExpected = BLOCK_TIME * 1000 * DIFFICULTY_ADJUSTMENT_INTERVAL;
-		const oldDifficulty = chain[lastIndex].getDifficulty();
-		let newDifficulty = Math.round(
-			oldDifficulty * (timeExpected / timeTaken),
-		);
-		const maxDiff = oldDifficulty * MAX_DIFFICULTY_CHANGE_FACTOR;
-		const minDiff = Math.ceil(
-			oldDifficulty / MAX_DIFFICULTY_CHANGE_FACTOR,
-		);
-		newDifficulty = Math.min(newDifficulty, maxDiff);
-		newDifficulty = Math.max(newDifficulty, minDiff);
-		return Math.max(MIN_DIFFICULTY, newDifficulty);
 	}
 
 	public async replaceChain(newChain: Block[]): Promise<void> {

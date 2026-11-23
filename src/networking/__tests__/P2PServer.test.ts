@@ -1,7 +1,7 @@
 import { P2PServer, MessageType, isValidPeerAddress } from '../P2PServer.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
 import { Block } from '../../blockchain/Block.js';
-import { Transaction } from '../../blockchain/Transaction.js';
+import { NULL_HASH, Transaction } from '../../blockchain/Transaction.js';
 import WebSocket from 'ws';
 import fs from 'fs';
 import { EventEmitter } from 'events';
@@ -133,7 +133,7 @@ describe('P2PServer', () => {
 	});
 
 	it('should drop a block that contains a malformed transaction', async () => {
-		const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], '0', 0, 1, 1);
+		const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], NULL_HASH, 0, undefined, 1);
 		const wire = JSON.parse(JSON.stringify(block)) as { transactions: Record<string, unknown>[] };
 		delete wire.transactions[0].outputs;
 		const addSpy = jest.spyOn(blockchain, 'addMinedBlock').mockResolvedValue(undefined);
@@ -150,9 +150,9 @@ describe('P2PServer', () => {
 		const mockBlock1 = new Block(
 			Date.now(),
 			[mockTransaction],
-			'0', // Genesis block previous hash
+			NULL_HASH, // Genesis block previous hash
 			0,
-			4,
+			undefined,
 			0
 		);
 		const mockBlock2 = new Block(
@@ -160,7 +160,7 @@ describe('P2PServer', () => {
 			[mockTransaction],
 			mockBlock1.hash,
 			0,
-			4,
+			undefined,
 			1
 		);
 		const mockChain = [mockBlock1, mockBlock2];

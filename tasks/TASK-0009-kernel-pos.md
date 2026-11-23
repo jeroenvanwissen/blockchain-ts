@@ -45,4 +45,4 @@ Peercoin/BlackCoin-style kernel PoS, with every input taken from chain data.
 
 ## Notes
 
-Owner decision: fixed reward per block (currently 10) or coin-age based.
+Decided 2026-11-23: PoS pays a fixed 10 coins per block (`POS_BLOCK_REWARD`), not coin-age based.

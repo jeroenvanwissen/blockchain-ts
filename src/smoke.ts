@@ -1,7 +1,8 @@
 // Smoke check against the real runtime (native ESM, real filesystem, real protobuf).
 // From an unrelated working directory and temp data dirs: node A mines, node B syncs from it
-// and accepts A's next block live, then A restarts and keeps its chain. Takes ~40 s because
-// consecutive blocks must be BLOCK_TIME apart. Run with `npm run smoke`; --keep keeps the dir.
+// and accepts A's next block live, then A restarts and keeps its chain. A fresh chain mines
+// quickly until the retarget catches up, so heights are read from the logs, not assumed.
+// Run with `npm run smoke`; --keep keeps the temp dir.
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'url';
 
 const READY = /P2P Server listening/;
 const TIMEOUT_MS = 30_000;
-const NEXT_BLOCK_TIMEOUT_MS = 90_000; // BLOCK_TIME (30 s) plus hashing and relay
+const NEXT_BLOCK_TIMEOUT_MS = 120_000; // up to a few target spacings once the retarget settles
 const SELF = fileURLToPath(import.meta.url);
 // index.ts under tsx, index.js when run from dist/
 const ENTRY = path.join(path.dirname(SELF), `index${path.extname(SELF)}`);
@@ -98,6 +99,13 @@ function noLoadErrors(node: NodeProcess): void {
 	}
 }
 
+/** The node logged that it mined this exact block. */
+function assertMined(node: NodeProcess, height: string, hashPrefix: string): void {
+	if (!node.output().includes(`mined block ${height} (${hashPrefix})`)) {
+		throw new Error(`${node.name} did not mine block ${height} (${hashPrefix})`);
+	}
+}
+
 function noErrors(node: NodeProcess): void {
 	const line = node.output().split('\n').find((l) => /Error|rejected/.test(l));
 	if (line) throw new Error(`${node.name}: logged an error: ${line.trim()}`);
@@ -121,7 +129,7 @@ async function main(): Promise<void> {
 		await waitFor(nodeA, READY, 'listening');
 		noLoadErrors(nodeA);
 		const address = walletAddress(nodeA);
-		const block1 = (await waitFor(nodeA, /mined block 1 \((\w+)\)/, 'mining block 1'))[1];
+		await waitFor(nodeA, /mined block 1 \(/, 'mining block 1');
 		assertFile(path.join(dataA, 'wallet.dat'));
 		assertFile(path.join(dataA, 'blocks', 'index.dat'));
 		assertFile(path.join(dataA, 'blocks', 'blk00000.dat'));
@@ -132,13 +140,22 @@ async function main(): Promise<void> {
 		running.push(nodeB);
 		await waitFor(nodeB, READY, 'listening');
 		await waitFor(nodeB, /Successfully connected to peer/, 'connecting to node A');
-		await waitFor(nodeB, new RegExp(`Synced chain from peer: height 1, tip ${block1}`), 'sync');
+		const [, syncedHeight, syncedTip] = await waitFor(
+			nodeB,
+			/Synced chain from peer: height (\d+), tip (\w+)/,
+			'sync',
+		);
+		assertMined(nodeA, syncedHeight, syncedTip);
 		noLoadErrors(nodeB);
 
-		step('wait for node A to mine block 2 and node B to accept it');
-		const block2Pattern = /mined block 2 \((\w+)\)/;
-		const block2 = (await waitFor(nodeA, block2Pattern, 'block 2', NEXT_BLOCK_TIMEOUT_MS))[1];
-		await waitFor(nodeB, new RegExp(`Accepted block 2 \\(${block2}\\) from peer`), 'relay');
+		step(`node B synced to height ${syncedHeight}; wait for it to accept a newer block live`);
+		const [, relayedHeight, relayedHash] = await waitFor(
+			nodeB,
+			new RegExp(`Accepted block (\\d+) \\((\\w+)\\) from peer`),
+			'relay',
+			NEXT_BLOCK_TIMEOUT_MS,
+		);
+		assertMined(nodeA, relayedHeight, relayedHash);
 
 		step('restart node A without mining; expect the same chain and wallet');
 		await stopNode(nodeB);

@@ -12,6 +12,7 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
 - `src/blockchain/address.ts`: Base58Check addresses (`addressFromPublicKey`, `isValidAddress`)
 - `src/blockchain/UtxoSet.ts`: unspent outputs by outpoint, with a per-address index
+- `src/blockchain/target.ts` (compact `bits` ↔ target, block work) and `src/blockchain/retarget.ts` (`requiredBits`: per-block retarget, separate for PoW and PoS)
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
 - `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
 
@@ -22,7 +23,7 @@ Run npm scripts from the repository root.
 - Install: `npm install`
 - Build: `npm run build` (tsc)
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
-- Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 35 s because blocks are 30 s apart; `-- --keep` keeps the temp dir)
+- Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 10 s; `-- --keep` keeps the temp dir)
 - Lint: `npm run lint` (currently fails on pre-existing errors, see TASK-0021); lint touched files with `npx eslint <files>`
 - Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node and `--mine` to mine PoW blocks. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
@@ -36,6 +37,7 @@ Run npm scripts from the repository root.
 - Amounts are `bigint` base units (`COIN` = 10^8 per coin); never use `number` for money. On the JSON wire amounts are decimal strings: send with `JSON.stringify` (`Transaction.toJSON`), parse with `Transaction.fromJSON`, which validates strictly.
 - Build coinbases with `Transaction.coinbase(address, amount, height)`; its null input carries the block height.
 - The txid (`calculateHash`) excludes public keys and signatures; blocks commit to `witnessHash`. Inputs carry a compressed public key and a compact low-S signature over `sighash(i)`.
+- Block hash = sha256d of the header (version, previous hash, merkle root of witness hashes, timestamp in ms, `bits`, nonce); PoW means hash ≤ target. Chain work (`cumulativeWeight`, bigint) sums `2^256 / (target + 1)` per block. Build templates with `Blockchain.createBlockTemplate`; it sets `bits` for the block's type.
 - `Blockchain` mutations go through its `async-mutex` lock. Public async methods acquire it; `_`-prefixed internals assume it is held. Never call a public locking method while holding the lock.
 - Formatting follows the editor Prettier settings in `.vscode/settings.json`: tabs, single quotes, trailing commas. Don't reformat code you aren't changing.
 - Tests: use `jest.useFakeTimers()` with `jest.setSystemTime()`. `jest.spyOn(Date, 'now')` doesn't work under fake timers.

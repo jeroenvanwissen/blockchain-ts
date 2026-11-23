@@ -4,6 +4,7 @@ import * as path from 'path';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { BlockStore } from '../../blockchain/BlockStore.js';
+import { bitsToTarget, targetToBits } from '../../blockchain/target.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
 import { BLOCK_TIME, COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
@@ -56,7 +57,7 @@ describe('Block validation (single path)', () => {
 				[Transaction.coinbase(miner.address, POW_BLOCK_REWARD, height), ...txs],
 				chain.getLatestBlock().hash,
 				0,
-				chain.calculateNewDifficulty(),
+				chain.getRequiredBits(),
 				height,
 			),
 		);
@@ -129,6 +130,40 @@ describe('Block validation (single path)', () => {
 		} finally {
 			removeTempDir(otherDir);
 		}
+	});
+
+	it('should reject a block whose bits differ from the required target', async () => {
+		const miner = openWallet(dir, 'miner');
+		const chain = openChain(dir);
+		await mineBlocks(chain, miner.address, 2);
+		advanceTime(BLOCK_TIME * 1000);
+		const height = chain.getChain().length;
+		const harder = targetToBits(bitsToTarget(chain.getRequiredBits()) / 2n);
+		const block = solve(
+			new Block(
+				Date.now(),
+				[Transaction.coinbase(miner.address, POW_BLOCK_REWARD, height)],
+				chain.getLatestBlock().hash,
+				0,
+				harder, // more work than required is still the wrong target
+				height,
+			),
+		);
+
+		await expect(chain.addMinedBlock(block)).rejects.toThrow('incorrect block difficulty');
+	});
+
+	it('should reject a block whose hash does not meet its target', async () => {
+		const miner = openWallet(dir, 'miner');
+		const chain = openChain(dir);
+		await mineBlocks(chain, miner.address, 1);
+		const block = nextBlock(chain, miner, []);
+		do {
+			block.nonce++;
+			block.hash = block.calculateHash();
+		} while (block.meetsTarget());
+
+		await expect(chain.addMinedBlock(block)).rejects.toThrow('invalid proof of work');
 	});
 
 	it('should leave the chain usable after rejecting a block', async () => {

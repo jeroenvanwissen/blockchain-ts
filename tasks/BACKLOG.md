@@ -25,8 +25,8 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| [TASK-0007](TASK-0007-block-header.md) | Block header with merkle root and compact target | pending | P1 | large | TASK-0005 | F-008, F-011, old F3 |
-| [TASK-0008](TASK-0008-retarget.md) | Per-block retarget and timestamp rules | pending | P1 | medium | TASK-0007 | F-008 |
+| [TASK-0007](TASK-0007-block-header.md) | Block header with merkle root and compact target | done | P1 | large | TASK-0005 | F-008, F-011, old F3 |
+| [TASK-0008](TASK-0008-retarget.md) | Per-block retarget and timestamp rules | done | P1 | medium | TASK-0007 | F-008 |
 
 ## Milestone 4: UTXO proof of stake
 

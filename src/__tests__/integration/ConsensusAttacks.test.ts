@@ -100,7 +100,7 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 				[coinbase, fromNothing],
 				chain.getLatestBlock().hash,
 				0,
-				chain.calculateNewDifficulty(),
+				chain.getRequiredBits(),
 				chain.getChain().length,
 			),
 		);
@@ -141,7 +141,7 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 			[Transaction.coinbase(staker.address, POS_BLOCK_REWARD, height), stakeTx],
 			chain.getLatestBlock().hash,
 			0,
-			chain.calculateNewDifficulty(),
+			chain.getRequiredBits(true),
 			height,
 		);
 		expect(block.isProofOfStake()).toBe(true);

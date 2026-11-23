@@ -30,9 +30,11 @@ message SerializedBlock {
   repeated SerializedTransaction transactions = 2;
   string previous_hash = 3;
   uint32 nonce = 4;
-  uint32 pow_difficulty = 5;
+  reserved 5; // was pow_difficulty (leading hex zeros)
   uint32 index = 6;
   string hash = 7;
+  uint32 bits = 8; // compact target
+  uint32 version = 9;
 }
 
 message BlockchainData {

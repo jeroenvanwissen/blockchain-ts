@@ -72,43 +72,9 @@ export type Message =
 	| LatestBlockMessage
 	| PeersMessage;
 
-// Wire format: blocks are JSON with transactions in Transaction.toJSON() form
-interface SerializedBlock {
-	timestamp: number;
-	transactions: unknown[];
-	previousHash: string;
-	nonce: number;
-	powDifficulty: number;
-	index: number;
-	hash: string;
-}
-
-function isSerializedBlock(obj: unknown): obj is SerializedBlock {
-	return (
-		typeof obj === 'object' &&
-		obj !== null &&
-		Array.isArray((obj as SerializedBlock).transactions) &&
-		typeof (obj as SerializedBlock).timestamp === 'number' &&
-		typeof (obj as SerializedBlock).previousHash === 'string' &&
-		typeof (obj as SerializedBlock).nonce === 'number' &&
-		typeof (obj as SerializedBlock).powDifficulty === 'number' &&
-		typeof (obj as SerializedBlock).index === 'number' &&
-		typeof (obj as SerializedBlock).hash === 'string'
-	);
-}
-
 /** Rebuild a block from wire data. Throws if the block or any transaction is malformed. */
 function parseBlock(data: unknown): Block {
-	if (!isSerializedBlock(data)) throw new Error('malformed block');
-	const transactions = data.transactions.map((tx) => Transaction.fromJSON(tx));
-	return new Block(
-		data.timestamp,
-		transactions,
-		data.previousHash,
-		data.nonce,
-		data.powDifficulty,
-		data.index,
-	);
+	return Block.fromJSON(data);
 }
 
 function parseAmount(value: unknown): bigint | null {
@@ -321,6 +287,13 @@ export class P2PServer {
 	}
 
 	private messageHandler(socket: WebSocket): void {
+		// Chain-affecting messages from one peer are handled in arrival order: a block relayed
+		// right after a CHAIN message must not be processed before that chain is adopted
+		let queue: Promise<void> = Promise.resolve();
+		const enqueue = (task: () => Promise<void>): void => {
+			queue = queue.then(task, task);
+		};
+
 		socket.on('message', (message: Buffer | string) => {
 			try {
 				const messageStr =
@@ -330,26 +303,31 @@ export class P2PServer {
 				const data: Message = JSON.parse(jsonStr);
 
 				switch (data.type) {
-					case MessageType.CHAIN:
-						void this.handleChainMessage(data.data);
+					case MessageType.CHAIN: {
+						const payload = data.data;
+						enqueue(() => this.handleChainMessage(payload));
 						break;
-
-					case MessageType.BLOCK:
-						void this.handleBlockMessage(data.data);
+					}
+					case MessageType.BLOCK: {
+						const payload = data.data;
+						enqueue(() => this.handleBlockMessage(payload));
 						break;
-
-					case MessageType.TRANSACTION:
-						void this.handleTransactionMessage(data.data);
+					}
+					case MessageType.TRANSACTION: {
+						const payload = data.data;
+						enqueue(() => this.handleTransactionMessage(payload));
 						break;
-
-					case MessageType.STAKE:
-						void this.handleStakeMessage(data.data);
+					}
+					case MessageType.STAKE: {
+						const payload = data.data;
+						enqueue(() => this.handleStakeMessage(payload));
 						break;
-
-					case MessageType.UNSTAKE:
-						void this.handleUnstakeMessage(data.data);
+					}
+					case MessageType.UNSTAKE: {
+						const payload = data.data;
+						enqueue(() => this.handleUnstakeMessage(payload));
 						break;
-
+					}
 					case MessageType.GET_LATEST_BLOCK:
 						this.handleGetLatestBlockMessage(socket);
 						break;

@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import { Block } from '../Block.js';
 import { BlockStore } from '../BlockStore.js';
-import { Transaction } from '../Transaction.js';
+import { NULL_HASH, Transaction } from '../Transaction.js';
 import * as fs from 'fs';
 
 // Mock the fs module
@@ -32,7 +32,7 @@ describe('BlockStore', () => {
 	let fileSystem: Map<string, Buffer>;
 	let directories: Set<string>;
 
-	const createBlock = (index: number, previousHash: string = '0'): Block => {
+	const createBlock = (index: number, previousHash: string = NULL_HASH): Block => {
 		const tx = Transaction.coinbase('test', 50n, index, 1609459200000 + index * 1000);
 		const block = new Block(
 			1609459200000 + index * 1000,
