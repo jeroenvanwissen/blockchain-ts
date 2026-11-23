@@ -1,5 +1,6 @@
 // ESLint flat config (ESLint 10). TypeScript sources get the recommended and type-aware
-// typescript-eslint rules; tests also get the Jest rules; CommonJS files the base rules.
+// typescript-eslint rules; tests also get the Jest rules; CommonJS files and the explorer's
+// browser script the base rules.
 import js from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';
 import jest from 'eslint-plugin-jest';
@@ -29,5 +30,9 @@ export default defineConfig([
 	{
 		files: ['**/*.cjs'],
 		languageOptions: { sourceType: 'commonjs', globals: globals.node },
+	},
+	{
+		files: ['src/api/explorer/**/*.js'], // the block explorer page's script (a browser module)
+		languageOptions: { globals: globals.browser },
 	},
 ]);

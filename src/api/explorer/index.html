@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Block explorer</title>
+		<link rel="stylesheet" href="/explorer/style.css" />
+		<script type="module" src="/explorer/app.js"></script>
+	</head>
+	<body>
+		<header class="top">
+			<a class="brand" href="#/">Block explorer</a>
+			<form id="search" class="search" role="search">
+				<input
+					id="query"
+					type="search"
+					placeholder="Height, block hash, txid or address"
+					aria-label="Height, block hash, txid or address"
+					autocomplete="off"
+					spellcheck="false"
+				/>
+				<button type="submit">Search</button>
+			</form>
+		</header>
+		<section id="status" class="status" aria-live="polite"></section>
+		<main id="view"><p class="muted">Loading…</p></main>
+		<footer class="muted">A read-only view of this node's chain. It refreshes when a new block arrives.</footer>
+	</body>
+</html>

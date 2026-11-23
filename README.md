@@ -107,8 +107,9 @@ src/
 │   ├── P2PServer.ts          # Handshake, block sync, relay, peer discovery
 │   └── __tests__/            # Unit tests
 ├── api/
-│   ├── ApiServer.ts          # HTTP API: chain queries, token-protected wallet routes
-│   └── cookie.ts             # api.cookie token file
+│   ├── ApiServer.ts          # HTTP API: chain queries, token-protected wallet routes, explorer
+│   ├── cookie.ts             # api.cookie token file
+│   └── explorer/             # Block explorer page (HTML, CSS, browser JS; copied to dist/ by the build)
 ├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Node entry point
@@ -130,7 +131,7 @@ src/
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
-| **API Server**     | `ApiServer.ts`        | HTTP API over chain state, mempool, peers; wallet send |
+| **API Server**     | `ApiServer.ts`        | HTTP API over chain state, mempool, peers; wallet send; block explorer |
 
 ---
 
@@ -308,9 +309,11 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 
 | Endpoint | Returns |
 | -------- | ------- |
+| `GET /` | The [block explorer](#block-explorer) page |
 | `GET /status` | Network id, height, tip hash, chain work, phase (`pow`/`pos`), median time past, mempool size, peer count |
-| `GET /blocks/:heightOrHash` | The block (header, signature, transactions), whether it is on the active chain, confirmations. Side-branch blocks are found by hash |
-| `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations; `block: null` while in the mempool (indexed lookup on the active chain) |
+| `GET /blocks?before=<height>&limit=<n>` | Summaries of active-chain blocks below `before` (default: from the tip), newest first, `limit` 1 to 100 (default 20): height, hash, time, PoS or not, transaction count, size, producer (the staker, or the PoW coinbase's payee) |
+| `GET /blocks/:heightOrHash` | The block (header, signature, transactions with their txids), merkle root, size, producer, whether it is on the active chain, confirmations, and the next block's hash. Side-branch blocks are found by hash |
+| `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations (`block: null` while in the mempool; indexed lookup on the active chain). Each input carries the output it spends (`spent: {address, amount}`), each confirmed output whether it is still `unspent`, plus `fee`, `size`, `coinbase` and `coinstake` |
 | `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs |
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Number and total size of pending transactions, and their txids |
@@ -324,6 +327,17 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `POST /wallet/lock` | Wipes the keys from memory (token required) |
 | `GET /wallet/staking` | Whether the node stakes, whether its wallet can sign, eligible outputs and value, the chance per 16 s slot of finding a kernel and the expected wait, blocks staked since start, and the last block it staked (token required) |
 | `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the seed under the new passphrase and deletes backups (token required) |
+
+### Block Explorer
+
+Open the API's root in a browser, `http://127.0.0.1:6001/` by default, to browse the node's chain:
+- the latest blocks, the mempool and the connected peers
+- each block with its transactions, each transaction with what its inputs spend and its fee
+- each address with its balance and unspent outputs (spent history isn't indexed)
+
+The search box takes a height, a block hash, a txid or an address. The page refreshes when a new block arrives.
+
+The explorer is a static page (`src/api/explorer/`) that reads only the public chain routes. It inserts data as text, never as HTML. A strict Content-Security-Policy lets it load only its own script and style and call only this API. Like the chain routes it is local unless `API_HOST` exposes it.
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 
@@ -391,6 +405,7 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | Wallet addresses  | `npm run cli -- addresses`                                    |
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
 | Staking status    | `npm run cli -- staking`                                      |
+| Block explorer    | open `http://127.0.0.1:6001/`                                 |
 
 ---
 

@@ -90,7 +90,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0041](TASK-0041-wallet-addresses.md) | HD wallet: any number of addresses from one seed | done | P2 | large | TASK-0024 | owner request |
-| [TASK-0042](TASK-0042-block-explorer.md) | Block explorer page served by the node | pending | P2 | medium | TASK-0016 | owner request |
+| [TASK-0042](TASK-0042-block-explorer.md) | Block explorer page served by the node | done | P2 | medium | TASK-0016 | owner request |
 | [TASK-0043](TASK-0043-docker.md) | Docker image and compose file | pending | P2 | medium | TASK-0037 | owner request |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)

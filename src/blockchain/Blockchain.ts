@@ -157,6 +157,11 @@ export class Blockchain {
 		return this._utxos.forAddress(address);
 	}
 
+	/** The unspent output at an outpoint, if it is unspent on the active chain. */
+	public getUTXO(txid: string, outputIndex: number): UTXO | undefined {
+		return this._utxos.get(txid, outputIndex);
+	}
+
 	/** Outputs of `address` a new transaction can spend now: mature and not claimed by the mempool. */
 	public getSpendableUTXOs(address: string): UTXO[] {
 		const height = this.chain.length;

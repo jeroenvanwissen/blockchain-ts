@@ -1,10 +1,12 @@
 import { Mutex } from 'async-mutex';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
-import type { Block } from '../blockchain/Block.js';
+import * as path from 'path';
+import { merkleRoot, type Block } from '../blockchain/Block.js';
 import type { Blockchain } from '../blockchain/Blockchain.js';
-import type { Transaction, TxOutput } from '../blockchain/Transaction.js';
+import { NULL_HASH, type Transaction, type TxInput, type TxOutput } from '../blockchain/Transaction.js';
 import { isValidAddress } from '../blockchain/address.js';
 import { outpointKey, type UTXO } from '../blockchain/UtxoSet.js';
 import { WalletError, type Wallet, type WalletErrorCode } from '../blockchain/Wallet.js';
@@ -18,6 +20,7 @@ export interface ApiOptions {
 	host: string;
 	port: number; // 0: the OS picks a free port (see `port()`)
 	network: string; // network id reported by /status
+	explorerDir?: string; // the block explorer's files (src/api/explorer); without it / is 404
 }
 
 /** Where /peers and /status get peer data (the node's P2PServer). */
@@ -33,6 +36,29 @@ export interface WalletAccess {
 	staking?: { isRunning(): boolean; stakedCount(): number }; // the node's StakingService
 }
 
+/** A static file response (the explorer), as opposed to JSON. */
+class StaticFile {
+	constructor(
+		readonly contentType: string,
+		readonly body: Buffer,
+	) {}
+}
+
+/** The explorer's files: the page at /, the rest under /explorer/. */
+const EXPLORER_FILES: Record<string, { file: string; contentType: string }> = {
+	'/': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+	'/explorer/app.js': { file: 'app.js', contentType: 'text/javascript; charset=utf-8' },
+	'/explorer/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8' },
+};
+
+// The page may load only its own script and style and call only this API; it can't be framed
+const EXPLORER_HEADERS = {
+	'content-security-policy':
+		"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	'referrer-policy': 'no-referrer',
+	'cache-control': 'no-cache',
+};
+
 class HttpError extends Error {
 	constructor(
 		readonly status: number,
@@ -46,12 +72,14 @@ const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const HEIGHT_PATTERN = /^\d{1,15}$/;
 const MAX_ADDRESS_LENGTH = 64; // real addresses are 25 bytes in Base58, about 34 characters
 const AMOUNT_PATTERN = /^\d{1,20}$/; // base units as a decimal string
+const DEFAULT_BLOCK_LIST = 20;
+const MAX_BLOCK_LIST = 100;
 
 interface Route {
 	method: 'GET' | 'POST';
 	pattern: RegExp;
 	wallet?: boolean; // needs WalletAccess and its token
-	handle: (params: string[], body: unknown) => unknown;
+	handle: (params: string[], body: unknown, query: URLSearchParams) => unknown;
 }
 
 /**
@@ -67,6 +95,7 @@ export class ApiServer {
 	private readonly _sendLock = new Mutex(); // one payment at a time: coin selection reads the mempool
 	private readonly _routes: Route[] = [
 		{ method: 'GET', pattern: /^\/status$/, handle: () => this._status() },
+		{ method: 'GET', pattern: /^\/blocks$/, handle: (_, __, query) => this._blocks(query) },
 		{ method: 'GET', pattern: /^\/blocks\/([^/]+)$/, handle: ([id]) => this._block(id) },
 		{ method: 'GET', pattern: /^\/transactions\/([^/]+)$/, handle: ([txid]) => this._transaction(txid) },
 		{ method: 'GET', pattern: /^\/addresses\/([^/]+)$/, handle: ([address]) => this._address(address) },
@@ -82,14 +111,24 @@ export class ApiServer {
 		{ method: 'POST', pattern: /^\/wallet\/lock$/, wallet: true, handle: () => this._lock() },
 		{ method: 'POST', pattern: /^\/wallet\/passphrase$/, wallet: true, handle: (_, body) => this._changePassphrase(body) },
 		{ method: 'GET', pattern: /^\/wallet\/staking$/, wallet: true, handle: () => this._staking() },
+		{ method: 'GET', pattern: /^\/$/, handle: () => this._explorerFile('/') },
+		{ method: 'GET', pattern: /^\/explorer\/([a-z]+\.[a-z]+)$/, handle: ([name]) => this._explorerFile(`/explorer/${name}`) },
 	];
+	private readonly _explorer = new Map<string, StaticFile>();
 
 	constructor(
 		private readonly _blockchain: Blockchain,
 		private readonly _peers: PeerSource,
 		private readonly _options: ApiOptions,
 		private readonly _walletAccess?: WalletAccess,
-	) {}
+	) {
+		// Read once: the files are small and fixed while the node runs
+		if (_options.explorerDir) {
+			for (const [route, { file, contentType }] of Object.entries(EXPLORER_FILES)) {
+				this._explorer.set(route, new StaticFile(contentType, fs.readFileSync(path.join(_options.explorerDir, file))));
+			}
+		}
+	}
 
 	/** Start serving; resolves once listening, rejects if the port can't be bound. */
 	listen(): Promise<void> {
@@ -120,7 +159,7 @@ export class ApiServer {
 	private async _handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
 		const headers: Record<string, string> = {};
 		try {
-			const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+			const { pathname, searchParams } = new URL(req.url ?? '/', 'http://localhost');
 			const matching = this._routes.filter((r) => r.pattern.test(pathname));
 			if (matching.length === 0) throw new HttpError(404, 'not found');
 			const route = matching.find((r) => r.method === req.method);
@@ -141,7 +180,9 @@ export class ApiServer {
 			}
 			const body = route.method === 'POST' ? await this._readJson(req) : undefined;
 			const params = pathname.match(route.pattern)!.slice(1);
-			this._send(res, 200, await route.handle(params, body));
+			const result = await route.handle(params, body, searchParams);
+			if (result instanceof StaticFile) return this._sendFile(res, result);
+			this._send(res, 200, result);
 		} catch (error) {
 			if (error instanceof HttpError) return this._send(res, error.status, { error: error.message }, headers);
 			log.error('request failed:', error);
@@ -154,9 +195,27 @@ export class ApiServer {
 		res.writeHead(status, {
 			'content-type': 'application/json; charset=utf-8',
 			'content-length': Buffer.byteLength(json),
+			'x-content-type-options': 'nosniff',
 			...headers,
 		});
 		res.end(json);
+	}
+
+	private _sendFile(res: http.ServerResponse, file: StaticFile): void {
+		res.writeHead(200, {
+			'content-type': file.contentType,
+			'content-length': file.body.length,
+			'x-content-type-options': 'nosniff',
+			...EXPLORER_HEADERS,
+		});
+		res.end(file.body);
+	}
+
+	/** GET / and /explorer/*: the block explorer (404 when the node serves none). */
+	private _explorerFile(route: string): StaticFile {
+		const file = this._explorer.get(route);
+		if (!file) throw new HttpError(404, 'not found');
+		return file;
 	}
 
 	/** Constant-time comparison of the bearer token (hashes make the lengths equal). */
@@ -346,6 +405,35 @@ export class ApiServer {
 		};
 	}
 
+	/**
+	 * GET /blocks?before=<height>&limit=<n>: summaries of active-chain blocks below `before`
+	 * (default: from the tip), newest first, at most MAX_BLOCK_LIST.
+	 */
+	private _blocks(query: URLSearchParams) {
+		const tip = this._blockchain.getLatestBlock().index;
+		const before = query.get('before') ?? String(tip + 1);
+		const limit = query.get('limit') ?? String(DEFAULT_BLOCK_LIST);
+		if (!HEIGHT_PATTERN.test(before)) throw new HttpError(400, 'before must be a block height');
+		if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_BLOCK_LIST) {
+			throw new HttpError(400, `limit must be 1 to ${MAX_BLOCK_LIST}`);
+		}
+		const chain = this._blockchain.getChain();
+		const blocks = [];
+		for (let height = Math.min(Number(before), tip + 1) - 1; height >= 0 && blocks.length < Number(limit); height--) {
+			const block = chain[height];
+			blocks.push({
+				height,
+				hash: block.hash,
+				timestamp: block.timestamp,
+				proofOfStake: block.isProofOfStake(),
+				transactions: block.transactions.length,
+				size: block.size(),
+				producer: producer(block),
+			});
+		}
+		return blocks;
+	}
+
 	private _block(id: string) {
 		let found: { block: Block; height: number; isActive: boolean } | undefined;
 		if (HEIGHT_PATTERN.test(id)) {
@@ -357,11 +445,18 @@ export class ApiServer {
 			throw new HttpError(400, 'expected a block height or a 64-character hex hash');
 		}
 		if (!found) throw new HttpError(404, 'block not found');
+		const { block } = found;
+		const next = found.isActive ? this._blockchain.getChain()[found.height + 1] : undefined;
 		return {
-			...found.block.toJSON(),
-			proofOfStake: found.block.isProofOfStake(),
+			...block.toJSON(),
+			transactions: block.transactions.map((tx) => ({ txid: tx.calculateHash(), ...tx.toJSON() })),
+			merkleRoot: merkleRoot(block.transactions),
+			size: block.size(),
+			producer: producer(block),
+			proofOfStake: block.isProofOfStake(),
 			active: found.isActive,
 			confirmations: found.isActive ? this._confirmations(found.height) : 0,
+			nextHash: next?.hash ?? null,
 		};
 	}
 
@@ -370,13 +465,38 @@ export class ApiServer {
 		const found = this._blockchain.findTransaction(txid);
 		if (!found) throw new HttpError(404, 'transaction not found');
 		const { transaction, block } = found;
+		const json = transaction.toJSON();
+		const spent = transaction.inputs.map((input) => this._spentOutput(input));
+		const special = transaction.isCoinbase() || transaction.isCoinStake();
+		const inputTotal = spent.every((output) => output) ? spent.reduce((total, output) => total + output!.amount, 0n) : null;
+		const outputTotal = transaction.outputs.reduce((total, output) => total + output.amount, 0n);
 		return {
 			txid,
-			...transaction.toJSON(),
+			...json,
+			// Each input with the output it spends (null for the coinbase's null input)
+			inputs: json.inputs.map((input, i) => ({
+				...input,
+				spent: spent[i] && { address: spent[i].address, amount: spent[i].amount.toString() },
+			})),
+			// Whether each output is still unspent; null in the mempool and for zero-value markers
+			outputs: json.outputs.map((output, i) => ({
+				...output,
+				unspent: block && transaction.outputs[i].amount > 0n ? !!this._blockchain.getUTXO(txid, i) : null,
+			})),
+			coinbase: transaction.isCoinbase(),
+			coinstake: transaction.isCoinStake(),
+			fee: special || inputTotal === null ? null : (inputTotal - outputTotal).toString(),
+			size: transaction.size(),
 			block: block?.hash ?? null,
 			height: block?.index ?? null,
 			confirmations: block ? this._confirmations(block.index) : 0,
 		};
+	}
+
+	/** The output an input spends, from the active chain (null for a coinbase's null input). */
+	private _spentOutput(input: TxInput): TxOutput | null {
+		if (input.previousTx === NULL_HASH) return null;
+		return this._blockchain.findTransaction(input.previousTx)?.transaction.outputs[input.outputIndex] ?? null;
 	}
 
 	private _address(address: string) {
@@ -466,6 +586,12 @@ function parsePayment(body: unknown): TxOutput[] {
 		}
 		return { address, amount: BigInt(amount) };
 	});
+}
+
+/** Who produced a block: the staker (coinstake owner) for PoS, the coinbase's payee for PoW. */
+function producer(block: Block): string | null {
+	const output = block.isProofOfStake() ? block.transactions[1]?.outputs[1] : block.transactions[0]?.outputs[0];
+	return output?.address ?? null;
 }
 
 function sum(utxos: UTXO[]): bigint {

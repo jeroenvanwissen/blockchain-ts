@@ -98,7 +98,7 @@ async function main(): Promise<void> {
 		);
 		assertMined(nodeA, relayedHeight, relayedHash);
 
-		step('query both nodes over the HTTP API');
+		step('query both nodes over the HTTP API, and load the block explorer');
 		await waitFor(nodeA, API_READY, 'API');
 		await waitFor(nodeB, API_READY, 'API');
 		const statusB = await apiGet<{ height: number; tip: string }>(nodeB, '/status');
@@ -106,6 +106,12 @@ async function main(): Promise<void> {
 		if (blockA.hash !== statusB.tip) throw new Error("B's tip is not A's block at that height");
 		const balance = await apiGet<{ balance: string }>(nodeA, `/addresses/${address}`);
 		if (BigInt(balance.balance) <= 0n) throw new Error("A's API reports no mining rewards");
+		for (const [route, type] of [['/', 'text/html'], ['/explorer/app.js', 'text/javascript'], ['/explorer/style.css', 'text/css']]) {
+			const res = await fetch(`${apiUrl(nodeA)}${route}`);
+			if (!res.ok || !res.headers.get('content-type')?.startsWith(type) || !res.headers.get('content-security-policy')) {
+				throw new Error(`the block explorer's ${route} is not served (HTTP ${res.status})`);
+			}
+		}
 
 		step('run the CLI against node A (status, and balance with its api.cookie)');
 		const cliStatus = await runCli(['--api', apiUrl(nodeA), 'status']);

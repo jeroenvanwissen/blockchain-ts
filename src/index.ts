@@ -29,6 +29,8 @@ const log = logger('Node');
 const MINING_WORKER_PATH = fileURLToPath(
 	new URL('./blockchain/miningWorker.cjs', import.meta.url),
 );
+// The block explorer's static files (copied to dist/ by npm run build)
+const EXPLORER_DIR = fileURLToPath(new URL('./api/explorer/', import.meta.url));
 
 // Ensure the data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -86,7 +88,7 @@ const staking = new StakingService(blockchain, wallet, (block) => p2pServer.broa
 const api = new ApiServer(
 	blockchain,
 	p2pServer,
-	{ host: API_HOST, port: API_PORT, network: networkMagic },
+	{ host: API_HOST, port: API_PORT, network: networkMagic, explorerDir: EXPLORER_DIR },
 	{
 		wallet,
 		token: writeApiCookie(API_COOKIE_PATH),
@@ -96,7 +98,7 @@ const api = new ApiServer(
 );
 api
 	.listen()
-	.then(() => log.info(`API listening on http://${API_HOST}:${api.port()}`))
+	.then(() => log.info(`API listening on http://${API_HOST}:${api.port()} (block explorer at /)`))
 	.catch((error: Error) => log.error(`API could not listen on ${API_HOST}:${API_PORT}:`, error.message));
 
 

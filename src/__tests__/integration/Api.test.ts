@@ -8,6 +8,7 @@ import { minRelayFee } from '../../blockchain/fees.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
 import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
 import type { PeerInfo } from '../../networking/P2PServer.js';
+import * as path from 'path';
 import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js';
 
 const OPTIONS = { validateDifficulty: false, powCutoffBlock: 1000 };
@@ -132,6 +133,7 @@ describe('HTTP API', () => {
 		expect((pending.body.outputs as { amount: string }[])[0]).toEqual({
 			address: recipient.address,
 			amount: COIN.toString(),
+			unspent: null, // not confirmed yet
 		});
 		expect((await get('/mempool')).body).toEqual({ size: 1, bytes: payment.size(), txids: [txid] });
 
@@ -145,6 +147,68 @@ describe('HTTP API', () => {
 			confirmations: 1,
 		});
 		expect((await get('/mempool')).body).toEqual({ size: 0, bytes: 0, txids: [] });
+	});
+
+	it('should show what each input spends, the fee, and which outputs are unspent', async () => {
+		const recipient = openWallet(dir, 'recipient');
+		const payment = chain.createTransaction(miner.address, recipient.address, COIN, miner);
+		await chain.addTransaction(payment);
+		await buildBlocks(chain, miner.address, 1);
+		const spentTxid = payment.inputs[0].previousTx;
+
+		const { body } = await get(`/transactions/${payment.calculateHash()}`);
+
+		expect(body).toMatchObject({ coinbase: false, coinstake: false, size: payment.size(), fee: minRelayFee(payment.size()).toString() });
+		expect((body.inputs as { spent: unknown }[])[0].spent).toEqual({ address: miner.address, amount: POW_BLOCK_REWARD.toString() });
+		expect((body.outputs as { unspent: boolean }[]).map((o) => o.unspent)).toEqual([true, true]);
+		const spentTx = (await get(`/transactions/${spentTxid}`)).body;
+		expect(spentTx).toMatchObject({ coinbase: true, fee: null });
+		expect((spentTx.inputs as { spent: unknown }[])[0].spent).toBeNull();
+		expect((spentTx.outputs as { unspent: boolean }[])[0].unspent).toBe(false); // the payment spent it
+	});
+
+	it('should list block summaries newest first, page by height, and describe a block', async () => {
+		const tip = chain.getLatestBlock().index;
+
+		const latest = (await get('/blocks?limit=3')).body as unknown as { height: number; hash: string; producer: string; transactions: number; size: number }[];
+		expect(latest.map((b) => b.height)).toEqual([tip, tip - 1, tip - 2]);
+		expect(latest[0]).toMatchObject({ hash: chain.getLatestBlock().hash, producer: miner.address, transactions: 1, proofOfStake: false });
+		expect(latest[0].size).toBe(chain.getLatestBlock().size());
+		expect(((await get('/blocks?before=2&limit=5')).body as unknown as { height: number }[]).map((b) => b.height)).toEqual([1, 0]);
+		expect(((await get('/blocks')).body as unknown as unknown[]).length).toBe(Math.min(20, tip + 1));
+		for (const query of ['limit=0', 'limit=101', 'limit=x', 'before=-1']) expect((await get(`/blocks?${query}`)).status).toBe(400);
+
+		const block = (await get('/blocks/3')).body;
+		expect(block).toMatchObject({ producer: miner.address, nextHash: chain.getChain()[4].hash, size: chain.getChain()[3].size() });
+		expect((block.transactions as { txid: string }[])[0].txid).toBe(chain.getChain()[3].transactions[0].calculateHash());
+		expect((await get(`/blocks/${tip}`)).body.nextHash).toBeNull();
+	});
+
+	it('should serve the block explorer with a strict content security policy', async () => {
+		expect((await fetch(`http://127.0.0.1:${api.port()}/`)).status).toBe(404); // no explorerDir
+		const explorer = new ApiServer(
+			chain,
+			{ getPeerInfo: () => [] },
+			{ host: '127.0.0.1', port: 0, network: 'x', explorerDir: path.resolve('src/api/explorer') },
+		);
+		await explorer.listen();
+		try {
+			const url = (route: string) => `http://127.0.0.1:${explorer.port()}${route}`;
+			const page = await fetch(url('/'));
+			expect(page.status).toBe(200);
+			expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+			expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+			expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+			expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+			expect(await page.text()).toContain('/explorer/app.js');
+			expect((await fetch(url('/explorer/app.js'))).headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+			expect((await fetch(url('/explorer/style.css'))).headers.get('content-type')).toBe('text/css; charset=utf-8');
+			for (const route of ['/explorer/index.html', '/explorer/missing.js', '/explorer/../package.json', '/explorer/%2e%2e%2fpackage.json']) {
+				expect((await fetch(url(route))).status).toBe(404);
+			}
+		} finally {
+			await explorer.close();
+		}
 	});
 
 	it('should report balances and outputs, separating immature coinbases', async () => {
