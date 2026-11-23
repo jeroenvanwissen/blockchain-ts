@@ -1,6 +1,7 @@
 // Peer limits and misbehavior (TASK-0020) over real WebSockets, in-process. Difficulty
 // validation is off so blocks build instantly.
 import { once } from 'events';
+import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import WebSocket from 'ws';
@@ -11,6 +12,7 @@ import {
 	MAX_FUTURE_BLOCK_TIME,
 	MAX_INBOUND_PEERS,
 	MAX_OUTBOUND_PEERS,
+	MAX_PENDING_GET_BLOCKS,
 	MAX_RECONNECT_ATTEMPTS,
 	NETWORK_MAGIC,
 	POW_BLOCK_REWARD,
@@ -57,6 +59,7 @@ describe('Peer limits and misbehavior', () => {
 	let chain: Blockchain;
 	let node: P2PServer;
 	let port: number;
+	let banListPath: string;
 	const clients: WebSocket[] = [];
 
 	beforeEach(async () => {
@@ -65,7 +68,8 @@ describe('Peer limits and misbehavior', () => {
 		dir = makeTempDir();
 		chain = openChain(dir, OPTIONS);
 		port = await freePort();
-		node = new P2PServer(chain, port, path.join(dir, 'peers.json'));
+		banListPath = path.join(dir, 'banned.json');
+		node = new P2PServer(chain, port, path.join(dir, 'peers.json'), { banListPath });
 		await node.listen();
 	});
 
@@ -113,6 +117,9 @@ describe('Peer limits and misbehavior', () => {
 		await once(bad, 'close');
 
 		expect(node.isBanned('127.0.0.1:40001')).toBe(true);
+		// The ban survives a restart: a new node reads it from the ban list
+		const restarted = new P2PServer(chain, await freePort(), path.join(dir, 'peers2.json'), { banListPath });
+		expect(restarted.isBanned('127.0.0.1:40001')).toBe(true);
 		// The same peer is refused at the handshake; another local node is not affected
 		const again = new WebSocket(`ws://127.0.0.1:${port}`);
 		clients.push(again);
@@ -126,6 +133,31 @@ describe('Peer limits and misbehavior', () => {
 		);
 		await once(again, 'close');
 		await expect(rawPeer(40_002)).resolves.toBeDefined();
+	});
+
+	it('should drop expired bans when loading the ban list', () => {
+		fs.writeFileSync(banListPath, JSON.stringify({ '10.0.0.1': Date.now() - 1, '10.0.0.2': Date.now() + 60_000 }));
+
+		const loaded = new P2PServer(chain, port + 1, path.join(dir, 'peers2.json'), { banListPath });
+
+		expect(loaded.isBanned('10.0.0.1')).toBe(false);
+		expect(loaded.isBanned('10.0.0.2')).toBe(true);
+	});
+
+	it(`should serve block requests one at a time and count more than ${MAX_PENDING_GET_BLOCKS} waiting as flooding`, async () => {
+		const peer = await rawPeer(40_004);
+		let replies = 0;
+		peer.on('message', (raw: Buffer) => {
+			if ((JSON.parse(raw.toString()) as { type: MessageType }).type === MessageType.BLOCKS) replies++;
+		});
+		const request = JSON.stringify({ type: MessageType.GET_BLOCKS, data: { locator: [chain.getChain()[0].hash] } });
+
+		for (let i = 0; i < 10; i++) peer.send(request);
+		await waitUntil(() => replies === MAX_PENDING_GET_BLOCKS);
+		await new Promise((resolve) => setTimeout(resolve, 300)); // no more replies come
+
+		expect(replies).toBe(MAX_PENDING_GET_BLOCKS);
+		expect(scoreOf(40_004)).toBe((10 - MAX_PENDING_GET_BLOCKS) * 10);
 	});
 
 	it('should not count rejections an honest peer can cause', async () => {

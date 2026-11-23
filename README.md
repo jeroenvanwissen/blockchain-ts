@@ -177,6 +177,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | `wallet.dat`            | Wallet keys and address (protobuf, 0600; the private key encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
+| `banned.json`           | Banned peers and when their bans expire    |
 
 ---
 
@@ -321,7 +322,7 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender |
 | `PEERS`       | Broadcast | Known peer addresses (discovery) |
 
-A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up from known peers every minute. Lost peers are redialed with doubling delays capped at 60 s. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback).
+A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up from known peers every minute. Lost peers are redialed with doubling delays capped at 60 s. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
 
 ---
 

@@ -8,10 +8,13 @@ import fs from 'fs';
 import {
 	BAN_DURATION,
 	BAN_SCORE,
+	BLOCK_JSON_CACHE_SIZE,
+	GET_BLOCKS_INTERVAL,
 	HANDSHAKE_TIMEOUT,
 	MAX_INBOUND_PEERS,
 	MAX_KNOWN_PEERS,
 	MAX_OUTBOUND_PEERS,
+	MAX_PENDING_GET_BLOCKS,
 	MAX_RECONNECT_ATTEMPTS,
 	MAX_LOCATOR_HASHES,
 	MAX_MESSAGE_BYTES,
@@ -65,6 +68,8 @@ interface PeerState {
 	remoteAddress?: string; // inbound connections: the peer's IP
 	handshakeTimer: NodeJS.Timeout | null;
 	score: number; // misbehavior points; BAN_SCORE gets the peer banned
+	pendingGetBlocks: number; // block requests queued for this peer
+	nextBlocksAt: number; // earliest time (ms) the next block batch may be sent
 }
 
 /** Block rejections an honest peer can cause (races, our clock): no misbehavior points. */
@@ -129,6 +134,8 @@ export class P2PServer {
 	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
 	private readonly _banned = new Map<string, number>(); // ban key → expiry (ms)
 	private readonly _dialing = new Set<WebSocket>(); // outbound sockets not open yet
+	private readonly _blockJson = new Map<string, string>(); // block hash → serialized block, oldest first
+	private readonly _banListPath: string | undefined;
 
 	private readonly _networkMagic: string;
 
@@ -136,9 +143,11 @@ export class P2PServer {
 		private blockchain: Blockchain,
 		private p2pPort: number,
 		private peerDataPath: string,
-		options: { networkMagic?: string } = {},
+		options: { networkMagic?: string; banListPath?: string } = {},
 	) {
 		this._networkMagic = options.networkMagic ?? NETWORK_MAGIC;
+		this._banListPath = options.banListPath;
+		this._loadBans();
 		this.sockets = [];
 		this.connectedPeers = new Set();
 		this._knownPeers = new Set();
@@ -303,6 +312,7 @@ export class P2PServer {
 		if (state.score < BAN_SCORE) return;
 		const key = this._banKey(socket, state);
 		this._banned.set(key, Date.now() + BAN_DURATION);
+		this._saveBans();
 		log.warn(`Banning peer ${key} for ${BAN_DURATION / 3_600_000} h`);
 		const url = (socket as unknown as { url?: string }).url;
 		if (url && this._knownPeers.delete(this.normalizePeerUrl(url))) this._persistPeers();
@@ -344,6 +354,8 @@ export class P2PServer {
 				}
 			}, HANDSHAKE_TIMEOUT),
 			score: 0,
+			pendingGetBlocks: 0,
+			nextBlocksAt: 0,
 		};
 		state.handshakeTimer?.unref?.(); // don't keep the process alive for it
 		this._peerState.set(socket, state);
@@ -556,6 +568,11 @@ export class P2PServer {
 		});
 	}
 
+	/**
+	 * Queue a block request. Honest peers wait for each batch before asking for the next, so a
+	 * peer's requests are served one at a time, GET_BLOCKS_INTERVAL apart, and a peer with more
+	 * than MAX_PENDING_GET_BLOCKS waiting is flooding.
+	 */
 	private _handleGetBlocks(socket: WebSocket, data: unknown): void {
 		const locator = (data as { locator?: unknown } | null)?.locator;
 		if (
@@ -566,18 +583,77 @@ export class P2PServer {
 			this._misbehaving(socket, 10, 'malformed GET_BLOCKS');
 			return;
 		}
-		// Up to SYNC_BATCH_SIZE blocks, and at most half the message limit in total
-		const candidates = this.blockchain.getBlocksAfter(locator as string[], SYNC_BATCH_SIZE + 1);
-		const blocks: Block[] = [];
+		const state = this._peerState.get(socket);
+		if (!state) return;
+		if (state.pendingGetBlocks >= MAX_PENDING_GET_BLOCKS) {
+			this._misbehaving(socket, 10, 'too many block requests');
+			return;
+		}
+		state.pendingGetBlocks++;
+		const now = Date.now();
+		const sendAt = Math.max(now, state.nextBlocksAt);
+		state.nextBlocksAt = sendAt + GET_BLOCKS_INTERVAL;
+		const timer = setTimeout(() => {
+			state.pendingGetBlocks--;
+			if (this._isReady(socket)) this._sendBlocks(socket, locator as string[]);
+		}, sendAt - now);
+		timer.unref?.();
+	}
+
+	/** Up to SYNC_BATCH_SIZE blocks after the locator, and at most half the message limit. */
+	private _sendBlocks(socket: WebSocket, locator: string[]): void {
+		const candidates = this.blockchain.getBlocksAfter(locator, SYNC_BATCH_SIZE + 1);
+		const parts: string[] = [];
 		let bytes = 0;
 		for (const block of candidates.slice(0, SYNC_BATCH_SIZE)) {
-			const size = JSON.stringify(block).length;
-			if (blocks.length > 0 && bytes + size > MAX_MESSAGE_BYTES / 2) break;
-			blocks.push(block);
-			bytes += size;
+			const json = this._serializedBlock(block);
+			if (parts.length > 0 && bytes + json.length > MAX_MESSAGE_BYTES / 2) break;
+			parts.push(json);
+			bytes += json.length;
 		}
-		const more = candidates.length > blocks.length;
-		this._send(socket, { type: MessageType.BLOCKS, data: { blocks, more } });
+		const more = candidates.length > parts.length;
+		// Same JSON as _send({ type: BLOCKS, data: { blocks, more } }), from cached block strings
+		const message = `{"type":${JSON.stringify(MessageType.BLOCKS)},"data":{"blocks":[${parts.join(',')}],"more":${more}}}`;
+		if (socket.readyState === WebSocket.OPEN) socket.send(message);
+	}
+
+	/** A block's JSON, cached: blocks never change, and sync sends the same ones repeatedly. */
+	private _serializedBlock(block: Block): string {
+		let json = this._blockJson.get(block.hash);
+		if (json === undefined) {
+			json = JSON.stringify(block);
+			this._blockJson.set(block.hash, json);
+			if (this._blockJson.size > BLOCK_JSON_CACHE_SIZE) {
+				this._blockJson.delete(this._blockJson.keys().next().value as string);
+			}
+		}
+		return json;
+	}
+
+	/** Bans from the ban list file that haven't expired (no file: none). */
+	private _loadBans(): void {
+		if (!this._banListPath || !fs.existsSync(this._banListPath)) return;
+		try {
+			const stored = JSON.parse(fs.readFileSync(this._banListPath, 'utf8')) as unknown;
+			if (typeof stored !== 'object' || stored === null) return;
+			const now = Date.now();
+			for (const [key, expiry] of Object.entries(stored)) {
+				if (typeof expiry === 'number' && expiry > now) this._banned.set(key, expiry);
+			}
+		} catch (error) {
+			log.warn('ignoring unreadable ban list:', (error as Error).message);
+		}
+	}
+
+	private _saveBans(): void {
+		if (!this._banListPath) return;
+		const now = Date.now();
+		const current = Object.fromEntries([...this._banned].filter(([, expiry]) => expiry > now));
+		try {
+			fs.writeFileSync(this._banListPath, JSON.stringify(current, null, 2));
+		} catch (error) {
+			log.error('Error writing ban list:', error);
+		}
 	}
 
 	private async _handleBlocks(socket: WebSocket, data: unknown): Promise<void> {

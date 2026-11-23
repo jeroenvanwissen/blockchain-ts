@@ -11,6 +11,7 @@ import {
 	API_COOKIE_PATH,
 	API_HOST,
 	API_PORT,
+	BAN_LIST_PATH,
 	DATA_DIR,
 	NETWORK_MAGIC,
 	P2P_PORT,
@@ -71,7 +72,7 @@ log.info(
 
 // Create P2P server
 const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
-const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic });
+const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic, banListPath: BAN_LIST_PATH });
 if (isRegtest) log.info('Regtest network');
 
 // HTTP API (loopback by default). Chain routes are public; /wallet routes need the token that

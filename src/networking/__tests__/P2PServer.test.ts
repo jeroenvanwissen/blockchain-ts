@@ -588,7 +588,7 @@ describe('P2PServer', () => {
 			expect(request?.data).toEqual({ locator: [blockchain.getChain()[0].hash] });
 		});
 
-		it('should answer GET_BLOCKS and ignore malformed requests', () => {
+		it('should answer GET_BLOCKS and ignore malformed requests', async () => {
 			connectReady(mockSocket);
 			mockSocket.send.mockClear();
 			for (const locator of ['nope', ['zz'], new Array(65).fill('ab'.repeat(32))]) {
@@ -600,6 +600,7 @@ describe('P2PServer', () => {
 				'message',
 				JSON.stringify({ type: MessageType.GET_BLOCKS, data: { locator: [blockchain.getChain()[0].hash] } }),
 			);
+			await new Promise((resolve) => setTimeout(resolve, 0)); // requests are served from a queue
 			expect(mockSocket.sent()).toEqual([{ type: MessageType.BLOCKS, data: { blocks: [], more: false } }]);
 		});
 

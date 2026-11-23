@@ -68,14 +68,13 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0027](TASK-0027-wallet-loopback.md) | Keep wallet routes on loopback | done | P2 | small | TASK-0017 | F-023 |
 | [TASK-0028](TASK-0028-signature-cache.md) | Mempool revalidation without re-verifying signatures | done | P3 | small | TASK-0019 | F-024 |
 | TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
-| TASK-0030 | Throttle block requests; persist bans | pending | P3 | small | TASK-0020 | F-026, F-027 |
+| [TASK-0030](TASK-0030-request-limits.md) | Throttle block requests; persist bans | done | P3 | small | TASK-0020 | F-026, F-027 |
 | TASK-0031 | Transaction index | pending | P3 | small | TASK-0016 | F-028 |
 | TASK-0032 | Change the wallet passphrase | pending | P3 | small | TASK-0024 | F-029 |
 
 Scope notes (expand into task files when picked up):
 
 - **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.
-- **TASK-0030:** per-peer budget for `GET_BLOCKS` (and cached block JSON); store bans in the data dir with their expiry.
 - **TASK-0031:** txid → block index maintained on connect and disconnect.
 - **TASK-0032:** `POST /wallet/passphrase { old, new }` and `cli change-passphrase`.
 
