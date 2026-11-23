@@ -4,6 +4,7 @@ import { Blockchain, type BlockchainOptions } from '../Blockchain.js';
 import { Wallet } from '../Wallet.js';
 import { Transaction } from '../Transaction.js';
 import {
+	COIN,
 	POW_CUTOFF_BLOCK,
 	POW_BLOCK_REWARD,
 	COIN_MATURITY,
@@ -16,6 +17,11 @@ import {
 	MAX_STAKE_AGE_MULTIPLIER,
 } from '../../config.js';
 import * as fs from 'fs';
+
+const coins = (n: number): bigint => BigInt(n) * COIN;
+// Well-formed but meaningless witness data, for structure tests that never reach signature checks
+const FAKE_PUBLIC_KEY = '02' + '11'.repeat(32);
+const FAKE_SIGNATURE = 'aa'.repeat(64);
 
 const testOptions: BlockchainOptions = {
 	minStakeAge: 0,
@@ -33,6 +39,7 @@ jest.mock('fs');
 jest.mock('protobufjs', () => {
 	const mockType = {
 		create: (obj: unknown) => obj,
+		fromObject: (obj: unknown) => obj,
 		encode: (obj: unknown) => ({
 			finish: () => Buffer.from(JSON.stringify(obj)),
 		}),
@@ -127,7 +134,7 @@ describe('Blockchain', () => {
 		it(`should transition to PoS after block ${Number(POW_CUTOFF_BLOCK)}`, async () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
-			await blockchain.stake(minerAddr, 100, minerWallet);
+			await blockchain.stake(minerAddr, coins(100), minerWallet);
 			const lastBlock = blockchain.getLatestBlock();
 			const nextBlockTime = Number(lastBlock.timestamp) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(nextBlockTime)));
@@ -141,7 +148,7 @@ describe('Blockchain', () => {
 		it('should handle transition after 100 blocks', async () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
-			await blockchain.stake(minerAddr, 100, minerWallet);
+			await blockchain.stake(minerAddr, coins(100), minerWallet);
 			const lastBlock = blockchain.getLatestBlock();
 			const nextBlockTime = Number(lastBlock.timestamp) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(nextBlockTime)));
@@ -164,7 +171,7 @@ describe('Blockchain', () => {
 				await blockchain.minePendingTransactions(minerWallet.getAddress());
 			}
 			// Transfer coins to stakeholder
-			const transferAmount = 200;
+			const transferAmount = coins(200);
 			const transaction = blockchain.createTransaction(
 				minerWallet.getAddress(),
 				stakeholderWallet.getAddress(),
@@ -182,7 +189,7 @@ describe('Blockchain', () => {
 			// Stake for stakeholderWallet before PoS mining
 			const time3 = Number(time2) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(time3)));
-			await blockchain.stake(stakeholderWallet.getAddress(), 100, stakeholderWallet);
+			await blockchain.stake(stakeholderWallet.getAddress(), coins(100), stakeholderWallet);
 			const time4 = Number(time3) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(time4)));
 			await blockchain.minePendingTransactions(stakeholderWallet.getAddress(), stakeholderWallet);
@@ -205,7 +212,7 @@ describe('Blockchain', () => {
 			// Stake the minimum amount
 			const time7 = Number(time6) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(time7)));
-			const stakeAmount = 100;
+			const stakeAmount = coins(100);
 			await blockchain.stake(stakeholderWallet.getAddress(), stakeAmount, stakeholderWallet);
 			// Mine stake transaction and confirmation block
 			const time8 = Number(time7) + 11 * 60 * 1000;
@@ -250,7 +257,7 @@ describe('Blockchain', () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
 			const balance = blockchain.getTotalBalance(minerAddr);
-			const stakeAmount = Math.floor(Number(balance) / 2);
+			const stakeAmount = balance / 2n;
 			await blockchain.stake(minerAddr, stakeAmount, minerWallet);
 			let lastTimestamp = Number(blockchain.getLatestBlock().timestamp);
 			for (let i = 0; i < 10; i++) {
@@ -299,7 +306,7 @@ describe('Blockchain', () => {
 			const tx1 = blockchain.createTransaction(
 				senderAddr,
 				receiverWallet.getAddress(),
-				5,
+				coins(5),
 				senderWallet
 			);
 			await blockchain.addTransaction(tx1);
@@ -311,7 +318,7 @@ describe('Blockchain', () => {
 				blockchain.createTransaction(
 					senderAddr,
 					receiverWallet2.getAddress(),
-					5,
+					coins(5),
 					senderWallet
 				);
 			}).toThrow('Insufficient funds');
@@ -325,12 +332,13 @@ describe('Blockchain', () => {
 			const inputs = [{
 				previousTx: utxos[0].txHash,
 				outputIndex: utxos[0].outputIndex,
+				publicKey: '',
 				signature: '',
 			}];
 
 			const tx1 = new Transaction(
 				inputs,
-				[{ address: receiverWallet.getAddress(), amount: 5 }]
+				[{ address: receiverWallet.getAddress(), amount: coins(5) }]
 			);
 			senderWallet.signTransaction(tx1);
 
@@ -338,9 +346,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: receiverWallet2.getAddress(), amount: 5 }]
+				[{ address: receiverWallet2.getAddress(), amount: coins(5) }]
 			);
 			senderWallet.signTransaction(tx2);
 
@@ -359,18 +368,20 @@ describe('Blockchain', () => {
 				{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				},
 				{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				},
 			];
 
 			const tx = new Transaction(
 				duplicateInputs,
-				[{ address: receiverWallet.getAddress(), amount: 5 }]
+				[{ address: receiverWallet.getAddress(), amount: coins(5) }]
 			);
 			senderWallet.signTransaction(tx);
 
@@ -386,7 +397,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				senderAddr,
 				receiverWallet.getAddress(),
-				5,
+				coins(5),
 				senderWallet
 			);
 			await blockchain.addTransaction(tx);
@@ -417,7 +428,7 @@ describe('Blockchain', () => {
 			const tx1 = blockchain.createTransaction(
 				senderAddr,
 				receiverWallet.getAddress(),
-				5,
+				coins(5),
 				senderWallet
 			);
 			await blockchain.addTransaction(tx1);
@@ -429,7 +440,7 @@ describe('Blockchain', () => {
 			const tx2 = blockchain.createTransaction(
 				senderAddr,
 				receiverWallet2.getAddress(),
-				5,
+				coins(5),
 				senderWallet
 			);
 			await expect(blockchain.addTransaction(tx2)).resolves.not.toThrow();
@@ -449,7 +460,7 @@ describe('Blockchain', () => {
 				[],
 				[
 					{ address: minerAddr, amount: POW_BLOCK_REWARD },
-					{ address: minerAddr, amount: 0 },
+					{ address: minerAddr, amount: 0n },
 				]
 			);
 			const block = new Block(
@@ -477,10 +488,7 @@ describe('Blockchain', () => {
 			const blockTime = Number(lastBlock.timestamp) + blockchain.BLOCK_TIME * 1000 + 1;
 
 			// Create a coinbase with double the reward
-			const badCoinbase = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD * 2 }]
-			);
+			const badCoinbase = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD * 2n, blockchain.getChain().length);
 			const block = new Block(
 				blockTime,
 				[badCoinbase],
@@ -505,14 +513,8 @@ describe('Blockchain', () => {
 			const lastBlock = blockchain.getLatestBlock();
 			const blockTime = Number(lastBlock.timestamp) + blockchain.BLOCK_TIME * 1000 + 1;
 
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }]
-			);
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }]
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block = new Block(
 				blockTime,
 				[coinbase1, coinbase2],
@@ -537,10 +539,7 @@ describe('Blockchain', () => {
 			const lastBlock = blockchain.getLatestBlock();
 			const blockTime = Number(lastBlock.timestamp) + blockchain.BLOCK_TIME * 1000 + 1;
 
-			const zeroCoinbase = new Transaction(
-				[],
-				[{ address: minerAddr, amount: 0 }]
-			);
+			const zeroCoinbase = Transaction.coinbase(minerAddr, 0n, blockchain.getChain().length);
 			const block = new Block(
 				blockTime,
 				[zeroCoinbase],
@@ -603,7 +602,7 @@ describe('Blockchain', () => {
 			const receiverWallet = new Wallet();
 			// Manually create a transaction spending the immature coinbase
 			const tx = new Transaction(
-				[{ previousTx: coinbaseTxHash, outputIndex: 0, signature: '' }],
+				[{ previousTx: coinbaseTxHash, outputIndex: 0, publicKey: '', signature: '' }],
 				[{ address: receiverWallet.getAddress(), amount: POW_BLOCK_REWARD }]
 			);
 			minerWallet.signTransaction(tx);
@@ -643,7 +642,7 @@ describe('Blockchain', () => {
 			// Try to add a second block concurrently with wrong previousHash
 			const badBlock = new Block(
 				blockTime + 1,
-				[new Transaction([], [{ address: minerAddr, amount: POW_BLOCK_REWARD }])],
+				[Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, blockchain.getChain().length)],
 				'wrong-hash',
 				0,
 				1,
@@ -663,7 +662,7 @@ describe('Blockchain', () => {
 			const tx1 = blockchain.createTransaction(
 				minerAddr,
 				new Wallet().getAddress(),
-				5,
+				coins(5),
 				minerWallet
 			);
 
@@ -708,9 +707,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: receiverWallet.getAddress(), amount: 5 }]
+				[{ address: receiverWallet.getAddress(), amount: coins(5) }]
 			);
 			// Do not sign — signature is empty
 
@@ -723,9 +723,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: 'deadbeef'.repeat(8),
 					outputIndex: 0,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: receiverWallet.getAddress(), amount: 5 }]
+				[{ address: receiverWallet.getAddress(), amount: coins(5) }]
 			);
 			senderWallet.signTransaction(tx);
 
@@ -741,9 +742,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: receiverWallet.getAddress(), amount: POW_BLOCK_REWARD + 100 }]
+				[{ address: receiverWallet.getAddress(), amount: POW_BLOCK_REWARD + coins(100) }]
 			);
 			senderWallet.signTransaction(tx);
 
@@ -758,12 +760,15 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
-					signature: '',
+					publicKey: FAKE_PUBLIC_KEY,
+					signature: FAKE_SIGNATURE,
 				}],
-				[{ address: receiverWallet.getAddress(), amount: -5 }]
+				[{ address: receiverWallet.getAddress(), amount: -coins(5) }]
 			);
-			senderWallet.signTransaction(tx);
 
+			// A negative amount has no canonical encoding, so it can't be signed...
+			expect(() => senderWallet.signTransaction(tx)).toThrow('output amount out of range');
+			// ...and structural validation rejects it before any signature check
 			await expect(blockchain.addTransaction(tx))
 				.rejects.toThrow('output has negative amount');
 		});
@@ -775,9 +780,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: receiverWallet.getAddress(), amount: 0 }]
+				[{ address: receiverWallet.getAddress(), amount: coins(0) }]
 			);
 			senderWallet.signTransaction(tx);
 
@@ -792,9 +798,10 @@ describe('Blockchain', () => {
 				[{
 					previousTx: utxos[0].txHash,
 					outputIndex: utxos[0].outputIndex,
+					publicKey: '',
 					signature: '',
 				}],
-				[{ address: 'invalid-address', amount: 5 }]
+				[{ address: 'invalid-address', amount: coins(5) }]
 			);
 			senderWallet.signTransaction(tx);
 
@@ -807,7 +814,7 @@ describe('Blockchain', () => {
 				blockchain.createTransaction(
 					'bad-address',
 					receiverWallet.getAddress(),
-					5,
+					coins(5),
 					senderWallet
 				);
 			}).toThrow('invalid sender address');
@@ -818,14 +825,14 @@ describe('Blockchain', () => {
 				blockchain.createTransaction(
 					senderWallet.getAddress(),
 					'bad-address',
-					5,
+					coins(5),
 					senderWallet
 				);
 			}).toThrow('invalid recipient address');
 		});
 
 		it('should reject stake with invalid address', async () => {
-			await expect(blockchain.stake('bad-address', 100))
+			await expect(blockchain.stake('bad-address', coins(100)))
 				.rejects.toThrow('invalid staking address');
 		});
 
@@ -833,7 +840,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				senderWallet.getAddress(),
 				receiverWallet.getAddress(),
-				5,
+				coins(5),
 				senderWallet
 			);
 			await expect(blockchain.addTransaction(tx)).resolves.not.toThrow();
@@ -844,7 +851,7 @@ describe('Blockchain', () => {
 		it('should select validator deterministically for same inputs', async () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
-			await blockchain.stake(minerAddr, 100, minerWallet);
+			await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 			const latestBlock = blockchain.getLatestBlock();
 			const timestamp = latestBlock.timestamp + 11 * 60 * 1000;
@@ -884,7 +891,7 @@ describe('Blockchain', () => {
 		it('should guarantee selection for sole staker after TARGET_BLOCK_TIME', async () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
-			await blockchain.stake(minerAddr, 100, minerWallet);
+			await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 			const latestBlock = blockchain.getLatestBlock();
 			// 11 minutes > TARGET_BLOCK_TIME (375s), so sole staker always wins
@@ -903,7 +910,7 @@ describe('Blockchain', () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
 			// Stake a small fraction to make selection probabilistic
-			await blockchain.stake(minerAddr, 100, minerWallet);
+			await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 			const latestBlock = blockchain.getLatestBlock();
 			// Vary the slot but keep timeSinceLastBlock at 1 s, so each check wins with
@@ -931,11 +938,11 @@ describe('Blockchain', () => {
 
 			// Transfer to both wallets
 			const tx1 = blockchain.createTransaction(
-				minerAddr, wallet1.getAddress(), 500, minerWallet,
+				minerAddr, wallet1.getAddress(), coins(500), minerWallet,
 			);
 			await blockchain.addTransaction(tx1);
 			const tx2 = blockchain.createTransaction(
-				minerAddr, wallet2.getAddress(), 100, minerWallet,
+				minerAddr, wallet2.getAddress(), coins(100), minerWallet,
 			);
 			await blockchain.addTransaction(tx2);
 
@@ -946,8 +953,8 @@ describe('Blockchain', () => {
 			await blockchain.minePendingTransactions(minerAddr);
 
 			// Stake different amounts
-			await blockchain.stake(wallet1.getAddress(), 400, wallet1);
-			await blockchain.stake(wallet2.getAddress(), 100, wallet2);
+			await blockchain.stake(wallet1.getAddress(), coins(400), wallet1);
+			await blockchain.stake(wallet2.getAddress(), coins(100), wallet2);
 
 			const latestBlock = blockchain.getLatestBlock();
 
@@ -989,18 +996,18 @@ describe('Blockchain', () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
 
-			expect(blockchain.totalNetworkStake()).toBe(0);
+			expect(blockchain.totalNetworkStake()).toBe(0n);
 
-			await blockchain.stake(minerAddr, 200, minerWallet);
-			expect(blockchain.totalNetworkStake()).toBe(200);
+			await blockchain.stake(minerAddr, coins(200), minerWallet);
+			expect(blockchain.totalNetworkStake()).toBe(coins(200));
 
 			// Unstake partially — stake remains active during delay period
-			await blockchain.unstake(minerAddr, 100);
-			expect(blockchain.totalNetworkStake()).toBe(200);
+			await blockchain.unstake(minerAddr, coins(100));
+			expect(blockchain.totalNetworkStake()).toBe(coins(200));
 
 			// After UNSTAKE_DELAY blocks, the unstake is processed
 			await minePowBlocks(UNSTAKE_DELAY, minerAddr);
-			expect(blockchain.totalNetworkStake()).toBe(100);
+			expect(blockchain.totalNetworkStake()).toBe(coins(100));
 		});
 	});
 
@@ -1212,10 +1219,7 @@ describe('Blockchain', () => {
 			const genesisBlock = blockchain.getChain()[0];
 			const highDiffBlock1Timestamp =
 				genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				highDiffBlock1Timestamp,
 				[coinbase1],
@@ -1232,10 +1236,7 @@ describe('Blockchain', () => {
 
 			const highDiffBlock2Timestamp =
 				highDiffBlock1Timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				highDiffBlock2Timestamp,
 				[coinbase2],
@@ -1278,10 +1279,7 @@ describe('Blockchain', () => {
 			const genesis = blockchain.getChain()[0];
 			const singleBlockTimestamp =
 				genesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block = new Block(
 				singleBlockTimestamp,
 				[coinbase],
@@ -1309,7 +1307,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				minerAddr,
 				receiverWallet.getAddress(),
-				5,
+				coins(5),
 				minerWallet,
 			);
 			await blockchain.addTransaction(tx);
@@ -1335,10 +1333,7 @@ describe('Blockchain', () => {
 			const altBlocks: Block[] = [];
 			for (let i = 0; i < 2; i++) {
 				const timestamp = prevBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-				const coinbase = new Transaction(
-					[],
-					[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-				);
+				const coinbase = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, forkPoint + i);
 				const altBlock = new Block(
 					timestamp,
 					[coinbase],
@@ -1388,10 +1383,7 @@ describe('Blockchain', () => {
 			// Build a heavier chain with a tampered hash
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1406,10 +1398,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1436,10 +1425,7 @@ describe('Blockchain', () => {
 
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1454,10 +1440,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1482,7 +1465,7 @@ describe('Blockchain', () => {
 			// Create a fake genesis block with different parameters
 			const fakeGenesis = new Block(
 				999999,
-				[new Transaction([], [{ address: 'fake', amount: 0 }])],
+				[Transaction.coinbase('fake', 0n, 0)],
 				'0',
 				0,
 				4,
@@ -1490,10 +1473,7 @@ describe('Blockchain', () => {
 			);
 
 			const timestamp1 = fakeGenesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1508,10 +1488,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1538,12 +1515,17 @@ describe('Blockchain', () => {
 
 			// Create a block with too many transactions
 			const txs: Transaction[] = [
-				new Transaction([], [{ address: minerAddr, amount: POW_BLOCK_REWARD }]),
+				Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, blockchain.getChain().length),
 			];
 			for (let i = 0; i < MAX_BLOCK_TRANSACTIONS; i++) {
 				txs.push(new Transaction(
-					[{ previousTx: 'fake', outputIndex: 0, signature: 'fake' }],
-					[{ address: minerAddr, amount: 1 }],
+					[{
+						previousTx: 'ab'.repeat(32),
+						outputIndex: i,
+						publicKey: FAKE_PUBLIC_KEY,
+						signature: FAKE_SIGNATURE,
+					}],
+					[{ address: minerAddr, amount: 1n }],
 				));
 			}
 
@@ -1568,13 +1550,16 @@ describe('Blockchain', () => {
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
 
 			// Create a block with too many transactions
-			const txs: Transaction[] = [
-				new Transaction([], [{ address: minerAddr, amount: POW_BLOCK_REWARD }]),
-			];
+			const txs: Transaction[] = [Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1)];
 			for (let i = 0; i < MAX_BLOCK_TRANSACTIONS; i++) {
 				txs.push(new Transaction(
-					[{ previousTx: 'fake', outputIndex: 0, signature: 'fake' }],
-					[{ address: minerAddr, amount: 1 }],
+					[{
+						previousTx: 'ab'.repeat(32),
+						outputIndex: i,
+						publicKey: FAKE_PUBLIC_KEY,
+						signature: FAKE_SIGNATURE,
+					}],
+					[{ address: minerAddr, amount: 1n }],
 				));
 			}
 
@@ -1598,10 +1583,7 @@ describe('Blockchain', () => {
 
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1616,10 +1598,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1644,10 +1623,7 @@ describe('Blockchain', () => {
 			// Build a valid heavier chain
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1662,10 +1638,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = new Transaction(
-				[],
-				[{ address: minerAddr, amount: POW_BLOCK_REWARD }],
-			);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1695,7 +1668,7 @@ describe('Blockchain', () => {
 			it('should return base amount when timestamps are corrupted (negative elapsed)', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 100, minerWallet);
+				await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 				// Corrupt the stake timestamp to be after lastBlockTime
 				const stake = blockchain['_stakes'].get(minerAddr)!;
@@ -1704,7 +1677,7 @@ describe('Blockchain', () => {
 
 				// Should return base amount (100), not a negative or zero weight
 				const weight = blockchain.calculateStakeWeight(minerAddr);
-				expect(weight).toBe(100);
+				expect(weight).toBe(coins(100));
 			});
 		});
 
@@ -1712,7 +1685,7 @@ describe('Blockchain', () => {
 			it('should cap multiplier at MAX_STAKE_AGE_MULTIPLIER', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 100, minerWallet);
+				await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 				// Set stake to be very old (1000 days)
 				const stake = blockchain['_stakes'].get(minerAddr)!;
@@ -1723,13 +1696,13 @@ describe('Blockchain', () => {
 				const weight = blockchain.calculateStakeWeight(minerAddr);
 				// With 1000 days, unbounded 1.1^1000 would be astronomical
 				// But capped at MAX_STAKE_AGE_MULTIPLIER (4x)
-				expect(weight).toBe(Math.floor(100 * MAX_STAKE_AGE_MULTIPLIER));
+				expect(weight).toBe(coins(100 * MAX_STAKE_AGE_MULTIPLIER));
 			});
 
 			it('should not cap multiplier when below maximum', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 100, minerWallet);
+				await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 				// Set stake to be 1 day old (multiplier = 1.1, below cap of 4)
 				const stake = blockchain['_stakes'].get(minerAddr)!;
@@ -1738,7 +1711,7 @@ describe('Blockchain', () => {
 				blockchain['_stakes'].set(minerAddr, stake);
 
 				const weight = blockchain.calculateStakeWeight(minerAddr);
-				expect(weight).toBe(Math.floor(100 * 1.1));
+				expect(weight).toBe(coins(110));
 			});
 		});
 
@@ -1746,30 +1719,30 @@ describe('Blockchain', () => {
 			it('should not remove stake immediately on unstake', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 100, minerWallet);
+				await blockchain.stake(minerAddr, coins(100), minerWallet);
 
-				await blockchain.unstake(minerAddr, 100);
+				await blockchain.unstake(minerAddr, coins(100));
 
 				// Stake should still be active
-				expect(blockchain.getStake(minerAddr)).toBe(100);
+				expect(blockchain.getStake(minerAddr)).toBe(coins(100));
 				// But there should be a pending unstake
 				const pending = blockchain.getPendingUnstakes(minerAddr);
 				expect(pending.length).toBe(1);
-				expect(pending[0].amount).toBe(100);
+				expect(pending[0].amount).toBe(coins(100));
 			});
 
 			it('should process unstake after UNSTAKE_DELAY blocks', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
-				await blockchain.unstake(minerAddr, 100);
+				await blockchain.unstake(minerAddr, coins(100));
 
 				// Mine UNSTAKE_DELAY blocks to mature the unstake
 				await minePowBlocks(UNSTAKE_DELAY, minerAddr);
 
 				// Stake should now be reduced
-				expect(blockchain.getStake(minerAddr)).toBe(100);
+				expect(blockchain.getStake(minerAddr)).toBe(coins(100));
 				// Pending unstake should be cleared
 				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(0);
 			});
@@ -1777,28 +1750,28 @@ describe('Blockchain', () => {
 			it('should keep stake active during delay period', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
-				await blockchain.unstake(minerAddr, 100);
+				await blockchain.unstake(minerAddr, coins(100));
 
 				// Mine only half the delay
 				await minePowBlocks(Math.floor(UNSTAKE_DELAY / 2), minerAddr);
 
 				// Stake should still be full
-				expect(blockchain.getStake(minerAddr)).toBe(200);
+				expect(blockchain.getStake(minerAddr)).toBe(coins(200));
 				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(1);
 			});
 
 			it('should reject unstake exceeding available amount (accounting for pending)', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
 				// First unstake of 150
-				await blockchain.unstake(minerAddr, 150);
+				await blockchain.unstake(minerAddr, coins(150));
 
 				// Second unstake of 100 should fail (only 50 available)
-				await expect(blockchain.unstake(minerAddr, 100))
+				await expect(blockchain.unstake(minerAddr, coins(100)))
 					.rejects.toThrow('Insufficient stake amount');
 			});
 		});
@@ -1807,7 +1780,7 @@ describe('Blockchain', () => {
 			it('should slash stake on double-sign evidence', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
 				// Generate a PoS block to record the signature
 				const lastBlock = blockchain.getLatestBlock();
@@ -1819,7 +1792,7 @@ describe('Blockchain', () => {
 				expect(posBlock.isProofOfStake()).toBe(true);
 
 				// Verify stake exists
-				expect(blockchain.getStake(minerAddr)).toBeGreaterThan(0);
+				expect(blockchain.getStake(minerAddr)).toBeGreaterThan(0n);
 
 				// Submit double-sign evidence (known hash + a different hash)
 				await blockchain.submitDoubleSignEvidence(
@@ -1830,13 +1803,13 @@ describe('Blockchain', () => {
 				);
 
 				// Stake should be slashed (removed entirely)
-				expect(blockchain.getStake(minerAddr)).toBe(0);
+				expect(blockchain.getStake(minerAddr)).toBe(0n);
 			});
 
 			it('should reject evidence with same block hashes', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
 				const lastBlock = blockchain.getLatestBlock();
 				const nextBlockTime = lastBlock.timestamp + 11 * 60 * 1000;
@@ -1869,10 +1842,10 @@ describe('Blockchain', () => {
 			it('should also remove pending unstakes on slashing', async () => {
 				const minerAddr = minerWallet.getAddress();
 				await minePowBlocks(Number(POW_CUTOFF_BLOCK), minerAddr);
-				await blockchain.stake(minerAddr, 200, minerWallet);
+				await blockchain.stake(minerAddr, coins(200), minerWallet);
 
 				// Queue an unstake
-				await blockchain.unstake(minerAddr, 100);
+				await blockchain.unstake(minerAddr, coins(100));
 				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(1);
 
 				// Generate PoS block
@@ -1892,7 +1865,7 @@ describe('Blockchain', () => {
 				);
 
 				// Both stake and pending unstake should be gone
-				expect(blockchain.getStake(minerAddr)).toBe(0);
+				expect(blockchain.getStake(minerAddr)).toBe(0n);
 				expect(blockchain.getPendingUnstakes(minerAddr).length).toBe(0);
 			});
 		});
@@ -1910,7 +1883,7 @@ describe('Blockchain', () => {
 				const tx = blockchain.createTransaction(
 					minerAddr,
 					minerAddr,
-					100,
+					coins(100),
 					minerWallet,
 				);
 				await blockchain.addTransaction(tx);
@@ -1930,7 +1903,7 @@ describe('Blockchain', () => {
 				await minePowBlocks(stakeSetupBlocks, minerAddr);
 
 				// Use stake() which now creates coinstake-format transactions
-				await blockchain.stake(minerAddr, 100, minerWallet);
+				await blockchain.stake(minerAddr, coins(100), minerWallet);
 
 				// Mine the staking transaction
 				const lastBlock = blockchain.getLatestBlock();
@@ -1939,7 +1912,7 @@ describe('Blockchain', () => {
 				await blockchain.minePendingTransactions(minerAddr);
 
 				// The stake should be registered
-				expect(blockchain.getStake(minerAddr)).toBe(100);
+				expect(blockchain.getStake(minerAddr)).toBe(coins(100));
 			});
 		});
 	});

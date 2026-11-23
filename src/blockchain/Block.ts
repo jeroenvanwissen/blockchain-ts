@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import { Transaction } from './Transaction.js';
+import { MAX_BLOCK_NONCE } from '../config.js';
 
 export class Block {
 	public hash: string;
@@ -28,15 +29,10 @@ export class Block {
 	 * and still hash exactly what validation hashes.
 	 */
 	powPrefix(): string {
-		const txData = this.transactions.map((tx) => ({
-			inputs: tx.inputs,
-			outputs: tx.outputs,
-			timestamp: tx.timestamp,
-			nonce: tx.nonce,
-		}));
+		// Commit to each full transaction (including signatures) via its witness hash
 		const data = JSON.stringify({
 			timestamp: this.timestamp,
-			transactions: txData,
+			transactions: this.transactions.map((tx) => tx.witnessHash()),
 			previousHash: this.previousHash,
 			nonce: 0,
 		});
@@ -49,6 +45,24 @@ export class Block {
 
 	calculateHash(): string {
 		return Block.hashWithNonce(this.powPrefix(), this.nonce);
+	}
+
+	/**
+	 * Find a nonce in-process that meets this block's difficulty (tests and in-process
+	 * mining; the node's Miner uses a worker thread). Computes the prefix once.
+	 */
+	solve(): void {
+		const prefix = this.powPrefix();
+		const target = '0'.repeat(this.powDifficulty);
+		for (let nonce = 0; nonce <= MAX_BLOCK_NONCE; nonce++) {
+			const hash = Block.hashWithNonce(prefix, nonce);
+			if (hash.startsWith(target)) {
+				this.nonce = nonce;
+				this.hash = hash;
+				return;
+			}
+		}
+		throw new Error('nonce space exhausted');
 	}
 
 	hasValidTransactions(): boolean {

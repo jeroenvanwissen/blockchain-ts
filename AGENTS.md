@@ -10,6 +10,7 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/index.ts`: node entry point (`--data-dir`, `--peers`, `--mine`); `src/smoke.ts`: runtime smoke check
 - `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)
 - `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
+- `src/blockchain/address.ts`: Base58Check addresses (`addressFromPublicKey`, `isValidAddress`)
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
 - `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
 
@@ -31,16 +32,20 @@ Run npm scripts from the repository root.
 - CommonJS packages behave differently under ts-jest (compiled to CommonJS) and the real runtime (native ESM): a namespace import can work in tests and crash the node. Verify new CommonJS imports with `npm run smoke`.
 - Don't use `import.meta` in modules that tests import; ts-jest rejects it (TS1343). Entry points such as `src/smoke.ts` may use it.
 - Put constants in `src/config.ts`. Use environment variables only for runtime settings (ports, peers, data dir).
+- Amounts are `bigint` base units (`COIN` = 10^8 per coin); never use `number` for money. On the JSON wire amounts are decimal strings: send with `JSON.stringify` (`Transaction.toJSON`), parse with `Transaction.fromJSON`, which validates strictly.
+- Build coinbases with `Transaction.coinbase(address, amount, height)`; its null input carries the block height.
+- The txid (`calculateHash`) excludes public keys and signatures; blocks commit to `witnessHash`. Inputs carry a compressed public key and a compact low-S signature over `sighash(i)`.
 - `Blockchain` mutations go through its `async-mutex` lock. Public async methods acquire it; `_`-prefixed internals assume it is held. Never call a public locking method while holding the lock.
 - Formatting follows the editor Prettier settings in `.vscode/settings.json`: tabs, single quotes, trailing commas. Don't reformat code you aren't changing.
 - Tests: use `jest.useFakeTimers()` with `jest.setSystemTime()`. `jest.spyOn(Date, 'now')` doesn't work under fake timers.
+- `jest.setup.cjs` preloads `secp256k1`: under `jest.mock('fs')` it can't find its native addon and falls back to a pure-JS implementation that made the suite ~40x slower. Keep it.
 
 ## Architecture and constraints
 
 - Consensus code must be deterministic from chain data. No wall-clock reads except the future-timestamp limit, and no node-local state that peers can't rebuild from blocks.
 - Every block, whether new, synced or loaded from disk, must pass the same validation path (TASK-0006).
 - The target PoS model is Peercoin-style UTXO kernel staking (TASK-0009 to TASK-0011). Don't extend the current stake-registry code (`_stakes`, `stake()`, `unstake()`, slashing). It is scheduled for removal.
-- Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists.
+- Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists; tell users to delete old data dirs (README troubleshooting).
 
 ## Work tracking
 

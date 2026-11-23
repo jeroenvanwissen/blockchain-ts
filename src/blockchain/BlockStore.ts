@@ -192,44 +192,44 @@ export class BlockStore {
 
 	private _serializeBlock(block: Block): Buffer {
 		const SerializedBlock = getBlockProto();
-		const obj = {
-			timestamp: block.timestamp,
+		// 64-bit fields go in as decimal strings; fromObject converts them without precision loss
+		const message = SerializedBlock.fromObject({
+			timestamp: String(block.timestamp),
 			transactions: block.transactions.map((tx) => ({
+				version: tx.version,
 				inputs: tx.inputs.map((input) => ({
 					previousTx: input.previousTx,
 					outputIndex: input.outputIndex,
+					publicKey: input.publicKey,
 					signature: input.signature,
 				})),
 				outputs: tx.outputs.map((output) => ({
 					address: output.address,
-					amount: output.amount,
+					amount: output.amount.toString(),
 				})),
-				timestamp: tx.timestamp,
-				nonce: tx.nonce,
+				timestamp: String(tx.timestamp),
 			})),
 			previousHash: block.previousHash,
 			nonce: block.nonce,
 			powDifficulty: block.powDifficulty,
 			index: block.index,
 			hash: block.hash,
-		};
-		const message = SerializedBlock.create(obj);
-		const errMsg = SerializedBlock.verify(message);
-		if (errMsg) throw new Error(`invalid block data: ${errMsg}`);
+		});
 		return Buffer.from(SerializedBlock.encode(message).finish());
 	}
 
 	private _deserializeBlock(buffer: Buffer): Block {
 		const SerializedBlock = getBlockProto();
 		const decoded = SerializedBlock.decode(buffer as Uint8Array);
-		// arrays: true — proto3 omits empty repeated fields (e.g. coinbase inputs) on decode
-		const data = SerializedBlock.toObject(decoded, { longs: Number, arrays: true }) as {
-			timestamp: number;
+		// arrays: true — proto3 omits empty repeated fields on decode
+		// longs: String — amounts are uint64 and must not pass through a JS number
+		const data = SerializedBlock.toObject(decoded, { longs: String, arrays: true }) as {
+			timestamp: string;
 			transactions: {
-				inputs: { previousTx: string; outputIndex: number; signature: string }[];
-				outputs: { address: string; amount: number }[];
-				timestamp: number;
-				nonce?: number;
+				version: number;
+				inputs: { previousTx: string; outputIndex: number; publicKey: string; signature: string }[];
+				outputs: { address: string; amount: string }[];
+				timestamp: string;
 			}[];
 			previousHash: string;
 			nonce: number;
@@ -238,17 +238,26 @@ export class BlockStore {
 			hash: string;
 		};
 
-		const transactions = data.transactions.map((txData) => {
-			return new Transaction(
-				txData.inputs,
-				txData.outputs,
-				txData.timestamp,
-				txData.nonce,
-			);
-		});
+		const transactions = data.transactions.map(
+			(txData) =>
+				new Transaction(
+					txData.inputs.map((input) => ({
+						previousTx: input.previousTx,
+						outputIndex: input.outputIndex,
+						publicKey: input.publicKey ?? '',
+						signature: input.signature ?? '',
+					})),
+					txData.outputs.map((output) => ({
+						address: output.address,
+						amount: BigInt(output.amount),
+					})),
+					Number(txData.timestamp),
+					txData.version,
+				),
+		);
 
 		const block = new Block(
-			data.timestamp,
+			Number(data.timestamp),
 			transactions,
 			data.previousHash,
 			data.nonce,

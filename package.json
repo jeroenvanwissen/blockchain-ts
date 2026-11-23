@@ -24,7 +24,6 @@
 	},
 	"homepage": "https://github.com/jeroenvanwissen/blockchain-js#readme",
 	"devDependencies": {
-		"@types/crypto-js": "^4.2.2",
 		"@types/jest": "^30.0.0",
 		"@types/node": "^24.2.1",
 		"@types/secp256k1": "^4.0.6",
@@ -41,7 +40,6 @@
 		"@fastone/eslint-config": "^1.0.12",
 		"@types/ws": "^8.18.1",
 		"async-mutex": "^0.5.0",
-		"crypto-js": "^4.2.0",
 		"protobufjs": "^8.0.0",
 		"secp256k1": "^5.0.2",
 		"winston": "^3.17.0",

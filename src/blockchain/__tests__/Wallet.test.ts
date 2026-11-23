@@ -12,6 +12,7 @@ jest.mock('fs');
 jest.mock('protobufjs', () => {
 	const mockType = {
 		create: (obj: unknown) => obj,
+		fromObject: (obj: unknown) => obj,
 		encode: (obj: unknown) => ({
 			finish: () => Buffer.from(JSON.stringify(obj)),
 		}),

@@ -49,9 +49,6 @@ export async function mineBlocks(chain: Blockchain, address: string, count: numb
 
 /** Find a nonce that satisfies the block's own PoW check. */
 export function solve(block: Block): Block {
-	while (!block.isValid()) {
-		block.nonce++;
-		block.hash = block.calculateHash();
-	}
+	block.solve();
 	return block;
 }

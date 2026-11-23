@@ -56,10 +56,12 @@ export const SEED_NODES: string[] = process.env.SEED_NODES
 // Consensus configuration
 export const POW_CUTOFF_BLOCK = 100;
 
-// Coin configuration
+// Coin configuration (amounts are bigint base units)
+export const COIN = 100_000_000n; // Base units per coin
 export const COIN_MATURITY = 10; // Coins must be at least 10 blocks old
-export const POS_BLOCK_REWARD = 10; // Reward for Proof-of-Stake blocks
-export const POW_BLOCK_REWARD = 10; // Reward for mined blocks
+export const POS_BLOCK_REWARD = 10n * COIN; // Reward for Proof-of-Stake blocks
+export const POW_BLOCK_REWARD = 10n * COIN; // Reward for mined blocks
+export const MIN_STAKE_AMOUNT = 100n * COIN; // Minimum stake for PoS
 
 // Transaction limits
 export const MAX_TRANSACTION_INPUTS = 256;

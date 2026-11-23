@@ -2,9 +2,12 @@ import { Block } from './Block.js';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
 import { Wallet } from './Wallet.js';
 import { BlockStore } from './BlockStore.js';
+import { addressFromPublicKey, isValidAddress } from './address.js';
 import * as crypto from 'crypto';
 import {
 	BLOCKS_DIR,
+	COIN,
+	MIN_STAKE_AMOUNT,
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
 	POW_BLOCK_REWARD,
@@ -21,14 +24,14 @@ import {
 } from '../config.js';
 
 export interface StakeInfo {
-	amount: number;
+	amount: bigint;
 	timestamp: number;
 	lastBlockTime: number;
 }
 
 export interface PendingUnstake {
 	address: string;
-	amount: number;
+	amount: bigint;
 	requestHeight: number;
 }
 
@@ -60,6 +63,8 @@ export class Blockchain {
 
 	private chain: Block[];
 	private utxoSet: Map<string, UTXO[]> = new Map();
+	// txid -> confirmed transaction; rebuilt together with utxoSet
+	private _txIndex: Map<string, { tx: Transaction; blockIndex: number }> = new Map();
 	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
 	private _stakes: Map<string, StakeInfo> = new Map();
@@ -68,7 +73,7 @@ export class Blockchain {
 	private lastBlockTime: number = Date.now();
 	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
-	private readonly MIN_STAKE_AMOUNT = 100;
+	private readonly MIN_STAKE_AMOUNT = MIN_STAKE_AMOUNT;
 	private readonly SLOT_DURATION = 60 * 1000;
 	private readonly _options: Required<BlockchainOptions>;
 
@@ -99,7 +104,7 @@ export class Blockchain {
 	static blockWeight(block: Block): number {
 		if (block.isProofOfStake()) {
 			// PoS: use validator's stake amount from coinstake transaction
-			return block.transactions[1].outputs[1].amount;
+			return Number(block.transactions[1].outputs[1].amount / COIN);
 		}
 		// PoW: 2^difficulty (exponential, matching Bitcoin)
 		return Math.pow(2, block.powDifficulty);
@@ -125,9 +130,10 @@ export class Blockchain {
 		for (const tx of block.transactions) {
 			const txHash = tx.calculateHash();
 			const isCoinbaseTx = tx.isCoinbase();
+			this._txIndex.set(txHash, { tx, blockIndex: block.index });
 
-			// Remove spent outputs
-			for (const input of tx.inputs) {
+			// Remove spent outputs (a coinbase input spends nothing)
+			for (const input of isCoinbaseTx ? [] : tx.inputs) {
 				const spenderAddress = this.findTransaction(input.previousTx)?.outputs[
 					input.outputIndex
 				].address;
@@ -161,13 +167,7 @@ export class Blockchain {
 	}
 
 	private findTransactionBlock(txHash: string): { tx: Transaction; blockIndex: number } | undefined {
-		for (const block of this.chain) {
-			const tx = block.transactions.find(
-				(t: Transaction) => t.calculateHash() === txHash
-			);
-			if (tx) return { tx, blockIndex: block.index };
-		}
-		return undefined;
+		return this._txIndex.get(txHash);
 	}
 
 	private findTransaction(txHash: string): Transaction | undefined {
@@ -202,20 +202,22 @@ export class Blockchain {
 		if (coinbaseTx.outputs[0].amount !== expectedReward) {
 			throw new Error('invalid coinbase reward amount');
 		}
+		if (coinbaseTx.inputs[0].outputIndex !== block.index) {
+			throw new Error('coinbase height does not match block index');
+		}
 	}
 
 	private _addMinedBlockInternal(block: Block): void {
-		// Validate block structure and chain continuity
-		if (!block.hasValidTransactions()) {
-			throw new Error('Block contains invalid transactions');
-		}
-
-		// Validate coinbase transaction structure and reward
-		this.validateBlockCoinbase(block);
-
-		// Block size limit
+		// Block size limit first: cheap, and bounds the signature checks below
 		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 			throw new Error('block exceeds maximum transaction count');
+		}
+
+		// Coinbase structure and reward (cheap) before per-transaction signature checks
+		this.validateBlockCoinbase(block);
+
+		if (!block.hasValidTransactions()) {
+			throw new Error('Block contains invalid transactions');
 		}
 
 		const lastBlock = this.getLatestBlock();
@@ -297,16 +299,16 @@ export class Blockchain {
 
 		// Update stakes map for any staking transactions in this block
 		for (const tx of block.transactions) {
-			if (tx.inputs.length === 0) continue; // skip coinbase
+			if (tx.isCoinbase()) continue;
 			if (tx.outputs.length === 0) continue;
 
 			let stakeAddress: string | null = null;
-			let stakeAmount: number | null = null;
+			let stakeAmount: bigint | null = null;
 
 			// Coinstake detection: marker output (amount 0) followed by stake amount
 			if (
 				tx.outputs.length >= 2 &&
-				tx.outputs[0].amount === 0 &&
+				tx.outputs[0].amount === 0n &&
 				tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
 			) {
 				stakeAddress = tx.outputs[1].address;
@@ -340,7 +342,7 @@ export class Blockchain {
 				const stake = this._stakes.get(unstake.address);
 				if (stake) {
 					const remaining = stake.amount - unstake.amount;
-					if (remaining <= 0) {
+					if (remaining <= 0n) {
 						this._stakes.delete(unstake.address);
 					} else {
 						this._stakes.set(unstake.address, {
@@ -381,7 +383,7 @@ export class Blockchain {
 		}
 
 		// Sum input amounts and validate inputs reference existing UTXOs
-		let inputSum = 0;
+		let inputSum = 0n;
 		for (const input of stakeInputs) {
 			const prevTx = this.findTransaction(input.previousTx);
 			if (!prevTx) {
@@ -447,12 +449,7 @@ export class Blockchain {
 
 	private createGenesisBlock(): Block {
 		const timestamp = 1609459200000; // Jan 1, 2021, 00:00:00 UTC
-		const genesisTransaction = new Transaction(
-			[],
-			[{ address: 'genesis', amount: 0 }],
-			timestamp,
-			0, // deterministic nonce for reproducible genesis hash
-		);
+		const genesisTransaction = Transaction.coinbase('genesis', 0n, 0, timestamp);
 		return new Block(timestamp, [genesisTransaction], '0', 0, 4, 0);
 	}
 
@@ -460,19 +457,19 @@ export class Blockchain {
 		return this.chain[this.chain.length - 1];
 	}
 
-	public totalNetworkStake(stakes?: Map<string, StakeInfo>): number {
+	public totalNetworkStake(stakes?: Map<string, StakeInfo>): bigint {
 		const stakeMap = stakes ?? this._stakes;
-		let total = 0;
+		let total = 0n;
 		for (const [address] of stakeMap) {
 			total += this.calculateStakeWeight(address, stakeMap);
 		}
 		return total;
 	}
 
-	calculateStakeWeight(address: string, stakes?: Map<string, StakeInfo>): number {
+	calculateStakeWeight(address: string, stakes?: Map<string, StakeInfo>): bigint {
 		const stakeMap = stakes ?? this._stakes;
 		const stake = stakeMap.get(address);
-		if (!stake) return 0;
+		if (!stake) return 0n;
 
 		// Guard against negative elapsed time from corrupted timestamps
 		const elapsedMs = Math.max(0, stake.lastBlockTime - stake.timestamp);
@@ -485,18 +482,19 @@ export class Blockchain {
 		if (elapsedDays > 0) {
 			const rawMultiplier = Math.pow(1.1, elapsedDays);
 			const cappedMultiplier = Math.min(rawMultiplier, MAX_STAKE_AGE_MULTIPLIER);
-			weight = Math.floor(weight * cappedMultiplier);
+			// Fixed-point multiply (6 decimals) to stay in bigint base units
+			weight = (weight * BigInt(Math.floor(cappedMultiplier * 1_000_000))) / 1_000_000n;
 		}
 
 		return weight;
 	}
 
-	getTotalBalance(address: string): number {
-		let balance = 0;
+	getTotalBalance(address: string): bigint {
+		let balance = 0n;
 		for (const block of this.chain) {
 			for (const trans of block.transactions) {
-				// Check if we spent coins (inputs)
-				for (const input of trans.inputs) {
+				// Check if we spent coins (inputs); a coinbase input spends nothing
+				for (const input of trans.isCoinbase() ? [] : trans.inputs) {
 					const prevTx = this.findTransaction(input.previousTx);
 					if (prevTx && prevTx.outputs[input.outputIndex].address === address) {
 						balance -= prevTx.outputs[input.outputIndex].amount;
@@ -513,14 +511,14 @@ export class Blockchain {
 		return balance;
 	}
 
-	public getBalance(address: string): number {
+	public getBalance(address: string): bigint {
 		return (this.utxoSet.get(address) || []).reduce(
 			(sum, utxo) => sum + utxo.output.amount,
-			0
+			0n,
 		);
 	}
 
-	async stake(address: string, amount: number, wallet?: Wallet): Promise<void> {
+	async stake(address: string, amount: bigint, wallet?: Wallet): Promise<void> {
 		const release = await this._lock.acquire();
 		try {
 			if (!this.validateAddress(address)) {
@@ -539,7 +537,7 @@ export class Blockchain {
 			if (wallet) {
 				// Create a staking transaction in coinstake format (zero marker + amount)
 				const utxos = this.getUTXOs(address);
-				let inputSum = 0;
+				let inputSum = 0n;
 				const inputs: TxInput[] = [];
 
 				for (const utxo of utxos) {
@@ -551,13 +549,14 @@ export class Blockchain {
 					inputs.push({
 						previousTx: utxo.txHash,
 						outputIndex: utxo.outputIndex,
-						signature: '',
+						publicKey: '',
+					signature: '',
 					});
 					if (inputSum >= amount) break;
 				}
 
 				const outputs: TxOutput[] = [
-					{ address: address, amount: 0 },      // Coinstake marker
+					{ address: address, amount: 0n }, // Coinstake marker
 					{ address: address, amount: amount },  // Staked amount
 				];
 
@@ -588,7 +587,7 @@ export class Blockchain {
 		}
 	}
 
-	async unstake(address: string, amount: number): Promise<void> {
+	async unstake(address: string, amount: bigint): Promise<void> {
 		const release = await this._lock.acquire();
 		try {
 			const currentStake = this._stakes.get(address);
@@ -599,7 +598,7 @@ export class Blockchain {
 			// Account for already-pending unstake amounts
 			const pendingAmount = this._pendingUnstakes
 				.filter(u => u.address === address)
-				.reduce((sum, u) => sum + u.amount, 0);
+				.reduce((sum, u) => sum + u.amount, 0n);
 			if (currentStake.amount - pendingAmount < amount) {
 				throw new Error('Insufficient stake amount');
 			}
@@ -615,8 +614,8 @@ export class Blockchain {
 		}
 	}
 
-	getStake(address: string): number {
-		return this._stakes.get(address)?.amount || 0;
+	getStake(address: string): bigint {
+		return this._stakes.get(address)?.amount ?? 0n;
 	}
 
 	getStakeInfo(address: string): StakeInfo | undefined {
@@ -665,7 +664,7 @@ export class Blockchain {
 	createTransaction(
 		from: string,
 		to: string,
-		amount: number,
+		amount: bigint,
 		wallet: Wallet
 	): Transaction {
 		if (!this.validateAddress(from)) {
@@ -676,7 +675,7 @@ export class Blockchain {
 		}
 
 		const utxos = this.getUTXOs(from);
-		let inputSum = 0;
+		let inputSum = 0n;
 		const inputs: TxInput[] = [];
 
 		for (const utxo of utxos) {
@@ -692,7 +691,8 @@ export class Blockchain {
 			inputs.push({
 				previousTx: utxo.txHash,
 				outputIndex: utxo.outputIndex,
-				signature: '',
+				publicKey: '',
+					signature: '',
 			});
 
 			if (inputSum >= amount) break;
@@ -705,7 +705,7 @@ export class Blockchain {
 		const outputs: TxOutput[] = [{ address: to, amount }];
 
 		const change = inputSum - amount;
-		if (change > 0) {
+		if (change > 0n) {
 			outputs.push({ address: from, amount: change });
 		}
 
@@ -716,36 +716,7 @@ export class Blockchain {
 	}
 
 	validateAddress(address: string): boolean {
-		try {
-			const decoded = this.base58Decode(address);
-			if (decoded.length !== 25) return false;
-			if (decoded[0] !== 0x00) return false;
-
-			const payload = decoded.slice(0, -4);
-			const checksum = decoded.slice(-4);
-
-			const hash = crypto
-				.createHash('sha256')
-				.update(crypto.createHash('sha256').update(payload).digest())
-				.digest();
-
-			return Buffer.compare(checksum, hash.slice(0, 4)) === 0;
-		} catch {
-			return false;
-		}
-	}
-
-	private base58Decode(str: string): Buffer {
-		const ALPHABET =
-			'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-		let num = BigInt(0);
-		const base = BigInt(58);
-
-		for (const char of str) {
-			num = num * base + BigInt(ALPHABET.indexOf(char));
-		}
-
-		return Buffer.from(num.toString(16).padStart(50, '0'), 'hex');
+		return isValidAddress(address);
 	}
 
 	public generateStakeBlock(stakeholderAddress: string, wallet: Wallet): Block | null {
@@ -757,7 +728,7 @@ export class Blockchain {
 
 		// Gather inputs from UTXOs to cover the stake amount
 		const utxos = this.getUTXOs(stakeholderAddress);
-		let accumulated = 0;
+		let accumulated = 0n;
 		const inputs: TxInput[] = [];
 		for (const utxo of utxos) {
 			// Skip immature coinbase UTXOs
@@ -768,7 +739,8 @@ export class Blockchain {
 			inputs.push({
 				previousTx: utxo.txHash,
 				outputIndex: utxo.outputIndex,
-				signature: '',
+				publicKey: '',
+					signature: '',
 			});
 			if (accumulated >= stake.amount) break;
 		}
@@ -777,12 +749,12 @@ export class Blockchain {
 		}
 
 		const outputs: TxOutput[] = [
-			{ address: stakeholderAddress, amount: 0 }, // marker output
+			{ address: stakeholderAddress, amount: 0n }, // marker output
 			{ address: stakeholderAddress, amount: stake.amount },
 		];
 		// Add change if needed
 		const change = accumulated - stake.amount;
-		if (change > 0) {
+		if (change > 0n) {
 			outputs.push({ address: stakeholderAddress, amount: change });
 		}
 
@@ -790,15 +762,7 @@ export class Blockchain {
 		wallet.signTransaction(stakeTransaction);
 
 		const transactions = [
-			new Transaction(
-				[],
-				[
-					{
-						address: stakeholderAddress,
-						amount: POS_BLOCK_REWARD,
-					},
-				]
-			),
+			Transaction.coinbase(stakeholderAddress, POS_BLOCK_REWARD, this.chain.length),
 			stakeTransaction,
 			...this.pendingTransactions,
 		];
@@ -826,7 +790,7 @@ export class Blockchain {
 	): boolean {
 		const stakeWeight = this.calculateStakeWeight(address, stakes);
 		const totalStake = this.totalNetworkStake(stakes);
-		if (totalStake === 0 || stakeWeight === 0) return false;
+		if (totalStake === 0n || stakeWeight === 0n) return false;
 
 		// Deterministic slot derived from timestamp
 		const slotNumber = Math.floor(timestamp / this.SLOT_DURATION);
@@ -849,8 +813,8 @@ export class Blockchain {
 		// Higher stake weight → higher target → more likely to win
 		// More time since last block → higher target → block guaranteed eventually
 		const target =
-			(Blockchain.MAX_HASH * BigInt(stakeWeight) * BigInt(timeSinceLastBlock)) /
-			(BigInt(totalStake) * BigInt(this.BLOCK_TIME));
+			(Blockchain.MAX_HASH * stakeWeight * BigInt(timeSinceLastBlock)) /
+			(totalStake * BigInt(this.BLOCK_TIME));
 
 		return hashValue < target;
 	}
@@ -894,7 +858,7 @@ export class Blockchain {
 
 	/** Unsolved PoW block on the current tip: coinbase to `rewardAddress` plus pending transactions. */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
-		const coinbase = new Transaction([], [{ address: rewardAddress, amount: POW_BLOCK_REWARD }]);
+		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD, this.chain.length, timestamp);
 		return new Block(
 			timestamp,
 			[coinbase, ...this.pendingTransactions],
@@ -929,11 +893,8 @@ export class Blockchain {
 
 		// PoW phase
 		const block = this.createBlockTemplate(minerAddress, timestamp);
-
-		while (!block.isValid()) {
-			block.nonce++;
-			block.hash = block.calculateHash();
-		}
+		// A pending stake tx can make the block look like PoS (F-007); only PoW blocks need a nonce
+		if (block.isProofOfWork()) block.solve();
 
 		// Use common path for validation/persistence
 		await this.addMinedBlock(block);
@@ -943,6 +904,9 @@ export class Blockchain {
 	private _addTransactionInternal(transaction: Transaction): void {
 		if (transaction.inputs.length === 0 || transaction.outputs.length === 0) {
 			throw new Error('Transaction must have inputs and outputs');
+		}
+		if (transaction.isCoinbase()) {
+			throw new Error('coinbase transactions are only valid in blocks');
 		}
 
 		// Structural validation (signatures, duplicates, amounts, size limits)
@@ -956,7 +920,7 @@ export class Blockchain {
 		}
 
 		// Verify all inputs reference existing UTXOs and calculate input sum
-		let inputSum = 0;
+		let inputSum = 0n;
 		for (const input of transaction.inputs) {
 			const result = this.findTransactionBlock(input.previousTx);
 			if (!result) {
@@ -965,6 +929,11 @@ export class Blockchain {
 			const prevOutput = result.tx.outputs[input.outputIndex];
 			if (!prevOutput) {
 				throw new Error('input references non-existent output');
+			}
+
+			// The signing key must own the spent output
+			if (addressFromPublicKey(Buffer.from(input.publicKey, 'hex')) !== prevOutput.address) {
+				throw new Error('input public key does not own the spent output');
 			}
 
 			// Verify the UTXO is unspent
@@ -990,9 +959,7 @@ export class Blockchain {
 		}
 
 		// Verify input sum covers output sum
-		const outputSum = transaction.outputs.reduce(
-			(sum, out) => sum + out.amount, 0
-		);
+		const outputSum = transaction.outputs.reduce((sum, out) => sum + out.amount, 0n);
 		if (inputSum < outputSum) {
 			throw new Error('output amounts exceed input amounts');
 		}
@@ -1050,15 +1017,15 @@ export class Blockchain {
 			// Update validation stakes from this block's transactions
 			// (must happen before PoS check — stake can be registered in same block)
 			for (const tx of currentBlock.transactions) {
-				if (tx.inputs.length === 0) continue;
+				if (tx.isCoinbase()) continue;
 				if (tx.outputs.length === 0) continue;
 
 				let stakeAddress: string | null = null;
-				let stakeAmount: number | null = null;
+				let stakeAmount: bigint | null = null;
 
 				if (
 					tx.outputs.length >= 2 &&
-					tx.outputs[0].amount === 0 &&
+					tx.outputs[0].amount === 0n &&
 					tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
 				) {
 					stakeAddress = tx.outputs[1].address;
@@ -1112,6 +1079,7 @@ export class Blockchain {
 				Blockchain.computeChainWeights(this.chain);
 				this.blockStore.appendBlock(this.chain[0]);
 				this.utxoSet.clear();
+			this._txIndex.clear();
 				this.updateUTXOSet(this.chain[0]);
 				return;
 			}
@@ -1160,6 +1128,7 @@ export class Blockchain {
 
 			// Rebuild UTXO set
 			this.utxoSet.clear();
+			this._txIndex.clear();
 			for (const block of this.chain) {
 				this.updateUTXOSet(block);
 			}
@@ -1312,17 +1281,16 @@ export class Blockchain {
 					throw new Error('Invalid chain: block hash mismatch');
 				}
 
-				// Validate block transactions
-				if (!block.hasValidTransactions()) {
-					throw new Error('Invalid chain: invalid transactions');
-				}
-
-				// Validate coinbase
-				this.validateBlockCoinbase(block);
-
-				// Block size limit
+				// Block size limit first: cheap, and bounds the signature checks below
 				if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 					throw new Error('Invalid chain: block exceeds maximum transaction count');
+				}
+
+				// Coinbase structure and reward (cheap) before per-transaction signature checks
+				this.validateBlockCoinbase(block);
+
+				if (!block.hasValidTransactions()) {
+					throw new Error('Invalid chain: invalid transactions');
 				}
 
 				// Timestamp validations
@@ -1344,15 +1312,15 @@ export class Blockchain {
 
 				// Update validation stakes from this block's transactions
 				for (const tx of block.transactions) {
-					if (tx.inputs.length === 0) continue;
+					if (tx.isCoinbase()) continue;
 					if (tx.outputs.length === 0) continue;
 
 					let stakeAddress: string | null = null;
-					let stakeAmount: number | null = null;
+					let stakeAmount: bigint | null = null;
 
 					if (
 						tx.outputs.length >= 2 &&
-						tx.outputs[0].amount === 0 &&
+						tx.outputs[0].amount === 0n &&
 						tx.outputs[1].amount >= this.MIN_STAKE_AMOUNT
 					) {
 						stakeAddress = tx.outputs[1].address;
@@ -1413,6 +1381,7 @@ export class Blockchain {
 
 			// Reset and rebuild UTXO set
 			this.utxoSet.clear();
+			this._txIndex.clear();
 			for (const block of this.chain) {
 				this.updateUTXOSet(block);
 			}

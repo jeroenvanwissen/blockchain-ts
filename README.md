@@ -19,7 +19,7 @@
 
 **Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`) and pass them to connected peers (`npm run smoke`), but:
 
-- signatures are not verified, and block transactions are not checked against the UTXO set (TASK-0005, TASK-0006);
+- transactions inside blocks are not yet checked against the UTXO set, so a block can spend outputs that don't exist (TASK-0006);
 - stake state is node-local, so nodes disagree after restarts (TASK-0009, TASK-0011).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
@@ -69,7 +69,8 @@ git --version          # Should be 2.30+
 | **Coinbase Maturity**    | Coinbase outputs require 10 confirmations before spending         |
 | **P2P Networking**       | WebSocket-based peer communication with chain synchronization     |
 | **Fork Resolution**      | Chain weight comparison for fork selection (not longest chain)    |
-| **Digital Signatures**   | secp256k1 ECDSA for transaction signing and verification         |
+| **Digital Signatures**   | secp256k1 ECDSA per input (low-S), txid excludes signatures      |
+| **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
 | **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
 | **Staking**              | Stake-weighted validator lottery, age multiplier, coinstake txs  |
@@ -124,8 +125,10 @@ Key constants in `src/config.ts`:
 | ------------------------------- | ------- | ---------------------------------------------- |
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
 | `POW_CUTOFF_BLOCK`              | 100     | Block height where PoW ends and PoS begins     |
-| `POW_BLOCK_REWARD`              | 10      | Mining reward per block (PoW)                  |
-| `POS_BLOCK_REWARD`              | 10      | Staking reward per block (PoS)                 |
+| `COIN`                          | 10^8    | Base units per coin (amounts are `bigint`)     |
+| `POW_BLOCK_REWARD`              | 10 coins | Mining reward per block (PoW)                 |
+| `POS_BLOCK_REWARD`              | 10 coins | Staking reward per block (PoS)                |
+| `MIN_STAKE_AMOUNT`              | 100 coins | Minimum stake                                |
 | `COIN_MATURITY`                 | 10      | Blocks before coinbase outputs are spendable   |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `DIFFICULTY_ADJUSTMENT_INTERVAL`| 10      | Blocks between difficulty recalculations       |
@@ -196,23 +199,24 @@ npm run build           # Compile TypeScript
 ```typescript
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Wallet } from './blockchain/Wallet.js';
+import { COIN } from './config.js';
 
 // Create a blockchain and wallet
 const blockchain = new Blockchain();
 const wallet = new Wallet();
 
-// Create a transaction (uses UTXO model internally)
-const tx = blockchain.createTransaction(fromAddress, toAddress, amount, wallet);
+// Create a transaction (UTXO model; amounts are bigint base units)
+const tx = blockchain.createTransaction(fromAddress, toAddress, 5n * COIN, wallet);
 await blockchain.addTransaction(tx);
 
 // Mine pending transactions (PoW phase)
 await blockchain.minePendingTransactions(wallet.address, wallet);
 
-// Check balance (UTXO-based)
+// Check balance (UTXO-based, bigint base units)
 const balance = blockchain.getBalance(wallet.address);
 
 // Stake coins (PoS phase)
-await blockchain.stake(wallet.address, 50, wallet);
+await blockchain.stake(wallet.address, 100n * COIN, wallet);
 ```
 
 ---
@@ -262,6 +266,10 @@ await blockchain.stake(wallet.address, 50, wallet);
 ---
 
 ## Troubleshooting
+
+### `Invalid genesis block` on Start
+
+Block and transaction formats change while the project is pre-release, and each change creates a new genesis block. Data written by an older version won't load. Delete the data directory (or point `--data-dir` somewhere new) and start again.
 
 ### Port Already in Use
 

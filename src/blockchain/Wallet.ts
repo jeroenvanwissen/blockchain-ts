@@ -1,29 +1,43 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import CryptoJS from 'crypto-js';
 import protobuf from 'protobufjs';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
+import { addressFromPublicKey } from './address.js';
 import { WALLET_SCHEMA } from './protoSchemas.js';
 import { secp256k1 } from './secp256k1.js';
 import { DATA_DIR, MAX_WALLET_BACKUPS, WALLET_DATA_FILENAME } from '../config.js';
 
-interface WalletData {
+interface WalletTransaction {
+	hash: string;
+	timestamp: number;
+	type: 'sent' | 'received';
+	amount: bigint;
+	otherParty: string;
+}
+
+interface UTXO {
+	txHash: string;
+	outputIndex: number;
+	amount: bigint;
+}
+
+/** Decoded protobuf form: 64-bit fields arrive as decimal strings (longs: String). */
+interface StoredWalletData {
 	privateKey: Uint8Array;
 	publicKey: Uint8Array;
 	address: string;
-	transactions: {
-		hash: string;
-		timestamp: number;
-		type: 'sent' | 'received';
-		amount: number;
-		otherParty: string;
-	}[];
-	utxos: {
-		txHash: string;
-		outputIndex: number;
-		amount: number;
-	}[];
+	transactions: (Omit<WalletTransaction, 'amount' | 'timestamp'> & {
+		amount: string;
+		timestamp: string;
+	})[];
+	utxos: (Omit<UTXO, 'amount'> & { amount: string })[];
+}
+
+function decodeWalletData(buffer: Buffer): StoredWalletData {
+	const WalletDataType = getWalletProto();
+	const decoded = WalletDataType.decode(buffer as Uint8Array);
+	return WalletDataType.toObject(decoded, { longs: String, arrays: true }) as StoredWalletData;
 }
 
 let _walletProtoRoot: protobuf.Root | null = null;
@@ -34,19 +48,13 @@ function getWalletProto(): protobuf.Type {
 	return _walletProtoRoot.lookupType('WalletData');
 }
 
-interface UTXO {
-	txHash: string;
-	outputIndex: number;
-	amount: number;
-}
-
 export class Wallet {
 	private privateKey!: Buffer;
 	public publicKey!: Buffer;
 	public address!: string;
 
 	private readonly walletPath: string;
-	private transactions: WalletData['transactions'] = [];
+	private transactions: WalletTransaction[] = [];
 	private utxos: UTXO[] = [];
 
 	constructor(walletPath?: string) {
@@ -66,18 +74,8 @@ export class Wallet {
 			this.privateKey = crypto.randomBytes(32);
 		} while (!secp256k1.privateKeyVerify(this.privateKey));
 
-		// Generate public key
-		this.publicKey = Buffer.from(secp256k1.publicKeyCreate(this.privateKey));
-
-		// Rest of the method remains the same
-		const sha256Hash = Buffer.from(
-			crypto.createHash('sha256').update(this.publicKey).digest()
-		);
-		const ripemdHash = CryptoJS.RIPEMD160(
-			sha256Hash.toString('hex')
-		).toString();
-		const ripemdBuffer = Buffer.from(ripemdHash.replace('0x', ''), 'hex');
-		this.address = this.encodeAddress(ripemdBuffer);
+		this.publicKey = Buffer.from(secp256k1.publicKeyCreate(this.privateKey, true));
+		this.address = addressFromPublicKey(this.publicKey);
 
 		this.saveWallet();
 	}
@@ -97,11 +95,9 @@ export class Wallet {
 			return;
 		}
 
-		let data: WalletData;
+		let data: StoredWalletData;
 		try {
-			const WalletDataType = getWalletProto();
-			const decoded = WalletDataType.decode(fileBuffer as Uint8Array);
-			data = WalletDataType.toObject(decoded, { longs: Number, arrays: true }) as WalletData;
+			data = decodeWalletData(fileBuffer);
 		} catch (error) {
 			console.error('[Wallet] wallet file is corrupted (invalid protobuf):', error);
 			console.log('[Wallet] generating new wallet');
@@ -125,15 +121,26 @@ export class Wallet {
 				throw new Error('invalid private key');
 			}
 			const derivedPublicKey = Buffer.from(
-				secp256k1.publicKeyCreate(this.privateKey)
+				secp256k1.publicKeyCreate(this.privateKey, true)
 			);
 			if (!derivedPublicKey.equals(this.publicKey)) {
 				throw new Error('public key does not match private key');
 			}
 
-			this.address = data.address;
-			this.transactions = data.transactions || [];
-			this.utxos = data.utxos || [];
+			this.transactions = (data.transactions || []).map((tx) => ({
+				...tx,
+				timestamp: Number(tx.timestamp),
+				amount: BigInt(tx.amount),
+			}));
+			this.utxos = (data.utxos || []).map((utxo) => ({ ...utxo, amount: BigInt(utxo.amount) }));
+
+			// The address is always derived from the key; re-save wallets written with an older
+			// derivation so the file matches what the node uses
+			this.address = addressFromPublicKey(this.publicKey);
+			if (data.address !== this.address) {
+				console.log('[Wallet] address re-derived from public key');
+				this.saveWallet();
+			}
 		} catch (error) {
 			console.error('[Wallet] wallet file contains invalid key data:', error);
 			console.log('[Wallet] generating new wallet');
@@ -143,24 +150,24 @@ export class Wallet {
 
 	private saveWallet(): void {
 		const WalletDataType = getWalletProto();
-		const data = {
+		// 64-bit fields go in as decimal strings; fromObject converts them without precision loss
+		const message = WalletDataType.fromObject({
 			privateKey: this.privateKey,
 			publicKey: this.publicKey,
 			address: this.address,
 			transactions: this.transactions.map((tx) => ({
 				hash: tx.hash,
-				timestamp: tx.timestamp,
+				timestamp: String(tx.timestamp),
 				type: tx.type,
-				amount: tx.amount,
+				amount: tx.amount.toString(),
 				otherParty: tx.otherParty,
 			})),
 			utxos: this.utxos.map((utxo) => ({
 				txHash: utxo.txHash,
 				outputIndex: utxo.outputIndex,
-				amount: utxo.amount,
+				amount: utxo.amount.toString(),
 			})),
-		};
-		const message = WalletDataType.create(data);
+		});
 		const buffer = WalletDataType.encode(message).finish();
 
 		// Ensure the directory exists
@@ -214,14 +221,14 @@ export class Wallet {
 			amount:
 				type === 'sent'
 					? tx.outputs.reduce(
-							(sum: number, out: TxOutput) =>
+							(sum: bigint, out: TxOutput) =>
 								out.address !== this.address ? sum + out.amount : sum,
-							0
+							0n,
 						)
 					: tx.outputs.reduce(
-							(sum: number, out: TxOutput) =>
+							(sum: bigint, out: TxOutput) =>
 								out.address === this.address ? sum + out.amount : sum,
-							0
+							0n,
 						),
 			otherParty,
 		});
@@ -262,20 +269,22 @@ export class Wallet {
 		this.saveWallet();
 	}
 
-	getBalance(): number {
-		return this.utxos.reduce((sum, utxo) => sum + utxo.amount, 0);
+	getBalance(): bigint {
+		return this.utxos.reduce((sum, utxo) => sum + utxo.amount, 0n);
 	}
 
 	getAddress(): string {
 		return this.address;
 	}
 
-	getSpendableOutputs(amount: number): { outputs: UTXO[]; total: number } {
-		let total = 0;
+	getSpendableOutputs(amount: bigint): { outputs: UTXO[]; total: bigint } {
+		let total = 0n;
 		const outputs: UTXO[] = [];
 
 		// Sort UTXOs by amount (largest first) for efficient selection
-		const sortedUtxos = [...this.utxos].sort((a, b) => b.amount - a.amount);
+		const sortedUtxos = [...this.utxos].sort((a, b) =>
+			b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0,
+		);
 
 		for (const utxo of sortedUtxos) {
 			total += utxo.amount;
@@ -293,7 +302,7 @@ export class Wallet {
 		return { outputs, total };
 	}
 
-	getTransactionHistory(): WalletData['transactions'] {
+	getTransactionHistory(): WalletTransaction[] {
 		return [...this.transactions].sort((a, b) => b.timestamp - a.timestamp);
 	}
 
@@ -307,15 +316,9 @@ export class Wallet {
 	}
 
 	static importWallet(importPath: string, targetPath?: string): Wallet {
-		let importedData: WalletData;
+		let importedData: StoredWalletData;
 		try {
-			const fileBuffer = fs.readFileSync(importPath) as Buffer;
-			const WalletDataType = getWalletProto();
-			const decoded = WalletDataType.decode(fileBuffer as Uint8Array);
-			importedData = WalletDataType.toObject(decoded, {
-				longs: Number,
-				arrays: true,
-			}) as WalletData;
+			importedData = decodeWalletData(fs.readFileSync(importPath) as Buffer);
 		} catch {
 			throw new Error('failed to read or parse import file');
 		}
@@ -335,7 +338,7 @@ export class Wallet {
 			throw new Error('invalid wallet file: invalid private key');
 		}
 		const derivedPublicKey = Buffer.from(
-			secp256k1.publicKeyCreate(privateKeyBuf)
+			secp256k1.publicKeyCreate(privateKeyBuf, true)
 		);
 		const storedPublicKey = Buffer.from(importedData.publicKey);
 		if (!derivedPublicKey.equals(storedPublicKey)) {
@@ -346,40 +349,5 @@ export class Wallet {
 		fs.mkdirSync(path.dirname(destination), { recursive: true });
 		fs.copyFileSync(importPath, destination);
 		return new Wallet(destination);
-	}
-
-	private encodeAddress(hash: Buffer): string {
-		// Add version byte (0x00 for mainnet)
-		const versionHash = Buffer.concat([Buffer.from([0x00]), hash]);
-
-		// Add checksum (double-SHA256, first 4 bytes)
-		const first = crypto.createHash('sha256').update(versionHash).digest();
-		const second = crypto.createHash('sha256').update(first).digest();
-		const checksum = second.subarray(0, 4);
-
-		// Encode in base58
-		return this.base58Encode(Buffer.concat([versionHash, checksum]));
-	}
-
-	// Add base58 encoding (simplified version)
-	private base58Encode(buffer: Buffer): string {
-		const ALPHABET =
-			'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-		let num = BigInt('0x' + buffer.toString('hex'));
-		const base = BigInt(58);
-		let result = '';
-
-		while (num > 0) {
-			const mod = Number(num % base);
-			result = ALPHABET[mod] + result;
-			num = num / base;
-		}
-
-		// Add leading zeros
-		for (let i = 0; i < buffer.length && buffer[i] === 0; i++) {
-			result = ALPHABET[0] + result;
-		}
-
-		return result;
 	}
 }

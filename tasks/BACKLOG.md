@@ -18,7 +18,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| [TASK-0005](TASK-0005-transaction-format.md) | Canonical transaction format with verified signatures | pending | P0 | large | TASK-0003 | F-004, F-011, F-012, F-020 |
+| [TASK-0005](TASK-0005-transaction-format.md) | Canonical transaction format with verified signatures | done | P0 | large | TASK-0003 | F-004, F-011, F-012, F-020 |
 | [TASK-0006](TASK-0006-block-validation.md) | One block-validation path against a UTXO view | pending | P0 | large | TASK-0005 | F-005, F-010 |
 
 ## Milestone 3: PoW header and difficulty
@@ -67,7 +67,7 @@ Scope notes for the later tasks (expand into task files when they're picked up):
 - **TASK-0019:** replace the pending array with a mempool: conflict detection, size limit with fee-rate eviction, revalidation on a new tip or reorg. A rejected block must never wedge block production (F-007 symptom).
 - **TASK-0020:** caps on inbound and outbound connections, capped backoff, and a misbehavior score that leads to a temporary ban.
 - **TASK-0021:** fix the 41 lint errors. Make `npm run build && npm test && npm run lint` the standard check. CI is recommended; adding it is the owner's call.
-- **TASK-0022:** delete `index.js`, `lib/`, `jest.config.js`, `tsc.out` and `src/test-consensus.ts`. Move `@types/ws` and `@fastone/eslint-config` to devDependencies. Drop `winston` unless TASK-0023 adopts it. Rename the package to `blockchain-ts`.
+- **TASK-0022:** delete `index.js`, `lib/`, `jest.config.js` and `tsc.out` (`src/test-consensus.ts` and `crypto-js` already went in TASK-0005). Move `@types/ws` and `@fastone/eslint-config` to devDependencies. Drop `winston` unless TASK-0023 adopts it. Rename the package to `blockchain-ts`.
 - **TASK-0023:** replace `console.*` with a small leveled logger (debug output off by default). Never log key material.
 - **TASK-0024:** passphrase-based key encryption (scrypt + AES-256-GCM) with an unlock step for staking.
 

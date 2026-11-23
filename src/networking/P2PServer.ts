@@ -36,7 +36,7 @@ interface StakeMessage {
 	type: MessageType.STAKE;
 	data: {
 		address: string;
-		amount: number;
+		amount: string; // base units, decimal
 	};
 }
 
@@ -44,7 +44,7 @@ interface UnstakeMessage {
 	type: MessageType.UNSTAKE;
 	data: {
 		address: string;
-		amount: number;
+		amount: string; // base units, decimal
 	};
 }
 
@@ -72,40 +72,15 @@ export type Message =
 	| LatestBlockMessage
 	| PeersMessage;
 
-// DTOs for wire format
-interface SerializedTxInput {
-	previousTx: string;
-	outputIndex: number;
-	signature: string;
-}
-interface SerializedTxOutput {
-	address: string;
-	amount: number;
-}
-interface SerializedTransaction {
-	inputs: SerializedTxInput[];
-	outputs: SerializedTxOutput[];
-	timestamp: number;
-	nonce?: number;
-}
+// Wire format: blocks are JSON with transactions in Transaction.toJSON() form
 interface SerializedBlock {
 	timestamp: number;
-	transactions: SerializedTransaction[];
+	transactions: unknown[];
 	previousHash: string;
 	nonce: number;
 	powDifficulty: number;
 	index: number;
 	hash: string;
-}
-
-function isSerializedTransaction(obj: unknown): obj is SerializedTransaction {
-	return (
-		typeof obj === 'object' &&
-		obj !== null &&
-		Array.isArray((obj as SerializedTransaction).inputs) &&
-		Array.isArray((obj as SerializedTransaction).outputs) &&
-		typeof (obj as SerializedTransaction).timestamp === 'number'
-	);
 }
 
 function isSerializedBlock(obj: unknown): obj is SerializedBlock {
@@ -120,6 +95,24 @@ function isSerializedBlock(obj: unknown): obj is SerializedBlock {
 		typeof (obj as SerializedBlock).index === 'number' &&
 		typeof (obj as SerializedBlock).hash === 'string'
 	);
+}
+
+/** Rebuild a block from wire data. Throws if the block or any transaction is malformed. */
+function parseBlock(data: unknown): Block {
+	if (!isSerializedBlock(data)) throw new Error('malformed block');
+	const transactions = data.transactions.map((tx) => Transaction.fromJSON(tx));
+	return new Block(
+		data.timestamp,
+		transactions,
+		data.previousHash,
+		data.nonce,
+		data.powDifficulty,
+		data.index,
+	);
+}
+
+function parseAmount(value: unknown): bigint | null {
+	return typeof value === 'string' && /^\d{1,20}$/.test(value) ? BigInt(value) : null;
 }
 
 export function isValidPeerAddress(address: string): boolean {
@@ -386,39 +379,8 @@ export class P2PServer {
 
 	private async handleChainMessage(chain: unknown): Promise<void> {
 		try {
-			if (!Array.isArray(chain)) return;
-			// If any block is not a valid SerializedBlock, throw
-			for (const blockData of chain) {
-				if (!isSerializedBlock(blockData)) {
-					throw new Error('Invalid block data in chain');
-				}
-			}
-			const blocks: Block[] = [];
-			for (const blockData of chain) {
-				// blockData is guaranteed to be SerializedBlock here
-				const transactions: Transaction[] = [];
-				for (const txData of blockData.transactions) {
-					if (!isSerializedTransaction(txData)) continue;
-					transactions.push(
-						new Transaction(
-							txData.inputs,
-							txData.outputs,
-							txData.timestamp,
-							txData.nonce
-						)
-					);
-				}
-				blocks.push(
-					new Block(
-						blockData.timestamp,
-						transactions,
-						blockData.previousHash,
-						blockData.nonce,
-						blockData.powDifficulty,
-						blockData.index
-					)
-				);
-			}
+			if (!Array.isArray(chain) || chain.length === 0) return;
+			const blocks = chain.map((blockData) => parseBlock(blockData));
 			// Compute weight of received chain and compare to current
 			Blockchain.computeChainWeights(blocks);
 			const receivedWeight = blocks[blocks.length - 1].cumulativeWeight;
@@ -437,27 +399,7 @@ export class P2PServer {
 
 	private async handleBlockMessage(blockData: unknown): Promise<void> {
 		try {
-			if (!isSerializedBlock(blockData)) return;
-			const transactions: Transaction[] = [];
-			for (const txData of blockData.transactions) {
-				if (!isSerializedTransaction(txData)) continue;
-				transactions.push(
-					new Transaction(
-						txData.inputs,
-						txData.outputs,
-						txData.timestamp,
-						txData.nonce
-					)
-				);
-			}
-			const block = new Block(
-				blockData.timestamp,
-				transactions,
-				blockData.previousHash,
-				blockData.nonce,
-				blockData.powDifficulty,
-				blockData.index
-			);
+			const block = parseBlock(blockData);
 			// Ignore blocks we already have (e.g. our own block echoed back by a peer)
 			if (this.blockchain.getChain()[block.index]?.hash === block.hash) return;
 			// Check if we need to sync first
@@ -481,21 +423,21 @@ export class P2PServer {
 		}
 	}
 
-	private async handleTransactionMessage(txData: Transaction): Promise<void> {
+	private async handleTransactionMessage(txData: unknown): Promise<void> {
 		try {
-			const transaction = new Transaction(txData.inputs, txData.outputs);
+			// fromJSON keeps every field, so the txid matches the sender's
+			const transaction = Transaction.fromJSON(txData);
 			await this.blockchain.addTransaction(transaction);
 		} catch (error) {
 			console.error('Error handling transaction message:', error);
 		}
 	}
 
-	private async handleStakeMessage(stakeData: {
-		address: string;
-		amount: number;
-	}): Promise<void> {
+	private async handleStakeMessage(stakeData: { address: string; amount: unknown }): Promise<void> {
 		try {
-			await this.blockchain.stake(stakeData.address, stakeData.amount);
+			const amount = parseAmount(stakeData?.amount);
+			if (amount === null || typeof stakeData.address !== 'string') return;
+			await this.blockchain.stake(stakeData.address, amount);
 		} catch (error) {
 			console.error('Error handling stake message:', error);
 		}
@@ -503,10 +445,12 @@ export class P2PServer {
 
 	private async handleUnstakeMessage(unstakeData: {
 		address: string;
-		amount: number;
+		amount: unknown;
 	}): Promise<void> {
 		try {
-			await this.blockchain.unstake(unstakeData.address, unstakeData.amount);
+			const amount = parseAmount(unstakeData?.amount);
+			if (amount === null || typeof unstakeData.address !== 'string') return;
+			await this.blockchain.unstake(unstakeData.address, amount);
 		} catch (error) {
 			console.error('Error handling unstake message:', error);
 		}

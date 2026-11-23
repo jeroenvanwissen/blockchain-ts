@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
+import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
 import {
 	makeTempDir,
 	mineBlocks,
@@ -42,7 +42,7 @@ describe('Persistence (real filesystem)', () => {
 		expect(second.getChain()).toHaveLength(6);
 		expect(second.getChain().map((b) => b.hash)).toEqual(first.getChain().map((b) => b.hash));
 		expect(second.getUTXOs(miner.address)).toEqual(first.getUTXOs(miner.address));
-		expect(second.getBalance(miner.address)).toBe(5 * POW_BLOCK_REWARD);
+		expect(second.getBalance(miner.address)).toBe(5n * POW_BLOCK_REWARD);
 	});
 
 	it('should reload a spending transaction with its inputs and signatures', async () => {
@@ -51,7 +51,7 @@ describe('Persistence (real filesystem)', () => {
 		const first = openChain(dir);
 		await mineBlocks(first, miner.address, COIN_MATURITY + 1);
 
-		const tx = first.createTransaction(miner.address, recipient.address, 7, miner);
+		const tx = first.createTransaction(miner.address, recipient.address, 7n * COIN, miner);
 		await first.addTransaction(tx);
 		await mineBlocks(first, miner.address, 1);
 
@@ -61,7 +61,7 @@ describe('Persistence (real filesystem)', () => {
 			.flatMap((b) => b.transactions)
 			.find((t) => t.calculateHash() === tx.calculateHash());
 		expect(reloadedTx?.inputs).toEqual(tx.inputs);
-		expect(second.getBalance(recipient.address)).toBe(7);
+		expect(second.getBalance(recipient.address)).toBe(7n * COIN);
 		expect(second.getUTXOs(miner.address)).toEqual(first.getUTXOs(miner.address));
 	});
 

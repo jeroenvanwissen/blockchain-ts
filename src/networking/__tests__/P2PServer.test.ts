@@ -13,6 +13,7 @@ jest.mock('ws');
 jest.mock('protobufjs', () => {
 	const mockType = {
 		create: (obj: unknown) => obj,
+		fromObject: (obj: unknown) => obj,
 		encode: (obj: unknown) => ({
 			finish: () => Buffer.from(JSON.stringify(obj)),
 		}),
@@ -101,7 +102,7 @@ describe('P2PServer', () => {
 	it('should handle stake messages correctly', async () => {
 		const stakeData = {
 			address: 'testAddress',
-			amount: 100,
+			amount: '100', // base units, decimal string on the wire
 		};
 
 		// Mock blockchain methods needed for staking (now returns Promise)
@@ -109,8 +110,38 @@ describe('P2PServer', () => {
 
 		await p2pServer['handleStakeMessage'](stakeData);
 
-		expect(stakeSpy).toHaveBeenCalledWith('testAddress', 100);
+		expect(stakeSpy).toHaveBeenCalledWith('testAddress', 100n);
 		stakeSpy.mockRestore();
+	});
+
+	it('should keep every field (and the txid) of a relayed transaction', async () => {
+		const privateKey = Buffer.alloc(32, 7);
+		const tx = new Transaction(
+			[{ previousTx: 'ab'.repeat(32), outputIndex: 0, publicKey: '', signature: '' }],
+			[{ address: '1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH', amount: 123n }],
+			1_700_000_000_000,
+		);
+		tx.signTransaction(privateKey);
+		const addSpy = jest.spyOn(blockchain, 'addTransaction').mockResolvedValue(undefined);
+
+		await p2pServer['handleTransactionMessage'](JSON.parse(JSON.stringify(tx)));
+
+		const received = addSpy.mock.calls[0][0];
+		expect(received.calculateHash()).toBe(tx.calculateHash());
+		expect(received.witnessHash()).toBe(tx.witnessHash());
+		addSpy.mockRestore();
+	});
+
+	it('should drop a block that contains a malformed transaction', async () => {
+		const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], '0', 0, 1, 1);
+		const wire = JSON.parse(JSON.stringify(block)) as { transactions: Record<string, unknown>[] };
+		delete wire.transactions[0].outputs;
+		const addSpy = jest.spyOn(blockchain, 'addMinedBlock').mockResolvedValue(undefined);
+
+		await p2pServer['handleBlockMessage'](wire);
+
+		expect(addSpy).not.toHaveBeenCalled();
+		addSpy.mockRestore();
 	});
 
 	it('should handle chain replacement correctly', async () => {
@@ -155,7 +186,7 @@ describe('P2PServer', () => {
 	it('should handle errors during stake message processing', async () => {
 		const stakeData = {
 			address: 'testAddress',
-			amount: 100,
+			amount: '100', // base units, decimal string on the wire
 		};
 		const spy = jest.spyOn(blockchain, 'stake').mockRejectedValue(
 			new Error('Stake failed')

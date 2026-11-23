@@ -11,6 +11,7 @@ jest.mock('fs');
 jest.mock('protobufjs', () => {
 	const mockType = {
 		create: (obj: unknown) => obj,
+		fromObject: (obj: unknown) => obj,
 		encode: (obj: unknown) => ({
 			finish: () => Buffer.from(JSON.stringify(obj)),
 		}),
@@ -32,7 +33,7 @@ describe('BlockStore', () => {
 	let directories: Set<string>;
 
 	const createBlock = (index: number, previousHash: string = '0'): Block => {
-		const tx = new Transaction([], [{ address: 'test', amount: 50 }], 1609459200000 + index * 1000, 1);
+		const tx = Transaction.coinbase('test', 50n, index, 1609459200000 + index * 1000);
 		const block = new Block(
 			1609459200000 + index * 1000,
 			[tx],
