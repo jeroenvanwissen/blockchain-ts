@@ -6,6 +6,7 @@ export interface UTXO {
 	output: TxOutput;
 	blockIndex: number; // height of the block that created it (maturity)
 	isCoinbase: boolean;
+	isCoinstake: boolean; // coinstake outputs mature like coinbase outputs
 	txTimestamp: number; // timestamp of the creating transaction (stake age)
 }
 
@@ -37,13 +38,22 @@ export class UtxoSet {
 		keys.add(key);
 	}
 
-	/** Add every output of a confirmed transaction. */
+	/** Add every spendable (non-zero) output of a confirmed non-coinstake transaction. */
 	addOutputs(tx: Transaction, blockIndex: number): void {
 		const txHash = tx.calculateHash();
 		const isCoinbase = tx.isCoinbase();
-		tx.outputs.forEach((output, outputIndex) =>
-			this.add({ txHash, outputIndex, output, blockIndex, isCoinbase, txTimestamp: tx.timestamp }),
-		);
+		tx.outputs.forEach((output, outputIndex) => {
+			if (output.amount === 0n) return;
+			this.add({
+				txHash,
+				outputIndex,
+				output,
+				blockIndex,
+				isCoinbase,
+				isCoinstake: false,
+				txTimestamp: tx.timestamp,
+			});
+		});
 	}
 
 	remove(txHash: string, outputIndex: number): UTXO | undefined {

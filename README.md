@@ -19,7 +19,7 @@
 
 **Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set (`npm run smoke`). Still open:
 
-- proof of stake is being rebuilt: the old stake registry is gone and PoS blocks are rejected until kernel staking lands, so the chain can't grow past block 100 (TASK-0009, TASK-0010);
+- PoS blocks are validated (kernel staking), but nodes don't stake yet, so the chain can't grow past block 100 until the staking loop lands (TASK-0010);
 - a node that misses a block only resyncs when it reconnects (TASK-0013).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
@@ -73,7 +73,7 @@ git --version          # Should be 2.30+
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
 | **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
-| **Staking**              | Kernel PoS: any mature UTXO can stake, signed PoS blocks (TASK-0009) |
+| **Staking**              | Kernel PoS: any mature UTXO can stake; PoS blocks signed by the staker; fixed 10-coin reward |
 | **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
 | **Block Header**         | Merkle root of full transactions, compact target (`bits`), sha256d |
 | **Persistence**          | Chunked block storage with protobuf index, wallet as protobuf   |
@@ -124,11 +124,14 @@ Key constants in `src/config.ts`:
 | Setting                         | Default | Description                                    |
 | ------------------------------- | ------- | ---------------------------------------------- |
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
-| `POW_CUTOFF_BLOCK`              | 100     | Block height where PoW ends and PoS begins     |
+| `POW_CUTOFF_BLOCK`              | 100     | Last PoW height; PoS from the next block       |
+| `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake           |
+| `STAKE_MIN_CONFIRMATIONS`       | 10      | Confirmations a UTXO needs before it can stake |
+| `STAKE_TIMESTAMP_GRANULARITY`   | 16 s    | PoS block timestamps are multiples of this     |
 | `COIN`                          | 10^8    | Base units per coin (amounts are `bigint`)     |
 | `POW_BLOCK_REWARD`              | 10 coins | Mining reward per block (PoW)                 |
 | `POS_BLOCK_REWARD`              | 10 coins | Staking reward per block (PoS)                |
-| `COIN_MATURITY`                 | 10      | Blocks before coinbase outputs are spendable   |
+| `COIN_MATURITY`                 | 10      | Blocks before coinbase/coinstake outputs are spendable |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
 | `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
@@ -208,7 +211,7 @@ const tx = blockchain.createTransaction(fromAddress, toAddress, 5n * COIN, walle
 await blockchain.addTransaction(tx);
 
 // Mine pending transactions (PoW phase)
-await blockchain.minePendingTransactions(wallet.address, wallet);
+await blockchain.minePendingTransactions(wallet.address);
 
 // Check balance (UTXO-based, bigint base units)
 const balance = blockchain.getBalance(wallet.address);

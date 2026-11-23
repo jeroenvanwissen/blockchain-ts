@@ -54,7 +54,12 @@ export const SEED_NODES: string[] = process.env.SEED_NODES
 	: DEFAULT_SEED_NODES;
 
 // Consensus configuration
-export const POW_CUTOFF_BLOCK = 100;
+export const POW_CUTOFF_BLOCK = 100; // last PoW height; PoS from POW_CUTOFF_BLOCK + 1
+
+// Proof of stake (kernel staking, TASK-0009)
+export const STAKE_MIN_AGE = 8 * 60 * 60; // seconds a UTXO must exist before it can stake
+export const STAKE_MIN_CONFIRMATIONS = 10; // blocks a UTXO must be buried before it can stake
+export const STAKE_TIMESTAMP_GRANULARITY = 16_000; // PoS block timestamps are multiples (ms)
 
 // Coin configuration (amounts are bigint base units)
 export const COIN = 100_000_000n; // Base units per coin

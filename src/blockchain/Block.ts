@@ -37,6 +37,7 @@ export interface SerializedBlock {
 	nonce: number;
 	index: number;
 	hash: string;
+	signature: string; // PoS: staker's signature over the hash; PoW: empty
 	transactions: SerializedTransaction[];
 }
 
@@ -46,6 +47,8 @@ export class Block {
 	public bits: number; // compact target (see target.ts)
 	public index: number; // height; committed through the coinbase, not the header
 	public version: number;
+	/** PoS only: compact signature over `hash` by the coinstake owner's key (not hashed). */
+	public signature = '';
 	public cumulativeWeight = 0n; // chain work up to and including this block
 
 	constructor(
@@ -149,6 +152,7 @@ export class Block {
 			nonce: this.nonce,
 			index: this.index,
 			hash: this.hash,
+			signature: this.signature,
 			transactions: this.transactions.map((tx) => tx.toJSON()),
 		};
 	}
@@ -171,6 +175,9 @@ export class Block {
 		if (!isUint32(obj.nonce)) fail('nonce');
 		if (!Number.isSafeInteger(obj.index) || (obj.index as number) < 0) fail('index');
 		if (typeof obj.hash !== 'string' || !HASH_PATTERN.test(obj.hash)) fail('hash');
+		if (typeof obj.signature !== 'string' || !/^(?:[0-9a-f]{128})?$/.test(obj.signature)) {
+			fail('signature');
+		}
 		if (!Array.isArray(obj.transactions) || obj.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 			fail('transactions');
 		}
@@ -185,6 +192,7 @@ export class Block {
 			obj.version as number,
 		);
 		if (block.hash !== obj.hash) fail('hash does not match header');
+		block.signature = obj.signature as string;
 		return block;
 	}
 }

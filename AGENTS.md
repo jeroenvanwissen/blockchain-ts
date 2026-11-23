@@ -13,6 +13,7 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/blockchain/address.ts`: Base58Check addresses (`addressFromPublicKey`, `isValidAddress`)
 - `src/blockchain/UtxoSet.ts`: unspent outputs by outpoint, with a per-address index
 - `src/blockchain/target.ts` (compact `bits` ↔ target, block work) and `src/blockchain/retarget.ts` (`requiredBits`: per-block retarget, separate for PoW and PoS)
+- `src/blockchain/kernel.ts`: PoS kernel hash, kernel target check, stake modifier chaining
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
 - `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
 
@@ -47,7 +48,8 @@ Run npm scripts from the repository root.
 
 - Consensus code must be deterministic from chain data. No wall-clock reads except the future-timestamp limit, and no node-local state that peers can't rebuild from blocks.
 - Every block, whether new, synced or loaded from disk, goes through `Blockchain._connectBlock` (via `_addMinedBlockInternal` or `_replayChain`). It validates against a block-local UTXO view and changes state only if every check passes. Add consensus rules there, not in callers; mempool admission shares `_checkInputs`.
-- The PoS model is Peercoin-style UTXO kernel staking (TASK-0009, TASK-0010): any mature UTXO can stake, and all consensus state is derived from blocks. Don't reintroduce node-local stake state (registries, unstake queues, slashing lists).
+- The PoS model is Peercoin-style UTXO kernel staking: any UTXO with `STAKE_MIN_CONFIRMATIONS` and `minStakeAge` can stake when sha256d(modifier ‖ prevTxTime ‖ outpoint ‖ blockTime) ≤ target × value. A PoS block has the coinstake at tx[1] (marker output, then the kernel value back to its owner), a timestamp on the 16 s grid, and a signature over its hash by the kernel input's key. The stake modifier is derived per block during validation. Don't reintroduce node-local stake state (registries, unstake queues, slashing lists).
+- Tests can shorten the PoW phase with `BlockchainOptions.powCutoffBlock` (see `openPosChain` in the integration helpers).
 - Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists; tell users to delete old data dirs (README troubleshooting).
 
 ## Work tracking

@@ -35,6 +35,7 @@ message SerializedBlock {
   string hash = 7;
   uint32 bits = 8; // compact target
   uint32 version = 9;
+  string signature = 10; // PoS block signature (hex), empty for PoW
 }
 
 message BlockchainData {

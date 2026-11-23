@@ -26,7 +26,6 @@ const testOptions: BlockchainOptions = {
 	minStakeAge: 0,
 	validateDifficulty: false,
 	validateTimestamps: false,
-	allowPowAfterCutoff: true,
 };
 
 // Mock the fs module

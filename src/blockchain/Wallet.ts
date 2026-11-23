@@ -84,6 +84,11 @@ export class Wallet {
 		tx.signTransaction(this.privateKey);
 	}
 
+	/** Compact low-S ECDSA signature (hex) over a 32-byte digest, e.g. a PoS block hash. */
+	signDigest(digest: Buffer): string {
+		return Buffer.from(secp256k1.ecdsaSign(digest, this.privateKey).signature).toString('hex');
+	}
+
 	private loadWallet(): void {
 		let fileBuffer: Buffer;
 		try {

@@ -8,6 +8,13 @@ import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
 import { requiredBits } from './retarget.js';
 import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import {
+	GENESIS_STAKE_MODIFIER,
+	kernelHash,
+	meetsKernelTarget,
+	nextStakeModifier,
+} from './kernel.js';
+import { secp256k1 } from './secp256k1.js';
+import {
 	BLOCKS_DIR,
 	POW_CUTOFF_BLOCK,
 	POS_BLOCK_REWARD,
@@ -18,13 +25,18 @@ import {
 	MEDIAN_TIME_SPAN,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_FUTURE_BLOCK_TIME,
+	STAKE_MIN_AGE,
+	STAKE_MIN_CONFIRMATIONS,
+	STAKE_TIMESTAMP_GRANULARITY,
 } from '../config.js';
 
 export interface BlockchainOptions {
+	/** Seconds a UTXO must exist before it can stake (default STAKE_MIN_AGE) */
 	minStakeAge?: number;
 	validateDifficulty?: boolean;
 	validateTimestamps?: boolean;
-	allowPowAfterCutoff?: boolean;
+	/** Last PoW height; PoS from the next block (default POW_CUTOFF_BLOCK) */
+	powCutoffBlock?: number;
 	/** Directory for blk*.dat and index.dat (defaults to BLOCKS_DIR from config) */
 	blocksDir?: string;
 }
@@ -33,6 +45,7 @@ export interface BlockchainOptions {
 interface ConnectContext {
 	prevBlocks: Block[]; // chain up to and including the parent block
 	utxos: UtxoSet;
+	modifiers: string[]; // stake modifier after each block in prevBlocks
 }
 
 export class Blockchain {
@@ -40,6 +53,7 @@ export class Blockchain {
 
 	private chain: Block[];
 	private _utxos = new UtxoSet();
+	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
 	private _pendingUTXOSpends: Set<string> = new Set();
 	private pendingTransactions: Transaction[];
 	private lastBlockTime: number = Date.now();
@@ -49,10 +63,10 @@ export class Blockchain {
 
 	constructor(options?: BlockchainOptions) {
 		this._options = {
-			minStakeAge: 86400,
+			minStakeAge: STAKE_MIN_AGE,
 			validateDifficulty: true,
 			validateTimestamps: true,
-			allowPowAfterCutoff: false,
+			powCutoffBlock: POW_CUTOFF_BLOCK,
 			blocksDir: BLOCKS_DIR,
 			...options,
 		};
@@ -91,8 +105,7 @@ export class Blockchain {
 	}
 
 	public canAcceptPowBlock(): boolean {
-		if (this._options.allowPowAfterCutoff) return true;
-		return this.chain.length <= POW_CUTOFF_BLOCK;
+		return this.chain.length <= this._options.powCutoffBlock;
 	}
 
 	private validateBlockCoinbase(block: Block): void {
@@ -140,6 +153,9 @@ export class Blockchain {
 			if (utxo.isCoinbase && height - utxo.blockIndex < COIN_MATURITY) {
 				throw new Error('coinbase output has not reached maturity');
 			}
+			if (utxo.isCoinstake && height - utxo.blockIndex < COIN_MATURITY) {
+				throw new Error('coinstake output has not reached maturity');
+			}
 			inputSum += utxo.output.amount;
 		}
 		const outputSum = tx.outputs.reduce((sum, out) => sum + out.amount, 0n);
@@ -152,10 +168,10 @@ export class Blockchain {
 	/**
 	 * The single block-validation path, used for new blocks, chain replacement and startup
 	 * load. Validates `block` on top of `ctx` and, only if every check passes, applies it to
-	 * ctx.utxos (nothing is changed when it throws). Consensus checks read time
+	 * ctx.utxos (nothing is changed when it throws) and returns the block's stake modifier. Consensus checks read time
 	 * from block data only; the wall clock is used only for the future-timestamp limit.
 	 */
-	private _connectBlock(block: Block, ctx: ConnectContext): void {
+	private _connectBlock(block: Block, ctx: ConnectContext): string {
 		const height = ctx.prevBlocks.length;
 		const parent = ctx.prevBlocks[height - 1];
 
@@ -191,15 +207,19 @@ export class Blockchain {
 		) {
 			throw new Error('incorrect block difficulty');
 		}
+		let proof = block.hash; // feeds the next stake modifier
 		if (block.isProofOfWork()) {
-			if (!this._options.allowPowAfterCutoff && height > POW_CUTOFF_BLOCK) {
-				throw new Error(`PoW blocks no longer accepted after block ${POW_CUTOFF_BLOCK}`);
+			if (height > this._options.powCutoffBlock) {
+				throw new Error(`PoW blocks no longer accepted after block ${this._options.powCutoffBlock}`);
+			}
+			if (block.signature) {
+				throw new Error('PoW blocks must not carry a block signature');
 			}
 			if (!block.isValid()) {
 				throw new Error('invalid proof of work');
 			}
 		} else {
-			throw new Error('proof-of-stake blocks are not supported yet (TASK-0009)');
+			proof = this._checkProofOfStake(block, height, ctx);
 		}
 
 		// Transactions, in order, against a block-local view of the UTXO set
@@ -215,6 +235,9 @@ export class Blockchain {
 				for (const output of tx.outputs) {
 					if (!isValidAddress(output.address)) throw new Error('invalid output address');
 				}
+				if (t >= 2 && tx.isCoinStake()) {
+					throw new Error('coinstake is only valid as the second transaction of a PoS block');
+				}
 				if (!tx.isCoinbase()) {
 					tx.validate(); // structure and signatures
 					this._checkInputs(tx, lookup, height);
@@ -229,13 +252,16 @@ export class Blockchain {
 				throw new Error(`transaction ${t}: ${(error as Error).message}`);
 			}
 			const txHash = tx.calculateHash();
+			const isCoinstake = t === 1 && block.isProofOfStake();
 			tx.outputs.forEach((output, outputIndex) => {
+				if (output.amount === 0n) return; // e.g. the coinstake marker: nothing to spend
 				created.set(outpointKey(txHash, outputIndex), {
 					txHash,
 					outputIndex,
 					output,
 					blockIndex: height,
 					isCoinbase: tx.isCoinbase(),
+					isCoinstake,
 					txTimestamp: tx.timestamp,
 				});
 			});
@@ -246,10 +272,83 @@ export class Blockchain {
 			if (!created.delete(key)) ctx.utxos.remove(txHash, outputIndex);
 		}
 		for (const utxo of created.values()) ctx.utxos.add(utxo);
+		return nextStakeModifier(proof, ctx.modifiers[height - 1]);
+	}
+
+	/**
+	 * Proof-of-stake rules for a block at `height`, against the UTXO set before the block.
+	 * Returns the kernel hash (it feeds the next stake modifier).
+	 */
+	private _checkProofOfStake(block: Block, height: number, ctx: ConnectContext): string {
+		if (height <= this._options.powCutoffBlock) {
+			throw new Error(`PoS blocks not accepted before block ${this._options.powCutoffBlock + 1}`);
+		}
+		if (block.timestamp % STAKE_TIMESTAMP_GRANULARITY !== 0) {
+			throw new Error(`PoS block timestamp must be a multiple of ${STAKE_TIMESTAMP_GRANULARITY} ms`);
+		}
+		const coinstake = block.transactions[1];
+		if (coinstake.timestamp !== block.timestamp) {
+			throw new Error('coinstake timestamp must equal the block timestamp');
+		}
+
+		const kernelInput = coinstake.inputs[0];
+		const kernel = ctx.utxos.get(kernelInput.previousTx, kernelInput.outputIndex);
+		if (!kernel) {
+			throw new Error('kernel input is missing or spent');
+		}
+		const staker = kernel.output.address;
+		if (coinstake.outputs[1].address !== staker) {
+			throw new Error('coinstake must return the stake to the kernel owner');
+		}
+		if (height - kernel.blockIndex < STAKE_MIN_CONFIRMATIONS) {
+			throw new Error('kernel input does not have enough confirmations');
+		}
+		if (
+			block.timestamp < kernel.txTimestamp ||
+			block.timestamp - kernel.txTimestamp < this._options.minStakeAge * 1000
+		) {
+			throw new Error('kernel input is too young to stake');
+		}
+
+		const hash = kernelHash(
+			ctx.modifiers[height - 1],
+			kernel.txTimestamp,
+			kernelInput.previousTx,
+			kernelInput.outputIndex,
+			block.timestamp,
+		);
+		if (!meetsKernelTarget(hash, block.bits, kernel.output.amount)) {
+			throw new Error('kernel does not meet the stake target');
+		}
+
+		// The block is signed by the staker: the kernel input's key, which must own the kernel
+		const publicKey = kernelInput.publicKey;
+		if (
+			!/^[0-9a-f]{66}$/.test(publicKey) ||
+			addressFromPublicKey(Buffer.from(publicKey, 'hex')) !== staker
+		) {
+			throw new Error('kernel input public key does not own the stake');
+		}
+		let isSigned = false;
+		try {
+			isSigned =
+				/^[0-9a-f]{128}$/.test(block.signature) &&
+				secp256k1.ecdsaVerify(
+					Buffer.from(block.signature, 'hex'),
+					Buffer.from(block.hash, 'hex'),
+					Buffer.from(publicKey, 'hex'),
+				);
+		} catch {
+			isSigned = false;
+		}
+		if (!isSigned) {
+			throw new Error('invalid block signature');
+		}
+		return hash;
 	}
 
 	/** Validate a whole chain from genesis through _connectBlock and return its state. */
-	private _replayChain(blocks: Block[]): { utxos: UtxoSet } {
+	private _replayChain(blocks: Block[]): { utxos: UtxoSet; modifiers: string[] } {
 		const genesis = this.createGenesisBlock();
 		if (
 			blocks.length === 0 ||
@@ -261,21 +360,27 @@ export class Blockchain {
 		const ctx: ConnectContext = {
 			prevBlocks: [blocks[0]],
 			utxos: new UtxoSet(),
+			modifiers: [GENESIS_STAKE_MODIFIER],
 		};
 		ctx.utxos.addOutputs(blocks[0].transactions[0], 0);
 		for (let i = 1; i < blocks.length; i++) {
 			try {
-				this._connectBlock(blocks[i], ctx);
+				ctx.modifiers.push(this._connectBlock(blocks[i], ctx));
 			} catch (error) {
 				throw new Error(`block ${i}: ${(error as Error).message}`);
 			}
 			ctx.prevBlocks.push(blocks[i]);
 		}
-		return { utxos: ctx.utxos };
+		return { utxos: ctx.utxos, modifiers: ctx.modifiers };
 	}
 
 	private _addMinedBlockInternal(block: Block): void {
-		this._connectBlock(block, { prevBlocks: this.chain, utxos: this._utxos });
+		const modifier = this._connectBlock(block, {
+			prevBlocks: this.chain,
+			utxos: this._utxos,
+			modifiers: this._modifiers,
+		});
+		this._modifiers.push(modifier);
 
 		block.cumulativeWeight = this.getLatestBlock().cumulativeWeight + Blockchain.blockWeight(block);
 		this.chain.push(block);
@@ -365,8 +470,8 @@ export class Blockchain {
 			if (this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex))) {
 				continue;
 			}
-			// Skip immature coinbase UTXOs
-			if (utxo.isCoinbase && this.chain.length - utxo.blockIndex < COIN_MATURITY) {
+			// Skip immature coinbase and coinstake UTXOs
+			if (!this._isMature(utxo, this.chain.length)) {
 				continue;
 			}
 			inputSum += utxo.output.amount;
@@ -418,7 +523,7 @@ export class Blockchain {
 	/** Unsolved PoW block on the current tip: coinbase to `rewardAddress` plus pending transactions. */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
 		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD, this.chain.length, timestamp);
-		const block = new Block(
+		return new Block(
 			timestamp,
 			[coinbase, ...this.pendingTransactions],
 			this.getLatestBlock().hash,
@@ -426,20 +531,77 @@ export class Blockchain {
 			this.getRequiredBits(false),
 			this.chain.length,
 		);
-		// The target follows the block's type; a pending stake tx makes it look like PoS (F-007)
-		if (block.isProofOfStake()) {
-			block.bits = this.getRequiredBits(true);
-			block.hash = block.calculateHash();
+	}
+
+	private _isMature(utxo: UTXO, height: number): boolean {
+		return !(utxo.isCoinbase || utxo.isCoinstake) || height - utxo.blockIndex >= COIN_MATURITY;
+	}
+
+	/** Whether the next block must be proof of stake. */
+	public isProofOfStakePhase(): boolean {
+		return this.chain.length > this._options.powCutoffBlock;
+	}
+
+	/**
+	 * Try to stake the next block at `timestamp` with the wallet's outputs. The timestamp must
+	 * be on the STAKE_TIMESTAMP_GRANULARITY grid and after the median time past. Returns a
+	 * signed PoS block (coinbase pays the fixed reward to the staker; the coinstake returns
+	 * the kernel output unchanged), or null if no output's kernel meets the target.
+	 */
+	public createStakeBlock(wallet: Wallet, timestamp: number): Block | null {
+		const height = this.chain.length;
+		if (!this.isProofOfStakePhase()) return null;
+		if (timestamp % STAKE_TIMESTAMP_GRANULARITY !== 0 || timestamp <= this.getMedianTimePast()) {
+			return null;
 		}
-		return block;
+		const bits = this.getRequiredBits(true);
+		const modifier = this._modifiers[height - 1];
+
+		for (const utxo of this.getUTXOs(wallet.address)) {
+			if (this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex))) continue;
+			if (!this._isMature(utxo, height)) continue;
+			if (height - utxo.blockIndex < STAKE_MIN_CONFIRMATIONS) continue;
+			if (timestamp - utxo.txTimestamp < this._options.minStakeAge * 1000) continue;
+			const hash = kernelHash(modifier, utxo.txTimestamp, utxo.txHash, utxo.outputIndex, timestamp);
+			if (!meetsKernelTarget(hash, bits, utxo.output.amount)) continue;
+
+			const coinstake = new Transaction(
+				[{ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' }],
+				[
+					{ address: wallet.address, amount: 0n }, // coinstake marker
+					{ address: wallet.address, amount: utxo.output.amount },
+				],
+				timestamp,
+			);
+			wallet.signTransaction(coinstake);
+			const block = new Block(
+				timestamp,
+				[
+					Transaction.coinbase(wallet.address, POS_BLOCK_REWARD, height, timestamp),
+					coinstake,
+					...this.pendingTransactions,
+				],
+				this.getLatestBlock().hash,
+				0,
+				bits,
+				height,
+			);
+			block.signature = wallet.signDigest(Buffer.from(block.hash, 'hex'));
+			return block;
+		}
+		return null;
+	}
+
+	/** Current stake modifier (after the tip); exposed for tests and tooling. */
+	public getStakeModifier(): string {
+		return this._modifiers[this._modifiers.length - 1];
 	}
 
 	/** Mine a PoW block in-process on the current tip (tests and tooling; the node uses Miner). */
 	public async minePendingTransactions(minerAddress: string): Promise<Block> {
 		// Date.now() so tests can control time
 		const block = this.createBlockTemplate(minerAddress, Date.now());
-		// A pending coinstake-shaped tx can make the block look like PoS (F-007); only PoW needs a nonce
-		if (block.isProofOfWork()) block.solve();
+		block.solve();
 
 		await this.addMinedBlock(block);
 		return block;
@@ -451,6 +613,9 @@ export class Blockchain {
 		}
 		if (transaction.isCoinbase()) {
 			throw new Error('coinbase transactions are only valid in blocks');
+		}
+		if (transaction.isCoinStake()) {
+			throw new Error('coinstake transactions are only valid in blocks');
 		}
 
 		// Structural validation (signatures, duplicates, amounts, size limits)
@@ -519,6 +684,7 @@ export class Blockchain {
 				this.blockStore.appendBlock(this.chain[0]);
 				this._utxos = new UtxoSet();
 				this._utxos.addOutputs(this.chain[0].transactions[0], 0);
+				this._modifiers = [GENESIS_STAKE_MODIFIER];
 				return;
 			}
 
@@ -533,6 +699,7 @@ export class Blockchain {
 			this.chain = blocks;
 			Blockchain.computeChainWeights(this.chain);
 			this._utxos = state.utxos;
+			this._modifiers = state.modifiers;
 		} catch (error) {
 			console.error('Error loading blockchain:', error);
 			throw error;
@@ -574,6 +741,7 @@ export class Blockchain {
 			const oldChain = this.chain;
 			this.chain = newChain;
 			this._utxos = state.utxos;
+			this._modifiers = state.modifiers;
 
 			// Re-admit pending transactions and those from orphaned blocks that are still
 			// valid on the new chain (confirmed or conflicting ones are rejected)

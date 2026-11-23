@@ -215,6 +215,7 @@ export class BlockStore {
 			version: block.version,
 			index: block.index,
 			hash: block.hash,
+			signature: block.signature,
 		});
 		return Buffer.from(SerializedBlock.encode(message).finish());
 	}
@@ -238,6 +239,7 @@ export class BlockStore {
 			version: number;
 			index: number;
 			hash: string;
+			signature?: string;
 		};
 
 		const transactions = data.transactions.map(
@@ -268,6 +270,7 @@ export class BlockStore {
 			data.version,
 		);
 		block.hash = data.hash;
+		block.signature = data.signature ?? '';
 		return block;
 	}
 
