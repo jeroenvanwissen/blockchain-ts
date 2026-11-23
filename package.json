@@ -16,6 +16,7 @@
 		"test": "jest",
 		"smoke": "tsx src/smoke.ts",
 		"e2e": "tsx src/e2e.ts",
+		"docker:check": "tsx src/dockerCheck.ts",
 		"cli": "tsx src/cli.ts"
 	},
 	"repository": {

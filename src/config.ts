@@ -16,19 +16,13 @@ export const getDefaultDataDir = (): string => {
 
 export const DEFAULT_DATA_DIR = getDefaultDataDir();
 
-// Get data directory from command line args
+// Data directory: --data-dir, else the DATA_DIR env var (the Docker image sets it), else the default
 const getDataDirectory = (): string => {
 	const args = process.argv.slice(2);
-	let dataDirectory = DEFAULT_DATA_DIR;
-
 	for (let i = 0; i < args.length; i++) {
-		if (args[i] === '--data-dir' && args[i + 1]) {
-			dataDirectory = args[i + 1];
-			break;
-		}
+		if (args[i] === '--data-dir' && args[i + 1]) return args[i + 1];
 	}
-
-	return dataDirectory;
+	return process.env.DATA_DIR || DEFAULT_DATA_DIR;
 };
 
 // Export configured paths

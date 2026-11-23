@@ -1,0 +1,29 @@
+# A local regression-test network of two nodes: docker compose -f compose.regtest.yaml up -d
+# Node a mines the 20 PoW blocks and stakes; node b syncs from a and stakes once it has coins:
+#   docker compose -f compose.regtest.yaml exec a cli send "$(docker compose -f compose.regtest.yaml exec b cli new-address)" 100
+# Block explorers: http://127.0.0.1:6001/ (a) and http://127.0.0.1:6002/ (b)
+# Remove everything, chains included: docker compose -f compose.regtest.yaml down -v
+services:
+  a:
+    build: .
+    image: blockchain-ts
+    command: ['--regtest', '--mine', '--stake']
+    ports:
+      - '127.0.0.1:6001:6001'
+    volumes:
+      - regtest-a:/data
+    stop_grace_period: 30s
+  b:
+    build: .
+    image: blockchain-ts
+    command: ['--regtest', '--stake', '--peers', 'ws://a:5001']
+    depends_on: [a]
+    ports:
+      - '127.0.0.1:6002:6001'
+    volumes:
+      - regtest-b:/data
+    stop_grace_period: 30s
+
+volumes:
+  regtest-a:
+  regtest-b:

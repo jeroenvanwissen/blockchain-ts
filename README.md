@@ -36,6 +36,7 @@ Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API]
 6. Run the smoke check:      npm run smoke
    End-to-end scenario:      npm run e2e
 7. Build for production:     npm run build
+8. Or run it in Docker:      docker compose up -d   (see Running in Docker)
 ```
 
 ---
@@ -142,6 +143,7 @@ Key constants in `src/config.ts`:
 | Setting                         | Default | Description                                    |
 | ------------------------------- | ------- | ---------------------------------------------- |
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
+| `DATA_DIR`                      | platform default | Data directory when `--data-dir` isn't given (env: `DATA_DIR`) |
 | `API_PORT`                      | P2P port + 1000 | HTTP API port (env: `API_PORT`; `0` picks a free port) |
 | `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
 | `LOG_LEVEL`                     | info    | Node log level: debug, info, warn or error (env: `LOG_LEVEL`) |
@@ -171,7 +173,7 @@ Key constants in `src/config.ts`:
 
 ### Data Files
 
-Runtime data stored in a platform-specific directory (configurable via `--data-dir`):
+Runtime data stored in a platform-specific directory (configurable via `--data-dir` or the `DATA_DIR` env var; the flag wins):
 - **macOS:** `~/Library/Application Support/blockchain-ts/`
 - **Linux:** `~/.blockchain-ts/`
 - **Windows:** `%APPDATA%/blockchain-ts/`
@@ -274,7 +276,43 @@ An encrypted wallet is locked whenever the node starts. While locked the node do
 npm run check           # Build, test suite and lint
 npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
 npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~2 min)
+npm run docker:check    # Build the image and check a running container (needs Docker)
 ```
+
+### Running in Docker
+
+The `Dockerfile` builds the node in one stage and runs the compiled `dist/` in a slim Node.js image:
+- the node runs as the unprivileged `node` user, with production dependencies only
+- the native `secp256k1` addon is compiled when there's no prebuilt one (linux-arm64), and the build fails if it's missing
+- the data dir is the `/data` volume
+
+```bash
+docker compose up -d                       # one node: compose.yaml
+docker compose exec node cli balance       # the CLI runs inside the container
+docker compose exec node cli new-address
+docker compose logs -f node
+docker compose down                        # docker stop: the node saves its chainstate first
+```
+
+Add `--mine`, `--stake` or `--peers ws://host:5001` to `command` in `compose.yaml`. Without compose:
+
+```bash
+docker build -t blockchain-ts .
+docker run -d --name node -v node-data:/data -p 5001:5001 -p 127.0.0.1:6001:6001 blockchain-ts --stake
+docker exec node cli staking
+```
+
+The image sets `DATA_DIR=/data`, `P2P_PORT=5001`, `API_PORT=6001` and `API_HOST=0.0.0.0`, so a published API port reaches the chain routes and the [block explorer](#block-explorer). Publish it on `127.0.0.1` as above unless others should see it. The wallet routes still answer only requests from inside the container, which is why the CLI runs there with `docker exec`. The health check polls `/status`.
+
+A local regtest network of two nodes, with explorers on ports 6001 and 6002:
+
+```bash
+docker compose -f compose.regtest.yaml up -d
+docker compose -f compose.regtest.yaml exec a cli send "$(docker compose -f compose.regtest.yaml exec b cli new-address)" 100
+docker compose -f compose.regtest.yaml down -v   # -v also deletes both chains
+```
+
+Back up the wallet with `docker compose cp node:/data/wallet.dat ./wallet-backup.dat`.
 
 ---
 
@@ -406,6 +444,8 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
 | Staking status    | `npm run cli -- staking`                                      |
 | Block explorer    | open `http://127.0.0.1:6001/`                                 |
+| Docker node       | `docker compose up -d`, then `docker compose exec node cli status` |
+| Docker check      | `npm run docker:check`                                        |
 
 ---
 

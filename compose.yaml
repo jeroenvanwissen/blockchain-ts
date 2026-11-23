@@ -1,0 +1,21 @@
+# One blockchain-ts node: docker compose up -d
+# - P2P on port 5001; the API and block explorer on http://127.0.0.1:6001/ (this machine only)
+# - The chain, wallet and peer list persist in the node-data volume
+# - CLI inside the container: docker compose exec node cli balance
+# Add "--mine" and/or "--stake" to command to produce blocks, "--peers", "ws://host:5001" to
+# connect to another node.
+services:
+  node:
+    build: .
+    image: blockchain-ts
+    command: []
+    ports:
+      - '5001:5001'
+      - '127.0.0.1:6001:6001'
+    volumes:
+      - node-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  node-data:
