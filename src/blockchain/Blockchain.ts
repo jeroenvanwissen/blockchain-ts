@@ -34,6 +34,7 @@ import {
 	MAX_TRANSACTION_INPUTS,
 	MAX_TRANSACTION_OUTPUTS,
 	MIN_RELAY_FEE_PER_KB,
+	SIGNATURE_CACHE_SIZE,
 	STAKE_MIN_AGE,
 	STAKE_MIN_CONFIRMATIONS,
 	STAKE_TIMESTAMP_GRANULARITY,
@@ -84,6 +85,10 @@ export class Blockchain {
 	private _index = new Map<string, IndexEntry>(); // every known block, by hash
 	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
 	private _mempool!: Mempool;
+	// Witness hashes (data, keys and signatures) already verified, oldest first: signatures never
+	// change, so revalidating the mempool on each new tip and connecting blocks of transactions
+	// seen in the mempool skip the ECDSA checks
+	private readonly _verifiedSignatures = new Set<string>();
 	private lastBlockTime: number = Date.now();
 	private blockStore: BlockStore;
 	readonly BLOCK_TIME = BLOCK_TIME;
@@ -169,6 +174,24 @@ export class Blockchain {
 		}
 		if (coinbaseTx.inputs[0].outputIndex !== block.index) {
 			throw new Error('coinbase height does not match block index');
+		}
+	}
+
+	/** Structure and signatures; signatures verified before for these exact bytes are skipped. */
+	private _validateTransaction(tx: Transaction): void {
+		tx.validate(true); // structure first, so its errors come before any encoding error
+		let key: string | undefined;
+		try {
+			key = tx.witnessHash();
+		} catch {
+			// Not encodable: verifySignatures reports it
+		}
+		if (key && this._verifiedSignatures.has(key)) return;
+		tx.verifySignatures();
+		if (!key) return;
+		this._verifiedSignatures.add(key);
+		if (this._verifiedSignatures.size > SIGNATURE_CACHE_SIZE) {
+			this._verifiedSignatures.delete(this._verifiedSignatures.values().next().value as string);
 		}
 	}
 
@@ -300,7 +323,7 @@ export class Blockchain {
 					throw new Error('transaction timestamp is later than its block');
 				}
 				if (!tx.isCoinbase()) {
-					tx.validate(); // structure and signatures
+					this._validateTransaction(tx); // structure and signatures
 					fees += this._checkInputs(tx, lookup, height);
 					for (const input of tx.inputs) {
 						spent.set(outpointKey(input.previousTx, input.outputIndex), [
@@ -974,7 +997,7 @@ export class Blockchain {
 		}
 
 		// Structural validation (signatures, duplicates, amounts, size limits)
-		transaction.validate();
+		this._validateTransaction(transaction);
 
 		for (const output of transaction.outputs) {
 			if (!this.validateAddress(output.address)) {

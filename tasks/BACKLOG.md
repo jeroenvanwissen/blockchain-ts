@@ -66,7 +66,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0025](TASK-0025-stake-age.md) | Bound transaction timestamps; measure stake age from block time | done | P1 | medium | TASK-0009 | F-021 |
 | [TASK-0026](TASK-0026-tie-break.md) | Equal-work tie-break that block contents can't influence | done | P2 | small | TASK-0012 | F-022 |
 | [TASK-0027](TASK-0027-wallet-loopback.md) | Keep wallet routes on loopback | done | P2 | small | TASK-0017 | F-023 |
-| TASK-0028 | Mempool revalidation without re-verifying signatures | pending | P3 | small | TASK-0019 | F-024 |
+| [TASK-0028](TASK-0028-signature-cache.md) | Mempool revalidation without re-verifying signatures | done | P3 | small | TASK-0019 | F-024 |
 | TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
 | TASK-0030 | Throttle block requests; persist bans | pending | P3 | small | TASK-0020 | F-026, F-027 |
 | TASK-0031 | Transaction index | pending | P3 | small | TASK-0016 | F-028 |
@@ -74,7 +74,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes (expand into task files when picked up):
 
-- **TASK-0028:** cache signature validity per txid (witness included) so revalidation only rechecks inputs, maturity and fees.
 - **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.
 - **TASK-0030:** per-peer budget for `GET_BLOCKS` (and cached block JSON); store bans in the data dir with their expiry.
 - **TASK-0031:** txid → block index maintained on connect and disconnect.

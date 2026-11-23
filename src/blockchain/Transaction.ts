@@ -229,7 +229,11 @@ export class Transaction {
 		return this.inputs.every((_, i) => this.verifyInputSignature(i, txid));
 	}
 
-	validate(): void {
+	/**
+	 * Structure, then every input signature. `skipSignatures` is for callers that already
+	 * verified the signatures of these exact bytes (the chain's signature cache).
+	 */
+	validate(skipSignatures = false): void {
 		// Coinbase transactions are validated with their block
 		if (this.isCoinbase()) return;
 
@@ -278,6 +282,11 @@ export class Transaction {
 			}
 		});
 
+		if (!skipSignatures) this.verifySignatures();
+	}
+
+	/** Every input's signature over its sighash, by the key it carries. */
+	verifySignatures(): void {
 		const txid = this.calculateHash();
 		this.inputs.forEach((_, i) => {
 			if (!this.verifyInputSignature(i, txid)) {

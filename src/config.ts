@@ -111,6 +111,7 @@ export const MAX_TRANSACTION_OUTPUTS = 256;
 export const MAX_BLOCK_TRANSACTIONS = 1000;
 export const MAX_BLOCK_SIZE = 1_000_000; // bytes (header, signature, serialized transactions); keeps blocks relayable
 export const MAX_MEMPOOL_BYTES = 8 * 1024 * 1024; // pending transactions beyond this evict the lowest fee rates
+export const SIGNATURE_CACHE_SIZE = 50_000; // witness hashes whose signatures were verified (TASK-0028)
 export const BLOCK_RESERVED_BYTES = 2_000; // template budget kept for header, coinbase and coinstake
 // Fees (TASK-0018): fee = inputs − outputs, claimed by the block's coinbase (consensus). The
 // minimum is mempool and wallet policy, not a block rule.
