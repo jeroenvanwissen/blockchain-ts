@@ -73,6 +73,15 @@ export const REGTEST_STAKE_MIN_AGE = 0;
 // Peer discovery
 export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
 export const MAX_KNOWN_PEERS = 128; // Maximum number of peer addresses to track
+
+// Peer limits and misbehavior (TASK-0020)
+export const MAX_INBOUND_PEERS = 32; // further inbound connections are refused
+export const MAX_OUTBOUND_PEERS = 8; // the node dials at most this many peers
+export const RECONNECT_BASE_DELAY = 1_000; // ms before the first reconnect; doubles per failed attempt
+export const RECONNECT_MAX_DELAY = 60_000; // backoff cap
+export const MAX_RECONNECT_ATTEMPTS = 10; // then the periodic outbound fill takes over
+export const BAN_SCORE = 100; // misbehavior points that get a peer disconnected and banned
+export const BAN_DURATION = 24 * 60 * 60 * 1000; // ms
 export const DEFAULT_SEED_NODES: string[] = [];
 export const SEED_NODES: string[] = process.env.SEED_NODES
 	? process.env.SEED_NODES.split(',').map(s => s.trim()).filter(Boolean)

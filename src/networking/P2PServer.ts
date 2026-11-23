@@ -6,13 +6,20 @@ import { Transaction } from '../blockchain/Transaction.js';
 import { Block } from '../blockchain/Block.js';
 import fs from 'fs';
 import {
+	BAN_DURATION,
+	BAN_SCORE,
 	HANDSHAKE_TIMEOUT,
+	MAX_INBOUND_PEERS,
 	MAX_KNOWN_PEERS,
+	MAX_OUTBOUND_PEERS,
+	MAX_RECONNECT_ATTEMPTS,
 	MAX_LOCATOR_HASHES,
 	MAX_MESSAGE_BYTES,
 	NETWORK_MAGIC,
 	PEER_BROADCAST_INTERVAL,
 	PROTOCOL_VERSION,
+	RECONNECT_BASE_DELAY,
+	RECONNECT_MAX_DELAY,
 	RELAY_SEEN_CACHE_SIZE,
 	SYNC_BATCH_SIZE,
 } from '../config.js';
@@ -54,6 +61,14 @@ interface PeerState {
 	version?: VersionPayload; // the peer's VERSION, kept until its VERACK arrives
 	remoteAddress?: string; // inbound connections: the peer's IP
 	handshakeTimer: NodeJS.Timeout | null;
+	score: number; // misbehavior points; BAN_SCORE gets the peer banned
+}
+
+/** Block rejections an honest peer can cause (races, our clock): no misbehavior points. */
+const BENIGN_BLOCK_ERRORS = ['block already known', 'unknown parent block', 'too far in the future'];
+
+function isLoopback(ip: string): boolean {
+	return ip === '::1' || ip.startsWith('127.');
 }
 
 /** A connected peer that completed the handshake (for the API). */
@@ -109,6 +124,8 @@ export class P2PServer {
 	private _server: WebSocketServer | null = null;
 	private _isClosing = false;
 	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
+	private readonly _banned = new Map<string, number>(); // ban key → expiry (ms)
+	private readonly _dialing = new Set<WebSocket>(); // outbound sockets not open yet
 
 	private readonly _networkMagic: string;
 
@@ -153,8 +170,19 @@ export class P2PServer {
 		this._server = server;
 
 		server.on('connection', (socket, request) => {
-			console.log(`New connection from ${request.socket.remoteAddress}`);
-			this.connectSocket(socket, request.socket.remoteAddress);
+			const remoteAddress = request.socket.remoteAddress;
+			const ip = (remoteAddress ?? '').replace(/^::ffff:/, '');
+			if (!isLoopback(ip) && this.isBanned(ip)) {
+				socket.close(1008, 'banned');
+				return;
+			}
+			if (this._countPeers(true) >= MAX_INBOUND_PEERS) {
+				console.log(`Refusing inbound connection from ${ip}: ${MAX_INBOUND_PEERS} inbound peers already`);
+				socket.close(1013, 'too many peers');
+				return;
+			}
+			console.log(`New connection from ${remoteAddress}`);
+			this.connectSocket(socket, remoteAddress);
 		});
 
 		server.on('error', (error) => {
@@ -174,7 +202,8 @@ export class P2PServer {
 	public async close(): Promise<void> {
 		this._isClosing = true;
 		this._stopPeerBroadcast();
-		for (const socket of [...this.sockets]) socket.terminate();
+		for (const socket of [...this.sockets, ...this._dialing]) socket.terminate();
+		this._dialing.clear();
 		for (const state of this._peerState.values()) {
 			if (state.handshakeTimer) clearTimeout(state.handshakeTimer);
 		}
@@ -183,55 +212,119 @@ export class P2PServer {
 		if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
 
+	/** Remember these peers and dial them, up to MAX_OUTBOUND_PEERS connections. */
 	connectToPeers(newPeers: string[]): void {
-		newPeers.forEach((peer) => {
+		for (const peer of newPeers) {
 			const normalizedPeer = this.normalizePeerUrl(peer);
-
-			// Validate peer address format
 			if (!isValidPeerAddress(normalizedPeer)) {
 				console.log(`Invalid peer address, skipping: ${peer}`);
-				return;
+				continue;
 			}
-
-			// Skip own addresses
-			if (this._ownAddresses.has(normalizedPeer)) return;
-
-			// Track as known peer
+			if (this._ownAddresses.has(normalizedPeer) || this.isBanned(normalizedPeer)) continue;
 			this._knownPeers.add(normalizedPeer);
+			if (this._canDial(normalizedPeer)) this._dial(normalizedPeer);
+		}
+	}
 
-			// Check if we're already connected or connecting to this peer
-			if (this.connectedPeers.has(normalizedPeer)) {
-				return;
-			}
+	/** Whether `key` (a peer URL, IP, or loopback IP:port) is banned right now. */
+	isBanned(key: string): boolean {
+		const expiry = this._banned.get(key);
+		if (expiry === undefined) return false;
+		if (Date.now() < expiry) return true;
+		this._banned.delete(key);
+		return false;
+	}
 
-			// Mark as connecting before attempting connection
-			this.connectedPeers.add(normalizedPeer);
+	/** Outbound connections, including dials in progress (inbound: connected inbound peers). */
+	private _countPeers(inbound: boolean): number {
+		if (!inbound) return this.connectedPeers.size;
+		return this.sockets.filter((socket) => !(socket as unknown as { url?: string }).url).length;
+	}
 
-			console.log(`Attempting to connect to peer: ${normalizedPeer}`);
+	private _canDial(url: string): boolean {
+		return (
+			!this._isClosing &&
+			!this.connectedPeers.has(url) &&
+			!this._ownAddresses.has(url) &&
+			!this.isBanned(url) &&
+			this._countPeers(false) < MAX_OUTBOUND_PEERS
+		);
+	}
 
-			const socket = new WebSocket(normalizedPeer, {
-				handshakeTimeout: 5000,
-				maxPayload: MAX_MESSAGE_BYTES,
-				headers: {
-					'User-Agent': 'BlockchainClient',
-				},
-			});
-
-			socket.on('open', () => {
-				console.log(`Successfully connected to peer: ${normalizedPeer}`);
-				this.connectSocket(socket);
-			});
-
-			socket.on('error', (error) => {
-				// Unreachable peers are routine (offline, wrong address): not an error
-				console.log(`Connection failed to peer: ${normalizedPeer} (${error.message})`);
-				this.connectedPeers.delete(normalizedPeer); // Remove from tracking on error
-			});
-
-			socket.on('close', () => {
-				this.connectedPeers.delete(normalizedPeer); // Remove from tracking on close
-			});
+	/** Open an outbound connection; `onFail` runs if it never opens. */
+	private _dial(url: string, onFail?: () => void): void {
+		this.connectedPeers.add(url); // connecting or connected
+		console.log(`Attempting to connect to peer: ${url}`);
+		const socket = new WebSocket(url, {
+			handshakeTimeout: 5000,
+			maxPayload: MAX_MESSAGE_BYTES,
+			headers: { 'User-Agent': 'BlockchainClient' },
 		});
+		this._dialing.add(socket);
+		let opened = false;
+		socket.on('open', () => {
+			opened = true;
+			this._dialing.delete(socket);
+			console.log(`Successfully connected to peer: ${url}`);
+			this.connectSocket(socket);
+		});
+		socket.on('error', (error) => {
+			this._dialing.delete(socket);
+			this.connectedPeers.delete(url);
+			// connectSocket handles errors on established connections; close() cancels dials
+			if (opened || this._isClosing) return;
+			// Unreachable peers are routine (offline, wrong address): not an error
+			console.log(`Connection failed to peer: ${url} (${error.message})`);
+			onFail?.();
+		});
+		socket.on('close', () => {
+			this._dialing.delete(socket);
+			this.connectedPeers.delete(url);
+		});
+	}
+
+	/** Top outbound connections back up from known peers (runs with the peer broadcast). */
+	private _fillOutbound(): void {
+		for (const peer of this._knownPeers) {
+			if (this._countPeers(false) >= MAX_OUTBOUND_PEERS) break;
+			if (this._canDial(peer)) this._dial(peer);
+		}
+	}
+
+	/** Add misbehavior points; at BAN_SCORE the peer is disconnected and banned. */
+	private _misbehaving(socket: WebSocket, points: number, reason: string): void {
+		const state = this._peerState.get(socket);
+		if (!state || points <= 0) return;
+		state.score += points;
+		console.log(`Peer misbehaving (+${points}, score ${state.score}/${BAN_SCORE}): ${reason}`);
+		if (state.score < BAN_SCORE) return;
+		const key = this._banKey(socket, state);
+		this._banned.set(key, Date.now() + BAN_DURATION);
+		console.log(`Banning peer ${key} for ${BAN_DURATION / 3_600_000} h`);
+		const url = (socket as unknown as { url?: string }).url;
+		if (url && this._knownPeers.delete(this.normalizePeerUrl(url))) this._persistPeers();
+		socket.close(1008, 'misbehaving');
+	}
+
+	/**
+	 * What a ban applies to: the dialed URL for outbound peers, the IP for inbound ones. On
+	 * loopback (local test networks share 127.0.0.1) the inbound key includes the listen port.
+	 */
+	private _banKey(socket: WebSocket, state: PeerState): string {
+		const url = (socket as unknown as { url?: string }).url;
+		if (url) return this.normalizePeerUrl(url);
+		const ip = (state.remoteAddress ?? 'unknown').replace(/^::ffff:/, '');
+		return isLoopback(ip) ? `${ip}:${state.version?.listenPort ?? 0}` : ip;
+	}
+
+	/** A peer's block was rejected: misbehavior unless an honest peer could cause it. */
+	private _blockRejected(socket: WebSocket | undefined, error: Error): void {
+		if (BENIGN_BLOCK_ERRORS.some((benign) => error.message.includes(benign))) {
+			console.log('Block from peer not accepted:', error.message);
+			return;
+		}
+		console.error('Rejected invalid block from peer:', error.message);
+		if (socket) this._misbehaving(socket, 50, `invalid block (${error.message})`);
 	}
 
 	private connectSocket(socket: WebSocket, remoteAddress?: string): void {
@@ -247,6 +340,7 @@ export class P2PServer {
 					socket.close();
 				}
 			}, HANDSHAKE_TIMEOUT),
+			score: 0,
 		};
 		state.handshakeTimer?.unref?.(); // don't keep the process alive for it
 		this._peerState.set(socket, state);
@@ -258,10 +352,8 @@ export class P2PServer {
 
 		socket.on('close', () => {
 			this._forget(socket);
-			const s = socket as unknown as { url?: string; reconnecting?: boolean };
-			if (s.url && !s.reconnecting && !state.isSelf && !this._isClosing) {
-				void this.reconnectToPeer(s.url);
-			}
+			const url = (socket as unknown as { url?: string }).url;
+			if (url && !state.isSelf && !this._isClosing) this.reconnectToPeer(this.normalizePeerUrl(url));
 		});
 
 		this.logPeerConnection(socket as unknown as WebSocket);
@@ -299,42 +391,25 @@ export class P2PServer {
 		if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 	}
 
-	private async reconnectToPeer(
-		peer: string,
-		attempt: number = 1
-	): Promise<void> {
-		const maxAttempts = 10;
-		const baseDelay = 1000;
-
-		if (this._isClosing || this._ownAddresses.has(peer)) return;
-		if (attempt > maxAttempts) {
+	/**
+	 * Redial a lost outbound peer with capped exponential backoff. After MAX_RECONNECT_ATTEMPTS
+	 * the periodic outbound fill may still pick it up. Never redials banned peers or beyond
+	 * the outbound limit.
+	 */
+	private reconnectToPeer(peer: string, attempt: number = 1): void {
+		if (attempt > MAX_RECONNECT_ATTEMPTS) {
 			console.log(`Max reconnection attempts reached for peer: ${peer}`);
 			return;
 		}
-
-		const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000);
-
-		try {
-			await new Promise<void>((resolve) => setTimeout(resolve, delay));
-			if (this._isClosing) return;
-			const socket = new WebSocket(peer, { maxPayload: MAX_MESSAGE_BYTES });
-
-			// Mark socket as reconnecting
-			(socket as unknown as { reconnecting?: boolean }).reconnecting = true;
-
-			socket.on('open', () => {
-				(socket as unknown as { reconnecting?: boolean }).reconnecting = false;
-				this.connectSocket(socket);
-			});
-
-			socket.on('error', () => {
+		const delay = Math.min(RECONNECT_BASE_DELAY * 2 ** (attempt - 1), RECONNECT_MAX_DELAY);
+		const timer = setTimeout(() => {
+			if (!this._canDial(peer)) return;
+			this._dial(peer, () => {
 				console.log(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
-				void this.reconnectToPeer(peer, attempt + 1);
+				this.reconnectToPeer(peer, attempt + 1);
 			});
-		} catch (error) {
-			console.error(`Error reconnecting to peer: ${peer}`, error);
-			void this.reconnectToPeer(peer, attempt + 1);
-		}
+		}, delay);
+		timer.unref?.();
 	}
 
 	private logPeerConnection(socket: WebSocket): void {
@@ -361,11 +436,14 @@ export class P2PServer {
 			try {
 				const text = message instanceof Buffer ? message.toString() : String(message);
 				data = JSON.parse(text) as Message;
-			} catch (error) {
-				console.error('Error parsing message:', error);
+			} catch {
+				this._misbehaving(socket, 20, 'message is not JSON');
 				return;
 			}
-			if (typeof data !== 'object' || data === null) return;
+			if (typeof data !== 'object' || data === null) {
+				this._misbehaving(socket, 20, 'message is not an object');
+				return;
+			}
 
 			// Only the handshake is processed before it completes
 			if (data.type === MessageType.VERSION) {
@@ -398,7 +476,7 @@ export class P2PServer {
 					break;
 				}
 				case MessageType.PEERS:
-					this._handlePeersMessage(data.data);
+					this._handlePeersMessage(data.data, socket);
 					break;
 			}
 		});
@@ -426,6 +504,8 @@ export class P2PServer {
 			}
 			return reject('connected to ourselves');
 		}
+
+		if (this.isBanned(this._banKey(socket, { ...state, version: data }))) return reject('banned');
 
 		state.versionReceived = true;
 		this._rememberListenAddress(state, data.listenPort);
@@ -480,6 +560,7 @@ export class P2PServer {
 			locator.length > MAX_LOCATOR_HASHES ||
 			!locator.every((hash) => typeof hash === 'string' && HASH_PATTERN.test(hash))
 		) {
+			this._misbehaving(socket, 10, 'malformed GET_BLOCKS');
 			return;
 		}
 		// Up to SYNC_BATCH_SIZE blocks, and at most half the message limit in total
@@ -499,19 +580,26 @@ export class P2PServer {
 	private async _handleBlocks(socket: WebSocket, data: unknown): Promise<void> {
 		const payload = data as { blocks?: unknown; more?: unknown } | null;
 		if (!payload || !Array.isArray(payload.blocks) || payload.blocks.length > SYNC_BATCH_SIZE) {
+			this._misbehaving(socket, 20, 'malformed BLOCKS');
 			return;
 		}
 		let accepted = 0;
 		let lastHash: string | undefined;
 		for (const raw of payload.blocks) {
+			let block: Block;
 			try {
-				const block = Block.fromJSON(raw);
-				lastHash = block.hash;
-				if (this.blockchain.hasBlock(block.hash)) continue;
+				block = Block.fromJSON(raw);
+			} catch (error) {
+				this._misbehaving(socket, 50, (error as Error).message);
+				return;
+			}
+			lastHash = block.hash;
+			if (this.blockchain.hasBlock(block.hash)) continue;
+			try {
 				await this.blockchain.addMinedBlock(block);
 				accepted++;
 			} catch (error) {
-				console.error('Error syncing block from peer:', (error as Error).message);
+				this._blockRejected(socket, error as Error);
 				return; // stop at the first bad block; don't ask this peer for more
 			}
 		}
@@ -545,8 +633,15 @@ export class P2PServer {
 	}
 
 	private async handleBlockMessage(blockData: unknown, from?: WebSocket): Promise<void> {
+		let block: Block;
 		try {
-			const block = Block.fromJSON(blockData);
+			block = Block.fromJSON(blockData);
+		} catch (error) {
+			console.error('Error handling block message:', (error as Error).message);
+			if (from) this._misbehaving(from, 50, (error as Error).message);
+			return;
+		}
+		try {
 			// Ignore blocks seen recently or already known (e.g. our own block echoed back)
 			if (!this._markSeen(`b:${block.hash}`) || this.blockchain.hasBlock(block.hash)) return;
 			// Unknown parent: we are missing blocks; fetch them from this peer
@@ -560,20 +655,28 @@ export class P2PServer {
 			// Relay only accepted blocks, and not back to the sender
 			this.broadcast({ type: MessageType.BLOCK, data: block }, from);
 		} catch (error) {
-			console.error('Error handling block message:', error);
+			this._blockRejected(from, error as Error);
 		}
 	}
 
 	private async handleTransactionMessage(txData: unknown, from?: WebSocket): Promise<void> {
+		let transaction: Transaction;
 		try {
 			// fromJSON keeps every field, so the txid matches the sender's
-			const transaction = Transaction.fromJSON(txData);
+			transaction = Transaction.fromJSON(txData);
+		} catch (error) {
+			console.error('Error handling transaction message:', (error as Error).message);
+			if (from) this._misbehaving(from, 20, (error as Error).message);
+			return;
+		}
+		try {
 			if (!this._markSeen(`t:${transaction.calculateHash()}`)) return;
 			await this.blockchain.addTransaction(transaction);
 			// Relay only accepted transactions, and not back to the sender
 			this.broadcast({ type: MessageType.TRANSACTION, data: transaction }, from);
 		} catch (error) {
-			console.error('Error handling transaction message:', error);
+			// Policy rejections (fee, conflicts, behind on blocks) are normal: no points
+			console.log('Transaction not accepted:', (error as Error).message);
 		}
 	}
 
@@ -613,6 +716,7 @@ export class P2PServer {
 		if (this._peerBroadcastInterval) return;
 		this._peerBroadcastInterval = setInterval(() => {
 			this._broadcastPeerList();
+			this._fillOutbound();
 		}, PEER_BROADCAST_INTERVAL);
 	}
 
@@ -635,8 +739,11 @@ export class P2PServer {
 		this._send(socket, { type: MessageType.PEERS, data: peers });
 	}
 
-	private _handlePeersMessage(peerAddresses: unknown): void {
-		if (!Array.isArray(peerAddresses)) return;
+	private _handlePeersMessage(peerAddresses: unknown, from?: WebSocket): void {
+		if (!Array.isArray(peerAddresses)) {
+			if (from) this._misbehaving(from, 10, 'malformed PEERS');
+			return;
+		}
 
 		const newPeersToConnect: string[] = [];
 

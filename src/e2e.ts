@@ -162,6 +162,8 @@ async function main(): Promise<void> {
 		}
 		if (!harnessChain.isChainValid()) throw new Error('converged chain is not valid');
 		running.filter((node) => node.child.exitCode === null).forEach(noLoadErrors);
+		const penalizing = running.find((node) => /Peer misbehaving|Banning peer/.test(node.output()));
+		if (penalizing) throw new Error(`${penalizing.name} penalized an honest peer`);
 		const posBlocks = harnessChain.getChain().filter((block) => block.isProofOfStake()).length;
 		step(`PASS: height ${harnessChain.getLatestBlock().index}, ${posBlocks} PoS blocks`);
 	} catch (error) {

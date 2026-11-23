@@ -217,13 +217,14 @@ describe('P2PServer', () => {
 	});
 
 	// Add test for message parsing with proper message event
-	it('should handle message parsing errors', () => {
-		const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+	it('should count unparseable messages as misbehavior', () => {
+		const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
 		p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
 		mockSocket.emit('message', 'invalid-json');
 
-		expect(consoleSpy).toHaveBeenCalled();
+		expect(p2pServer['_peerState'].get(mockSocket as unknown as WebSocket)?.score).toBe(20);
+		expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Peer misbehaving (+20'));
 		consoleSpy.mockRestore();
 	});
 
@@ -456,7 +457,7 @@ describe('P2PServer', () => {
 			});
 			mockSocket.emit('message', peersMsg);
 
-			expect(handleSpy).toHaveBeenCalledWith(['ws://remote:5001']);
+			expect(handleSpy).toHaveBeenCalledWith(['ws://remote:5001'], mockSocket);
 			handleSpy.mockRestore();
 			reconnectSpy.mockRestore();
 		});

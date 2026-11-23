@@ -77,4 +77,4 @@ Run npm scripts from the repository root.
 - Never log or commit private keys, wallet files or the API token. `data/` is gitignored; `wallet.dat` and `api.cookie` are written with `0600` permissions (smoke checks the cookie's mode and that the token never appears in output).
 - Anything that spends from the node's wallet goes behind the API token (`route.wallet` in `ApiServer`).
 - Tests must use temp directories, never the default data dir (`~/Library/Application Support/blockchain-ts` on macOS, `~/.blockchain-ts` on Linux).
-- Treat all peer data as untrusted: type-guard every message before use.
+- Treat all peer data as untrusted: type-guard every message before use. Malformed or invalid peer data scores misbehavior (`P2PServer._misbehaving`; bans at `BAN_SCORE`). Rejections an honest peer can cause (races, clock skew, transaction policy) must not score; extend `BENIGN_BLOCK_ERRORS` if you add one. Outbound connections go through `_dial`/`_canDial` so the caps hold.

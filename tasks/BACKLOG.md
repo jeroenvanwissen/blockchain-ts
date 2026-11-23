@@ -53,7 +53,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0017](TASK-0017-wallet-send.md) | Wallet send and balance from chain state | done | P2 | medium | TASK-0005, TASK-0016 | old D4 |
 | [TASK-0018](TASK-0018-fees.md) | Transaction fees | done | P2 | medium | TASK-0006 | old E1 |
 | [TASK-0019](TASK-0019-mempool.md) | Mempool with conflict handling and revalidation | done | P2 | medium | TASK-0006, TASK-0012 | old E2, F-007 |
-| TASK-0020 | Peer limits and reconnect policy | pending | P2 | small | TASK-0013 | old E4 |
+| [TASK-0020](TASK-0020-peer-limits.md) | Peer limits and reconnect policy | done | P2 | small | TASK-0013 | old E4 |
 | [TASK-0021](TASK-0021-lint.md) | Fix lint errors and gate changes on build, test and lint | done | P2 | small | none | F-017 |
 | [TASK-0022](TASK-0022-dead-code.md) | Remove dead code and stale files | done | P2 | small | none | F-018, old F1 |
 | TASK-0023 | Leveled logging | pending | P3 | small | TASK-0002 | old F2 |
@@ -61,7 +61,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes for the later tasks (expand into task files when they're picked up):
 
-- **TASK-0020:** caps on inbound and outbound connections, capped backoff, and a misbehavior score that leads to a temporary ban.
 - **TASK-0023:** replace `console.*` with a small leveled logger (debug output off by default). Never log key material.
 - **TASK-0024:** passphrase-based key encryption (scrypt + AES-256-GCM) with an unlock step for staking.
 
@@ -93,7 +92,7 @@ The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/
 | E1 Transaction fees | done | TASK-0018 |
 | E2 Mempool | done | TASK-0019 |
 | E3 Miner integration | pending | TASK-0004 |
-| E4 Reconnect limiting | pending | TASK-0020 |
+| E4 Reconnect limiting | done | TASK-0020 |
 | E5 Self-connection | pending | TASK-0013 |
 | E6 Test coverage | pending | Replaced by TASK-0003 and TASK-0015 (targeted runtime tests rather than a coverage number). |
 | F1 Dead code and config | done | TASK-0022 |

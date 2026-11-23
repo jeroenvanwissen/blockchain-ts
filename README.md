@@ -19,7 +19,6 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- no caps on peer connections and no bans for misbehaving peers (TASK-0020);
 - wallet keys are stored unencrypted (TASK-0024).
 
 Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api).
@@ -157,6 +156,8 @@ Key constants in `src/config.ts`:
 | `MAX_BLOCK_SIZE`                | 1 MB    | Largest valid block (header, signature, transactions) |
 | `MAX_BLOCK_TRANSACTIONS`        | 1000    | Most transactions per block, coinbase included |
 | `MAX_MEMPOOL_BYTES`             | 8 MB    | Pending transactions beyond this evict the lowest fee rates |
+| `MAX_INBOUND_PEERS` / `MAX_OUTBOUND_PEERS` | 32 / 8 | Connection caps; extra known peers wait for a free slot |
+| `BAN_SCORE` / `BAN_DURATION`    | 100 / 24 h | Misbehavior points that get a peer banned, and for how long |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
 | `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
@@ -306,6 +307,8 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | `BLOCK`       | Broadcast | New or newly synced tip block; relayed once accepted, never back to the sender. An unknown parent triggers `GET_BLOCKS` to that peer |
 | `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender |
 | `PEERS`       | Broadcast | Known peer addresses (discovery) |
+
+A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up from known peers every minute. Lost peers are redialed with doubling delays capped at 60 s. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback).
 
 ---
 
