@@ -286,7 +286,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | -------- | ------- |
 | `GET /status` | Network id, height, tip hash, chain work, phase (`pow`/`pos`), median time past, mempool size, peer count |
 | `GET /blocks/:heightOrHash` | The block (header, signature, transactions), whether it is on the active chain, confirmations. Side-branch blocks are found by hash |
-| `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations; `block: null` while in the mempool. Scans the chain (no transaction index yet) |
+| `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations; `block: null` while in the mempool (indexed lookup on the active chain) |
 | `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs |
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Number and total size of pending transactions, and their txids |

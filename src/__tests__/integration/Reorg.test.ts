@@ -148,6 +148,30 @@ describe('Block tree and reorganizations', () => {
 		expect(chain.isChainValid()).toBe(true);
 	});
 
+	it('should keep the transaction index on the active chain through reorgs and restarts', async () => {
+		const { prefix, payment } = await activeBranchWithPayment();
+		const txid = payment.calculateHash();
+		const confirmedIn = chain.findTransaction(txid)?.block?.hash;
+		expect(chain.getChain().map((block) => block.hash)).toContain(confirmedIn);
+		const branchA = [...chain.getChain()];
+
+		const branchB = extend(prefix, b, 3);
+		advanceTime(SPACING * 10);
+		for (const block of branchB.slice(prefix.length)) await chain.addMinedBlock(block);
+		expect(chain.findTransaction(txid)?.block).toBeNull(); // back in the mempool
+		const coinbaseB = branchB[prefix.length].transactions[0].calculateHash();
+		expect(chain.findTransaction(coinbaseB)?.block?.hash).toBe(branchB[prefix.length].hash);
+
+		const longerA = extend(branchA, a, 2);
+		for (const block of longerA.slice(branchA.length)) await chain.addMinedBlock(block);
+		expect(chain.findTransaction(txid)?.block?.hash).toBe(confirmedIn);
+		expect(chain.findTransaction(coinbaseB)).toBeUndefined(); // on the abandoned branch
+
+		const reopened = openChain(dir);
+		expect(reopened.findTransaction(txid)?.block?.hash).toBe(confirmedIn);
+		expect(reopened.findTransaction(coinbaseB)).toBeUndefined();
+	});
+
 	it('should restore the active tip after a restart, with side branches on disk', async () => {
 		const { prefix } = await activeBranchWithPayment();
 		const sideTip = chain.getLatestBlock().hash;

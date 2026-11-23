@@ -84,6 +84,7 @@ export class Blockchain {
 	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
 	private _index = new Map<string, IndexEntry>(); // every known block, by hash
 	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
+	private _txIndex = new Map<string, string>(); // txid → hash of the active block that contains it
 	private _mempool!: Mempool;
 	// Witness hashes (data, keys and signatures) already verified, oldest first: signatures never
 	// change, so revalidating the mempool on each new tip and connecting blocks of transactions
@@ -109,6 +110,7 @@ export class Blockchain {
 		const genesisBlock = this.createGenesisBlock();
 		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
 		this.chain = [genesisBlock];
+		this._indexTransactions(genesisBlock, true);
 		this._mempool = new Mempool(this._options.maxMempoolBytes);
 
 		// Initialize UTXO set and block index with the genesis block
@@ -487,12 +489,23 @@ export class Blockchain {
 		this._modifiers.push(modifier);
 		this._undo.set(block.hash, undo);
 		this.chain.push(block);
+		this._indexTransactions(block, true);
 		this.lastBlockTime = block.timestamp;
+	}
+
+	/** Add a newly active block's transactions to the txid index, or remove a disconnected one's. */
+	private _indexTransactions(block: Block, add: boolean): void {
+		for (const tx of block.transactions) {
+			const txid = tx.calculateHash();
+			if (add) this._txIndex.set(txid, block.hash);
+			else if (this._txIndex.get(txid) === block.hash) this._txIndex.delete(txid);
+		}
 	}
 
 	/** Undo the active tip: remove the outputs it created and restore the ones it spent. */
 	private _disconnectTip(): Block {
 		const block = this.chain.pop()!;
+		this._indexTransactions(block, false);
 		this._modifiers.pop();
 		for (const tx of block.transactions) {
 			const txHash = tx.calculateHash();
@@ -697,19 +710,14 @@ export class Blockchain {
 		return entry && { block: entry.block, height: entry.height, isActive: this._isActive(entry) };
 	}
 
-	/**
-	 * A transaction on the active chain (with its block) or in the mempool (block null).
-	 * Scans the chain from the tip: there is no transaction index yet.
-	 */
+	/** A transaction on the active chain (with its block) or in the mempool (block null). */
 	public findTransaction(txid: string): { transaction: Transaction; block: Block | null } | undefined {
 		const pending = this._mempool.get(txid);
 		if (pending) return { transaction: pending.transaction, block: null };
-		for (let height = this.chain.length - 1; height >= 0; height--) {
-			const block = this.chain[height];
-			const transaction = block.transactions.find((tx) => tx.calculateHash() === txid);
-			if (transaction) return { transaction, block };
-		}
-		return undefined;
+		const blockHash = this._txIndex.get(txid);
+		const block = blockHash === undefined ? undefined : this._index.get(blockHash)?.block;
+		const transaction = block?.transactions.find((tx) => tx.calculateHash() === txid);
+		return block && transaction ? { transaction, block } : undefined;
 	}
 
 	/**
@@ -1101,6 +1109,8 @@ export class Blockchain {
 				try {
 					const state = this._replayChain(branch);
 					this.chain = branch;
+					this._txIndex = new Map();
+					for (const block of branch) this._indexTransactions(block, true);
 					this._utxos = state.utxos;
 					this._modifiers = state.modifiers;
 					this._undo = new Map(branch.map((block, i) => [block.hash, state.undo[i]]));
