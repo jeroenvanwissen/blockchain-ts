@@ -1,12 +1,16 @@
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
+import { ApiServer } from './api/ApiServer.js';
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
 import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
 import {
+	API_HOST,
+	API_PORT,
 	DATA_DIR,
+	NETWORK_MAGIC,
 	P2P_PORT,
 	PEER_DATA_PATH,
 	REGTEST_NETWORK_MAGIC,
@@ -59,13 +63,16 @@ const wallet = new Wallet();
 console.log('Wallet initialized with address:', wallet.address);
 
 // Create P2P server
-const p2pServer = new P2PServer(
-	blockchain,
-	P2P_PORT,
-	PEER_DATA_PATH,
-	isRegtest ? { networkMagic: REGTEST_NETWORK_MAGIC } : {},
-);
+const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
+const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic });
 if (isRegtest) console.log('Regtest network');
+
+// Read-only HTTP API (loopback by default)
+const api = new ApiServer(blockchain, p2pServer, { host: API_HOST, port: API_PORT, network: networkMagic });
+api
+	.listen()
+	.then(() => console.log(`API listening on http://${API_HOST}:${api.port()}`))
+	.catch((error: Error) => console.error(`[API] could not listen on ${API_HOST}:${API_PORT}:`, error.message));
 
 
 // Start P2P server
@@ -118,4 +125,4 @@ process.on('SIGINT', () => {
 });
 
 // Export for testing
-export { blockchain, p2pServer, wallet, miner, staking };
+export { api, blockchain, p2pServer, wallet, miner, staking };

@@ -19,7 +19,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- no API or CLI yet to send coins or inspect the chain (TASK-0016, TASK-0017).
+- no way yet to send coins from a node's wallet (TASK-0017). The [HTTP API](#http-api) is read-only.
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
@@ -104,6 +104,8 @@ src/
 ├── networking/
 │   ├── P2PServer.ts          # Handshake, block sync, relay, peer discovery
 │   └── __tests__/            # Unit tests
+├── api/
+│   └── ApiServer.ts          # Read-only HTTP API (loopback by default)
 ├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Node entry point
@@ -124,6 +126,7 @@ src/
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
+| **API Server**     | `ApiServer.ts`        | Read-only HTTP API over chain state, mempool, peers  |
 
 ---
 
@@ -134,6 +137,8 @@ Key constants in `src/config.ts`:
 | Setting                         | Default | Description                                    |
 | ------------------------------- | ------- | ---------------------------------------------- |
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
+| `API_PORT`                      | P2P port + 1000 | HTTP API port (env: `API_PORT`; `0` picks a free port) |
+| `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
 | `POW_CUTOFF_BLOCK`              | 100     | Last PoW height; PoS from the next block       |
 | `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake           |
 | `STAKE_MIN_CONFIRMATIONS`       | 10      | Confirmations a UTXO needs before it can stake |
@@ -236,6 +241,29 @@ const balance = blockchain.getBalance(wallet.address);
 
 ---
 
+## HTTP API
+
+Every node serves a read-only JSON API, on `127.0.0.1` at the P2P port + 1000 (6001 by default, 6002 for a node with `P2P_PORT=5002`). Set `API_HOST` to expose it on other interfaces; it has no authentication. Amounts are decimal strings in base units (`COIN` = 10^8).
+
+| Endpoint | Returns |
+| -------- | ------- |
+| `GET /status` | Network id, height, tip hash, chain work, phase (`pow`/`pos`), median time past, mempool size, peer count |
+| `GET /blocks/:heightOrHash` | The block (header, signature, transactions), whether it is on the active chain, confirmations. Side-branch blocks are found by hash |
+| `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations; `block: null` while in the mempool. Scans the chain (no transaction index yet) |
+| `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs |
+| `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
+| `GET /mempool` | Pending txids |
+| `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
+
+```bash
+curl -s localhost:6001/status
+curl -s localhost:6001/blocks/1
+```
+
+Malformed parameters return 400, unknown items 404 and other methods 405, each with an `error` field.
+
+---
+
 ## P2P Message Protocol
 
 JSON over WebSocket. Every connection starts with a handshake; other messages are ignored until it completes.
@@ -282,6 +310,7 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |
 | Start 2nd node    | `P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001` |
+| Node status       | `curl -s localhost:6001/status`                               |
 
 ---
 
@@ -298,6 +327,8 @@ Block and transaction formats change while the project is pre-release, and each 
 lsof -i :5001
 kill -9 <PID>
 ```
+
+If only the API port (P2P port + 1000) is taken, the node keeps running without the API and logs `[API] could not listen on ...`. Set `API_PORT` to another port.
 
 ### Node Can't Connect to Peers
 

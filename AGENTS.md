@@ -5,6 +5,7 @@
 A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, WebSocket peers, protobuf block storage. **It doesn't work end to end yet.** See [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) for what is broken and [tasks/BACKLOG.md](tasks/BACKLOG.md) for the plan.
 
 - `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts` (in-node staking loop, enabled with `--stake`)
+- `src/api/ApiServer.ts`: read-only HTTP API (`/status`, `/blocks/:heightOrHash`, `/transactions/:txid`, `/addresses/:address[/utxos]`, `/mempool`, `/peers`); `listen()`/`close()`, port 0 supported
 - `src/networking/P2PServer.ts`: WebSocket peers: VERSION/VERACK handshake, locator-based sync (`GET_BLOCKS`/`BLOCKS`), block and transaction broadcast, peer discovery. `listen()` resolves when listening; `close()` stops everything (integration tests run real nodes in-process, see `Sync.test.ts`)
 - `src/config.ts`: all constants and the data-dir and port settings
 - `src/index.ts`: node entry point (`--data-dir`, `--peers`, `--mine`, `--stake`); `src/smoke.ts`: runtime smoke check
@@ -28,7 +29,7 @@ Run npm scripts from the repository root.
 - End-to-end: `npm run e2e` (three `--regtest` node processes plus an in-process harness peer: payment, PoW→PoS, both A and C staking, partition and reorg, restart, convergence; about 2 minutes; prints each node's tip and last log lines on failure). Run it for changes to consensus, P2P or staking
 - Lint: `npm run lint` (must pass; ignores the generated `dist/` and `coverage/`)
 - Standard check: `npm run check` (build, test, lint)
-- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. `--regtest` selects the regression-test network (own network id, 20 PoW blocks, no minimum stake age). Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
+- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. `--regtest` selects the regression-test network (own network id, 20 PoW blocks, no minimum stake age). Port comes from the `P2P_PORT` env var (default 5001). The HTTP API listens on `API_HOST` (default `127.0.0.1`) and `API_PORT` (default P2P port + 1000; `0` picks a free port and logs it). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
 ## Conventions
 

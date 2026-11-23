@@ -6,6 +6,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 export const READY = /P2P Server listening/;
+export const API_READY = /API listening on (http:\/\/\S+)/;
 export const TIMEOUT_MS = 30_000;
 
 const SELF = fileURLToPath(import.meta.url);
@@ -43,7 +44,8 @@ export function startNode(
 	const args = ['--import', TSX_LOADER, ENTRY, '--data-dir', dataDir, ...extraArgs];
 	const child = spawn(process.execPath, args, {
 		cwd,
-		env: { ...process.env, P2P_PORT: String(port), SEED_NODES: '' },
+		// API_PORT=0: the node picks a free API port and logs it (see apiUrl)
+		env: { ...process.env, P2P_PORT: String(port), API_PORT: '0', SEED_NODES: '' },
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 	let buffer = '';
@@ -91,6 +93,20 @@ export async function stopNode(node: NodeProcess): Promise<void> {
 	const timer = setTimeout(() => node.child.kill('SIGKILL'), 5_000);
 	await node.exited;
 	clearTimeout(timer);
+}
+
+/** Base URL of the node's HTTP API, from its startup log. */
+export function apiUrl(node: NodeProcess): string {
+	const match = node.output().match(API_READY);
+	if (!match) throw new Error(`${node.name}: API not listening yet`);
+	return match[1];
+}
+
+/** GET a path from the node's API; throws on a non-2xx status. */
+export async function apiGet<T>(node: NodeProcess, path: string): Promise<T> {
+	const res = await fetch(`${apiUrl(node)}${path}`, { signal: AbortSignal.timeout(5_000) });
+	if (!res.ok) throw new Error(`${node.name}: GET ${path} returned ${res.status}`);
+	return (await res.json()) as T;
 }
 
 export function walletAddress(node: NodeProcess): string {

@@ -9,26 +9,23 @@
 //   4. C is partitioned (restarted on a new port with no peers) and stakes alone.
 //   5. C reconnects: one side reorganizes and all tips converge.
 //   6. A restarts and the network converges again.
-// Node tips are read from their VERSION handshake message.
-import * as crypto from 'crypto';
-import { once } from 'events';
+// Node tips and balances are read from each node's HTTP API.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import WebSocket from 'ws';
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Transaction } from './blockchain/Transaction.js';
 import { Wallet } from './blockchain/Wallet.js';
 import {
 	COIN,
 	COIN_MATURITY,
-	PROTOCOL_VERSION,
 	REGTEST_NETWORK_MAGIC,
 	REGTEST_POW_CUTOFF_BLOCK,
 	REGTEST_STAKE_MIN_AGE,
 } from './config.js';
-import { MessageType, P2PServer } from './networking/P2PServer.js';
+import { P2PServer } from './networking/P2PServer.js';
 import {
+	apiGet,
 	freePort,
 	lastLines,
 	noLoadErrors,
@@ -46,41 +43,7 @@ const PAYMENT_OUTPUTS = 12; // 1 coin each
 
 const step = (message: string) => console.log(`[e2e] ${message}`);
 
-/** Height and tip a node advertises in its VERSION message. */
-async function queryTip(port: number, genesisHash: string): Promise<{ height: number; tip: string }> {
-	const socket = new WebSocket(`ws://127.0.0.1:${port}`);
-	// Listen before the socket opens: the node sends its VERSION immediately
-	const version = new Promise<{ height: number; tip: string }>((resolve, reject) => {
-		socket.on('message', (raw: Buffer) => {
-			const message = JSON.parse(raw.toString()) as { type: string; data: { height: number; tip: string } };
-			if (message.type === (MessageType.VERSION as string)) resolve(message.data);
-		});
-		socket.once('error', reject);
-		socket.once('close', () => reject(new Error('closed before VERSION')));
-		setTimeout(() => reject(new Error('no VERSION')), 5_000).unref();
-	});
-	try {
-		await once(socket, 'open');
-		socket.send(
-			JSON.stringify({
-				type: MessageType.VERSION,
-				data: {
-					magic: REGTEST_NETWORK_MAGIC,
-					version: PROTOCOL_VERSION,
-					genesisHash,
-					height: 0,
-					tip: genesisHash,
-					nonce: crypto.randomBytes(8).toString('hex'),
-					listenPort: 0,
-				},
-			}),
-		);
-		const { height, tip } = await version;
-		return { height, tip };
-	} finally {
-		socket.terminate();
-	}
-}
+const status = (node: NodeProcess) => apiGet<{ height: number; tip: string }>(node, '/status');
 
 function countMatches(node: NodeProcess, pattern: RegExp): number {
 	return [...node.output().matchAll(new RegExp(pattern.source, 'g'))].length;
@@ -108,12 +71,11 @@ async function main(): Promise<void> {
 		powCutoffBlock: REGTEST_POW_CUTOFF_BLOCK,
 		minStakeAge: REGTEST_STAKE_MIN_AGE,
 	});
-	const genesis = harnessChain.getChain()[0].hash;
 	const harness = new P2PServer(harnessChain, await freePort(), path.join(dirs.h, 'peers.json'), {
 		networkMagic: REGTEST_NETWORK_MAGIC,
 	});
 	const tipsOf = async (nodes: NodeProcess[]) =>
-		Promise.all(nodes.map((node) => queryTip(node.port, genesis).then((t) => t.tip)));
+		Promise.all(nodes.map((node) => status(node).then((s) => s.tip)));
 	/** All nodes report the same tip; a node that can't be queried (restarting) counts as no. */
 	const agree = async (nodes: NodeProcess[]) => {
 		try {
@@ -199,6 +161,8 @@ async function main(): Promise<void> {
 		);
 		if (!isConfirmed()) throw new Error('payment not in the converged chain');
 		if (harnessChain.getBalance(addressC) < BigInt(PAYMENT_OUTPUTS) * COIN) throw new Error('C lost its payment');
+		const balanceC = await apiGet<{ balance: string }>(nodeC, `/addresses/${addressC}`);
+		if (BigInt(balanceC.balance) < BigInt(PAYMENT_OUTPUTS) * COIN) throw new Error("C's API reports less than its payment");
 		if (!harnessChain.isChainValid()) throw new Error('converged chain is not valid');
 		running.filter((node) => node.child.exitCode === null).forEach(noLoadErrors);
 		const posBlocks = harnessChain.getChain().filter((block) => block.isProofOfStake()).length;
@@ -206,7 +170,7 @@ async function main(): Promise<void> {
 	} catch (error) {
 		console.error(`[e2e] FAIL: ${(error as Error).message}`);
 		for (const node of running.filter((n) => n.child.exitCode === null)) {
-			const tip = await queryTip(node.port, genesis).catch(() => undefined);
+			const tip = await status(node).catch(() => undefined);
 			console.error(`\n----- ${node.name}: height ${tip?.height ?? '?'}, tip ${tip?.tip.slice(0, 16) ?? '?'} -----`);
 			console.error(lastLines(node));
 		}

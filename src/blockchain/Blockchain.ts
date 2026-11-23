@@ -123,6 +123,16 @@ export class Blockchain {
 		return this._utxos.forAddress(address);
 	}
 
+	/** Outputs of `address` a new transaction can spend now: mature and not claimed by the mempool. */
+	public getSpendableUTXOs(address: string): UTXO[] {
+		const height = this.chain.length;
+		return this.getUTXOs(address).filter(
+			(utxo) =>
+				!this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex)) &&
+				this._isMature(utxo, height),
+		);
+	}
+
 	public canAcceptPowBlock(): boolean {
 		return this.chain.length <= this._options.powCutoffBlock;
 	}
@@ -604,6 +614,27 @@ export class Blockchain {
 		return this._index.has(hash);
 	}
 
+	/** A known block by hash, with its height and whether it is on the active chain. */
+	public getBlockByHash(hash: string): { block: Block; height: number; isActive: boolean } | undefined {
+		const entry = this._index.get(hash);
+		return entry && { block: entry.block, height: entry.height, isActive: this._isActive(entry) };
+	}
+
+	/**
+	 * A transaction on the active chain (with its block) or in the mempool (block null).
+	 * Scans the chain from the tip: there is no transaction index yet.
+	 */
+	public findTransaction(txid: string): { transaction: Transaction; block: Block | null } | undefined {
+		const pending = this.pendingTransactions.find((tx) => tx.calculateHash() === txid);
+		if (pending) return { transaction: pending, block: null };
+		for (let height = this.chain.length - 1; height >= 0; height--) {
+			const block = this.chain[height];
+			const transaction = block.transactions.find((tx) => tx.calculateHash() === txid);
+			if (transaction) return { transaction, block };
+		}
+		return undefined;
+	}
+
 	/**
 	 * Block locator for sync: active-chain hashes from the tip back, one per block for the first
 	 * ten, then exponentially sparser, ending with genesis.
@@ -685,19 +716,10 @@ export class Blockchain {
 			throw new Error('invalid recipient address');
 		}
 
-		const utxos = this.getUTXOs(from);
 		let inputSum = 0n;
 		const inputs: TxInput[] = [];
 
-		for (const utxo of utxos) {
-			// Skip UTXOs already claimed by pending transactions
-			if (this._pendingUTXOSpends.has(outpointKey(utxo.txHash, utxo.outputIndex))) {
-				continue;
-			}
-			// Skip immature coinbase and coinstake UTXOs
-			if (!this._isMature(utxo, this.chain.length)) {
-				continue;
-			}
+		for (const utxo of this.getSpendableUTXOs(from)) {
 			inputSum += utxo.output.amount;
 			inputs.push({
 				previousTx: utxo.txHash,

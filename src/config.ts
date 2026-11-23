@@ -45,6 +45,14 @@ export const P2P_PORT = process.env.P2P_PORT
 	? parseInt(process.env.P2P_PORT)
 	: DEFAULT_P2P_PORT;
 
+// Local HTTP API (TASK-0016): read-only; loopback unless API_HOST says otherwise.
+// API_PORT=0 lets the OS pick a free port (logged at startup).
+export const API_PORT_OFFSET = 1000; // default API port = P2P port + this
+export const API_HOST = process.env.API_HOST || '127.0.0.1';
+export const API_PORT = process.env.API_PORT
+	? parseInt(process.env.API_PORT)
+	: P2P_PORT + API_PORT_OFFSET;
+
 // Peer protocol (TASK-0013)
 export const NETWORK_MAGIC = 'blockchain-ts/devnet'; // peers on another network are dropped
 export const PROTOCOL_VERSION = 1;

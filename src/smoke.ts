@@ -1,12 +1,15 @@
 // Smoke check against the real runtime (native ESM, real filesystem, real protobuf).
 // From an unrelated working directory and temp data dirs: node A mines, node B syncs from it
-// and accepts A's next block live, then A restarts and keeps its chain. A fresh chain mines
+// and accepts A's next block live, both answer over the HTTP API, then A restarts and keeps
+// its chain. A fresh chain mines
 // quickly until the retarget catches up, so heights are read from the logs, not assumed.
 // Run with `npm run smoke`; --keep keeps the temp dir.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+	API_READY,
+	apiGet,
 	freePort,
 	lastLines,
 	noLoadErrors,
@@ -81,6 +84,15 @@ async function main(): Promise<void> {
 			NEXT_BLOCK_TIMEOUT_MS,
 		);
 		assertMined(nodeA, relayedHeight, relayedHash);
+
+		step('query both nodes over the HTTP API');
+		await waitFor(nodeA, API_READY, 'API');
+		await waitFor(nodeB, API_READY, 'API');
+		const statusB = await apiGet<{ height: number; tip: string }>(nodeB, '/status');
+		const blockA = await apiGet<{ hash: string }>(nodeA, `/blocks/${statusB.height}`);
+		if (blockA.hash !== statusB.tip) throw new Error("B's tip is not A's block at that height");
+		const balance = await apiGet<{ balance: string }>(nodeA, `/addresses/${address}`);
+		if (BigInt(balance.balance) <= 0n) throw new Error("A's API reports no mining rewards");
 
 		step('restart node A without mining; expect the same chain and wallet');
 		await stopNode(nodeB);

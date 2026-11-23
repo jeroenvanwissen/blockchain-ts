@@ -79,3 +79,37 @@ describe('getDefaultDataDir', () => {
 		);
 	});
 });
+
+describe('API settings', () => {
+	const savedEnv = process.env;
+
+	afterEach(() => {
+		process.env = savedEnv;
+	});
+
+	function loadConfig(env: Record<string, string>): typeof import('../config.js') {
+		process.env = { ...savedEnv, ...env };
+		delete process.env.API_HOST;
+		delete process.env.API_PORT;
+		Object.assign(process.env, env);
+		let config!: typeof import('../config.js');
+		jest.isolateModules(() => {
+			config = jest.requireActual<typeof import('../config.js')>('../config.js');
+		});
+		return config;
+	}
+
+	it('should listen on loopback, on the P2P port + 1000, by default', () => {
+		const config = loadConfig({ P2P_PORT: '5002' });
+
+		expect(config.API_HOST).toBe('127.0.0.1');
+		expect(config.API_PORT).toBe(6002);
+	});
+
+	it('should take the host and port from the environment', () => {
+		const config = loadConfig({ API_HOST: '0.0.0.0', API_PORT: '0' });
+
+		expect(config.API_HOST).toBe('0.0.0.0');
+		expect(config.API_PORT).toBe(0);
+	});
+});

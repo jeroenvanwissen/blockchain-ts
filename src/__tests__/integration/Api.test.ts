@@ -1,0 +1,194 @@
+// Read-only HTTP API (TASK-0016) against a real chain over real HTTP. Difficulty validation is
+// off so blocks build instantly; real timers (fetch needs them).
+import { ApiServer } from '../../api/ApiServer.js';
+import { Block } from '../../blockchain/Block.js';
+import type { Blockchain } from '../../blockchain/Blockchain.js';
+import { Transaction } from '../../blockchain/Transaction.js';
+import type { Wallet } from '../../blockchain/Wallet.js';
+import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
+import type { PeerInfo } from '../../networking/P2PServer.js';
+import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js';
+
+const OPTIONS = { validateDifficulty: false, powCutoffBlock: 1000 };
+const SPACING = 30_000;
+
+/** Append `count` blocks (with the mempool) 30 s apart. */
+async function buildBlocks(chain: Blockchain, miner: string, count: number): Promise<void> {
+	for (let i = 0; i < count; i++) {
+		const block = chain.createBlockTemplate(miner, chain.getLatestBlock().timestamp + SPACING);
+		block.solve();
+		await chain.addMinedBlock(block);
+	}
+}
+
+describe('HTTP API', () => {
+	let dir: string;
+	let chain: Blockchain;
+	let miner: Wallet;
+	let api: ApiServer;
+	let peers: PeerInfo[];
+
+	async function get(path: string, init?: RequestInit) {
+		const res = await fetch(`http://127.0.0.1:${api.port()}${path}`, init);
+		return { status: res.status, headers: res.headers, body: (await res.json()) as Record<string, unknown> };
+	}
+
+	beforeEach(async () => {
+		jest.spyOn(console, 'log').mockImplementation(() => {});
+		dir = makeTempDir();
+		chain = openChain(dir, OPTIONS);
+		miner = openWallet(dir, 'miner');
+		await buildBlocks(chain, miner.address, COIN_MATURITY + 2);
+		peers = [];
+		api = new ApiServer(chain, { getPeerInfo: () => peers }, { host: '127.0.0.1', port: 0, network: 'test-net' });
+		await api.listen();
+	});
+
+	afterEach(async () => {
+		await api.close();
+		removeTempDir(dir);
+		jest.restoreAllMocks();
+	});
+
+	it('should report the chain status', async () => {
+		peers.push({ address: 'ws://127.0.0.1:5002', inbound: false, startHeight: 3 });
+
+		const { status, body } = await get('/status');
+
+		expect(status).toBe(200);
+		expect(body).toEqual({
+			network: 'test-net',
+			height: COIN_MATURITY + 2,
+			tip: chain.getLatestBlock().hash,
+			work: chain.getChainWeight().toString(),
+			phase: 'pow',
+			medianTimePast: chain.getMedianTimePast(),
+			mempool: 0,
+			peers: 1,
+		});
+		expect((await get('/peers')).body).toEqual(peers);
+	});
+
+	it('should return a block by height or hash, including side branches', async () => {
+		const block = chain.getChain()[3];
+
+		const byHeight = await get('/blocks/3');
+		const byHash = await get(`/blocks/${block.hash}`);
+
+		expect(byHeight.body).toEqual(byHash.body);
+		expect(byHeight.body).toMatchObject({
+			hash: block.hash,
+			index: 3,
+			proofOfStake: false,
+			active: true,
+			confirmations: COIN_MATURITY + 2 - 3 + 1,
+		});
+		const [coinbase] = byHeight.body.transactions as { outputs: { amount: string }[] }[];
+		expect(coinbase.outputs[0].amount).toBe(POW_BLOCK_REWARD.toString()); // decimal string
+
+		// A block on the tip's grandparent with the same bits as the block it competes with:
+		// less work than the tip, so it stays a side branch
+		const branch = chain.getChain().slice(0, -2);
+		const parent = branch[branch.length - 1];
+		const timestamp = parent.timestamp + SPACING + 1;
+		const side = new Block(
+			timestamp,
+			[Transaction.coinbase(miner.address, POW_BLOCK_REWARD, branch.length, timestamp)],
+			parent.hash,
+			0,
+			chain.getChain()[branch.length].bits,
+			branch.length,
+		);
+		side.solve();
+		await expect(chain.addMinedBlock(side)).resolves.toBe('side');
+		expect((await get(`/blocks/${side.hash}`)).body).toMatchObject({ active: false, confirmations: 0 });
+	});
+
+	it('should return a transaction from the mempool and then from its block', async () => {
+		const recipient = openWallet(dir, 'recipient');
+		const payment = chain.createTransaction(miner.address, recipient.address, COIN, miner);
+		await chain.addTransaction(payment);
+		const txid = payment.calculateHash();
+
+		const pending = await get(`/transactions/${txid}`);
+		expect(pending.body).toMatchObject({ txid, block: null, height: null, confirmations: 0 });
+		expect((pending.body.outputs as { amount: string }[])[0]).toEqual({
+			address: recipient.address,
+			amount: COIN.toString(),
+		});
+		expect((await get('/mempool')).body).toEqual({ size: 1, txids: [txid] });
+
+		await buildBlocks(chain, miner.address, 1);
+
+		const confirmed = await get(`/transactions/${txid}`);
+		expect(confirmed.body).toMatchObject({
+			txid,
+			block: chain.getLatestBlock().hash,
+			height: chain.getLatestBlock().index,
+			confirmations: 1,
+		});
+		expect((await get('/mempool')).body).toEqual({ size: 0, txids: [] });
+	});
+
+	it('should report balances and outputs, separating immature coinbases', async () => {
+		const recipient = openWallet(dir, 'recipient');
+		await chain.addTransaction(chain.createTransaction(miner.address, recipient.address, COIN, miner));
+		await buildBlocks(chain, miner.address, 1);
+
+		expect((await get(`/addresses/${recipient.address}`)).body).toEqual({
+			address: recipient.address,
+			balance: COIN.toString(),
+			spendable: COIN.toString(),
+			utxos: 1,
+		});
+
+		const summary = (await get(`/addresses/${miner.address}`)).body;
+		const utxos = (await get(`/addresses/${miner.address}/utxos`)).body as unknown as {
+			amount: string;
+			coinbase: boolean;
+			spendable: boolean;
+			confirmations: number;
+		}[];
+		const total = (filter: (u: (typeof utxos)[number]) => boolean) =>
+			utxos.filter(filter).reduce((sum, u) => sum + BigInt(u.amount), 0n).toString();
+		expect(summary.utxos).toBe(utxos.length);
+		expect(summary.balance).toBe(total(() => true));
+		expect(summary.spendable).toBe(total((u) => u.spendable));
+		// The newest coinbases haven't matured (spendable from COIN_MATURITY confirmations)
+		const immature = utxos.filter((u) => u.coinbase && u.confirmations < COIN_MATURITY);
+		expect(immature.length).toBeGreaterThan(0);
+		expect(immature.every((u) => !u.spendable)).toBe(true);
+	});
+
+	it('should reject listen() when the port is taken, so the node can carry on without it', async () => {
+		const second = new ApiServer(chain, { getPeerInfo: () => [] }, { host: '127.0.0.1', port: api.port(), network: 'x' });
+
+		await expect(second.listen()).rejects.toThrow('EADDRINUSE');
+		await second.close();
+		expect((await get('/status')).status).toBe(200); // the first one still serves
+	});
+
+	it('should reject malformed input, unknown items and other methods', async () => {
+		const unknownHash = 'ab'.repeat(32);
+		const cases: [string, number][] = [
+			['/blocks/xyz', 400],
+			['/blocks/-1', 400],
+			[`/blocks/${unknownHash}`, 404],
+			['/blocks/999999', 404],
+			['/transactions/1234', 400],
+			[`/transactions/${unknownHash}`, 404],
+			['/addresses/not-an-address', 400],
+			[`/addresses/${'1'.repeat(5000)}`, 400],
+			['/nope', 404],
+		];
+		for (const [path, expected] of cases) {
+			const { status, body } = await get(path);
+			expect({ path, status }).toEqual({ path, status: expected });
+			expect(typeof body.error).toBe('string');
+		}
+
+		const post = await get('/status', { method: 'POST' });
+		expect(post.status).toBe(405);
+		expect(post.headers.get('allow')).toBe('GET');
+	});
+});

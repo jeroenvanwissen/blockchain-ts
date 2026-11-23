@@ -56,6 +56,13 @@ interface PeerState {
 	handshakeTimer: NodeJS.Timeout | null;
 }
 
+/** A connected peer that completed the handshake (for the API). */
+export interface PeerInfo {
+	address: string; // outbound: the URL we dialed; inbound: remote IP, plus its listen port if known
+	inbound: boolean;
+	startHeight: number; // height in the peer's VERSION
+}
+
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 function isVersionPayload(data: unknown): data is VersionPayload {
@@ -667,5 +674,19 @@ export class P2PServer {
 
 	getSockets(): WebSocket[] {
 		return this.sockets;
+	}
+
+	getPeerInfo(): PeerInfo[] {
+		const peers: PeerInfo[] = [];
+		for (const socket of this.sockets) {
+			const state = this._peerState.get(socket);
+			if (!state?.version || !this._isReady(socket)) continue;
+			const url = (socket as unknown as { url?: string }).url;
+			const inbound = !url;
+			let address = url ? this.normalizePeerUrl(url) : (state.remoteAddress ?? 'unknown').replace(/^::ffff:/, '');
+			if (inbound && state.version.listenPort > 0) address = `${address}:${state.version.listenPort}`;
+			peers.push({ address, inbound, startHeight: state.version.height });
+		}
+		return peers;
 	}
 }

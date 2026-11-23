@@ -113,6 +113,21 @@ describe('Peer handshake and sync (real WebSockets)', () => {
 		expect(b.chain.getChain()).toHaveLength(6);
 	});
 
+	it('should list handshaken peers with their direction and start height', async () => {
+		const a = await startNode('a');
+		const b = await startNode('b');
+		await buildBlocks(a.chain, openWallet(dirs[0], 'miner').address, 3);
+
+		b.node.connectToPeers([`ws://127.0.0.1:${a.port}`]);
+		await waitUntil(() => a.node.getPeerInfo().length === 1 && b.node.getPeerInfo().length === 1);
+
+		expect(b.node.getPeerInfo()).toEqual([
+			{ address: `ws://127.0.0.1:${a.port}`, inbound: false, startHeight: 3 },
+		]);
+		// Inbound: the remote IP plus the listen port from B's VERSION (B was at genesis)
+		expect(a.node.getPeerInfo()).toEqual([{ address: `127.0.0.1:${b.port}`, inbound: true, startHeight: 0 }]);
+	});
+
 	it('should disconnect a peer with a different genesis', async () => {
 		const a = await startNode('a');
 		const client = new WebSocket(`ws://127.0.0.1:${a.port}`);
