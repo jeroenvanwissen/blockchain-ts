@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
+import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
 import { DATA_DIR, P2P_PORT, PEER_DATA_PATH, SEED_NODES } from './config.js';
 
@@ -25,6 +26,7 @@ args.forEach((arg, index) => {
 	}
 });
 const isMining = args.includes('--mine');
+const isStaking = args.includes('--stake');
 
 let blockchain: Blockchain;
 try {
@@ -82,11 +84,19 @@ if (isMining) {
 	miner.start();
 }
 
+// Optional proof-of-stake block production (--stake) with this node's wallet
+const staking = new StakingService(blockchain, wallet, (block) => p2pServer.broadcastBlock(block));
+if (isStaking) {
+	console.log('Staking enabled');
+	staking.start();
+}
+
 // Handle process termination
 process.on('SIGINT', () => {
 	console.log('\nStopping blockchain node...');
+	staking.stop();
 	void miner.stop().finally(() => process.exit(0));
 });
 
 // Export for testing
-export { blockchain, p2pServer, wallet, miner };
+export { blockchain, p2pServer, wallet, miner, staking };

@@ -60,6 +60,7 @@ export const POW_CUTOFF_BLOCK = 100; // last PoW height; PoS from POW_CUTOFF_BLO
 export const STAKE_MIN_AGE = 8 * 60 * 60; // seconds a UTXO must exist before it can stake
 export const STAKE_MIN_CONFIRMATIONS = 10; // blocks a UTXO must be buried before it can stake
 export const STAKE_TIMESTAMP_GRANULARITY = 16_000; // PoS block timestamps are multiples (ms)
+export const STAKE_CHECK_INTERVAL = 1000; // ms between staking attempts (each slot is tried once per tip)
 
 // Coin configuration (amounts are bigint base units)
 export const COIN = 100_000_000n; // Base units per coin

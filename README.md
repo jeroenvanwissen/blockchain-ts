@@ -17,10 +17,10 @@
 
 ## Status
 
-**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set (`npm run smoke`). Still open:
+**Consensus works end to end; networking is not yet hardened.** Nodes start, restart, mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set. `npm run smoke` covers two real nodes; the PoW→PoS transition is covered by integration tests with a shortened PoW phase. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- PoS blocks are validated (kernel staking), but nodes don't stake yet, so the chain can't grow past block 100 until the staking loop lands (TASK-0010);
-- a node that misses a block only resyncs when it reconnects (TASK-0013).
+- a node that misses a block only resyncs when it reconnects, and forks are resolved by swapping whole chains (TASK-0012, TASK-0013);
+- no API or CLI yet to send coins or inspect the chain (TASK-0016, TASK-0017).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
@@ -91,7 +91,7 @@ src/
 │   ├── Transaction.ts        # Transaction model, signing, verification
 │   ├── Wallet.ts             # Key management, address encoding, persistence
 │   ├── Miner.ts              # PoW mining via worker threads
-│   ├── StakingService.ts     # Periodic PoS block generation
+│   ├── StakingService.ts     # PoS staking loop (--stake)
 │   ├── miningWorker.cjs      # Worker thread for CPU-intensive hashing
 │   └── __tests__/            # Unit tests
 ├── networking/
@@ -112,6 +112,7 @@ src/
 | **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
 | **Wallet**         | `Wallet.ts`           | Key management, address encoding, protobuf storage   |
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
+| **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
 | **StakingService** | `StakingService.ts`   | Periodic PoS block generation                        |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
 
@@ -185,6 +186,12 @@ npm run dev -- --mine
 
 The target is retargeted every block toward one block per `BLOCK_TIME` (30 s): a new chain mines its first blocks quickly until the target catches up with the miner's hash rate. Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
 
+After block 100 blocks are proof of stake. Start a node with `--stake` to stake with its wallet: every 16-second slot it checks whether one of its outputs (at least 10 confirmations and 8 hours old) has a kernel that meets the target, and if so signs and broadcasts a PoS block paying the fixed 10-coin reward to the wallet:
+
+```bash
+npm run dev -- --stake
+```
+
 ### Step 4: Verify
 
 ```bash
@@ -253,6 +260,7 @@ const balance = blockchain.getBalance(wallet.address);
 | Dev mode (watch)  | `npm run dev`                                                 |
 | Run node          | `npm start`                                                   |
 | Mining node       | `npm start -- --mine`                                         |
+| Staking node      | `npm start -- --stake`                                        |
 | Run tests         | `npm test`                                                    |
 | Smoke check       | `npm run smoke`                                               |
 | Build             | `npm run build`                                               |
