@@ -249,9 +249,9 @@ export class Blockchain {
 		}
 
 		if (block.index !== this.chain.length) {
-			console.log('block.index:', block.index);
-			console.log('this.chain.length:', this.chain.length);
-			throw new Error('Invalid block index');
+			throw new Error(
+				`Invalid block index: expected ${this.chain.length}, got ${block.index}`,
+			);
 		}
 
 		// Check if PoW is still allowed
@@ -695,9 +695,6 @@ export class Blockchain {
 			if (inputSum >= amount) break;
 		}
 
-		// console.log('Total input sum:', inputSum);
-		// console.log('Required amount:', amount);
-
 		if (inputSum < amount) {
 			throw new Error('Insufficient funds');
 		}
@@ -1033,8 +1030,6 @@ export class Blockchain {
 
 			if (currentBlock.hash !== currentBlock.calculateHash()) {
 				console.log(`Block ${i} has invalid hash`);
-				console.log('Stored hash:', currentBlock.hash);
-				console.log('Calculated hash:', currentBlock.calculateHash());
 				return false;
 			}
 

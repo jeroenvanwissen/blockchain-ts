@@ -40,11 +40,7 @@ export class Block {
 			nonce: this.nonce,
 		});
 
-		console.log('Block data for hashing:', data);
-		const hash = crypto.createHash('sha256').update(data).digest('hex');
-		console.log('Calculated hash:', hash);
-
-		return hash;
+		return crypto.createHash('sha256').update(data).digest('hex');
 	}
 
 	hasValidTransactions(): boolean {
