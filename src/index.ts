@@ -47,9 +47,12 @@ const isMining = args.includes('--mine');
 const isStaking = args.includes('--stake');
 // Regression-test network: own network id, short PoW phase, no minimum stake age
 const isRegtest = args.includes('--regtest');
-const chainOptions = isRegtest
-	? { powCutoffBlock: REGTEST_POW_CUTOFF_BLOCK, minStakeAge: REGTEST_STAKE_MIN_AGE }
-	: {};
+// --reindex: ignore the saved chainstate and validate every stored block (a fresh one is saved later)
+const isReindex = args.includes('--reindex');
+const chainOptions = {
+	...(isRegtest ? { powCutoffBlock: REGTEST_POW_CUTOFF_BLOCK, minStakeAge: REGTEST_STAKE_MIN_AGE } : {}),
+	...(isReindex ? { useChainstate: false } : {}),
+};
 
 let blockchain: Blockchain;
 try {
@@ -139,7 +142,10 @@ if (isStaking) {
 process.on('SIGINT', () => {
 	log.info('Stopping blockchain node...');
 	staking.stop();
-	void miner.stop().finally(() => process.exit(0));
+	void miner.stop().finally(() => {
+		blockchain.saveChainstate(); // the next start validates only newer blocks
+		process.exit(0);
+	});
 });
 
 // Export for testing

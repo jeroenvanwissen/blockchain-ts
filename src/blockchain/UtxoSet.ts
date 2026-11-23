@@ -24,6 +24,11 @@ export class UtxoSet {
 		return this._byOutpoint.size;
 	}
 
+	/** Every unspent output (for saving the chainstate). */
+	all(): UTXO[] {
+		return [...this._byOutpoint.values()];
+	}
+
 	get(txHash: string, outputIndex: number): UTXO | undefined {
 		return this._byOutpoint.get(outpointKey(txHash, outputIndex));
 	}

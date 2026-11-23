@@ -67,7 +67,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0026](TASK-0026-tie-break.md) | Equal-work tie-break that block contents can't influence | done | P2 | small | TASK-0012 | F-022 |
 | [TASK-0027](TASK-0027-wallet-loopback.md) | Keep wallet routes on loopback | done | P2 | small | TASK-0017 | F-023 |
 | [TASK-0028](TASK-0028-signature-cache.md) | Mempool revalidation without re-verifying signatures | done | P3 | small | TASK-0019 | F-024 |
-| TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
+| [TASK-0029](TASK-0029-chainstate.md) | Chainstate snapshot for fast startup | done | P3 | medium | TASK-0012 | F-025 |
 | [TASK-0033](TASK-0033-ci.md) | CI: check, smoke and e2e on every push and pull request | done | P2 | small | TASK-0021 | F-030 |
 | [TASK-0034](TASK-0034-dependency-security.md) | Security updates for runtime dependencies (protobufjs, ws) | done | P1 | small | none | npm audit, GitHub Dependabot alerts |
 | [TASK-0030](TASK-0030-request-limits.md) | Throttle block requests; persist bans | done | P3 | small | TASK-0020 | F-026, F-027 |
@@ -76,7 +76,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes (expand into task files when picked up):
 
-- **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise. Measured 2026-11-23: reopening a 2,011-block chain with 2,000 transactions takes 579 ms (about 0.29 ms per block), so startup reaches about 30 s at 100,000 blocks. Deferred until chains approach that size; a snapshot adds state that must never drift from the blocks.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

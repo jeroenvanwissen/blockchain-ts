@@ -38,6 +38,9 @@ export const PEER_DATA_PATH = path.join(DATA_DIR, 'peers.json');
 
 // Block storage
 export const MAX_BLOCK_FILE_SIZE = 128 * 1024 * 1024; // 128 MB per blk file
+// Saved chainstate (TASK-0029): startup validates only blocks after it
+export const CHAINSTATE_FILENAME = 'chainstate.json'; // in the blocks directory
+export const CHAINSTATE_INTERVAL = 500; // also saved every this many connected blocks, besides on shutdown
 
 // P2P configuration
 export const DEFAULT_P2P_PORT = 5001;

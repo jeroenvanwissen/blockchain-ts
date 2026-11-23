@@ -7,6 +7,8 @@ import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
+import { readChainstate, writeChainstate, type Chainstate } from './chainstate.js';
+import * as path from 'path';
 import { Mempool } from './Mempool.js';
 import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import {
@@ -27,6 +29,8 @@ import {
 	GENESIS_TIMESTAMP,
 	MEDIAN_TIME_SPAN,
 	BLOCK_RESERVED_BYTES,
+	CHAINSTATE_FILENAME,
+	CHAINSTATE_INTERVAL,
 	MAX_BLOCK_SIZE,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_MEMPOOL_BYTES,
@@ -56,6 +60,10 @@ export interface BlockchainOptions {
 	minRelayFeePerKb?: bigint;
 	/** Mempool size limit in bytes (default MAX_MEMPOOL_BYTES) */
 	maxMempoolBytes?: number;
+	/** Start from the saved chainstate when it matches (default true; false: --reindex) */
+	useChainstate?: boolean;
+	/** Save the chainstate every this many connected blocks (default CHAINSTATE_INTERVAL) */
+	chainstateInterval?: number;
 }
 
 /** What happened to a block passed to addMinedBlock. */
@@ -104,6 +112,8 @@ export class Blockchain {
 			blocksDir: BLOCKS_DIR,
 			minRelayFeePerKb: MIN_RELAY_FEE_PER_KB,
 			maxMempoolBytes: MAX_MEMPOOL_BYTES,
+			useChainstate: true,
+			chainstateInterval: CHAINSTATE_INTERVAL,
 			...options,
 		};
 		this.blockStore = new BlockStore(this._options.blocksDir);
@@ -449,7 +459,12 @@ export class Blockchain {
 	 * Validate a whole chain from genesis through _connectBlock and return its state. A
 	 * failure carries the failing height as `error.height`.
 	 */
-	private _replayChain(blocks: Block[]): { utxos: UtxoSet; modifiers: string[]; undo: UTXO[][] } {
+	/**
+	 * Validate `blocks` (genesis first) into fresh state. With `start`, the state after block
+	 * `start.height` is taken from a saved chainstate for that same block, and only the blocks
+	 * after it are validated.
+	 */
+	private _replayChain(blocks: Block[], start?: Chainstate): { utxos: UtxoSet; modifiers: string[]; undo: UTXO[][] } {
 		const genesis = this.createGenesisBlock();
 		if (
 			blocks.length === 0 ||
@@ -458,14 +473,16 @@ export class Blockchain {
 		) {
 			throw new Error('genesis block hash mismatch');
 		}
+		if (start && blocks[start.height]?.hash !== start.tip) throw new Error('chainstate is not on this branch');
 		const ctx: ConnectContext = {
-			prevBlocks: [blocks[0]],
+			prevBlocks: blocks.slice(0, (start?.height ?? 0) + 1),
 			utxos: new UtxoSet(),
-			modifiers: [GENESIS_STAKE_MODIFIER],
+			modifiers: start ? [...start.modifiers] : [GENESIS_STAKE_MODIFIER],
 		};
-		const undo: UTXO[][] = [[]];
-		ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
-		for (let i = 1; i < blocks.length; i++) {
+		const undo: UTXO[][] = start ? start.undo.map((spent) => [...spent]) : [[]];
+		if (start) for (const utxo of start.utxos) ctx.utxos.add(utxo);
+		else ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
+		for (let i = (start?.height ?? 0) + 1; i < blocks.length; i++) {
 			try {
 				const result = this._connectBlock(blocks[i], ctx);
 				ctx.modifiers.push(result.modifier);
@@ -491,6 +508,41 @@ export class Blockchain {
 		this.chain.push(block);
 		this._indexTransactions(block, true);
 		this.lastBlockTime = block.timestamp;
+		if (block.index % this._options.chainstateInterval === 0) this.saveChainstate();
+	}
+
+	private get _chainstatePath(): string {
+		return path.join(this._options.blocksDir, CHAINSTATE_FILENAME);
+	}
+
+	/**
+	 * Save the validated state at the tip (UTXO set, stake modifiers, undo data) so the next
+	 * start validates only the blocks after it. Runs every `chainstateInterval` blocks and on
+	 * shutdown; a failed save only costs a slower start.
+	 */
+	public saveChainstate(): void {
+		try {
+			writeChainstate(this._chainstatePath, {
+				tip: this.getLatestBlock().hash,
+				height: this.chain.length - 1,
+				utxos: this._utxos.all(),
+				modifiers: this._modifiers,
+				undo: this.chain.map((block) => this._undo.get(block.hash) ?? []),
+			});
+		} catch (error) {
+			log.warn('could not save the chainstate:', (error as Error).message);
+		}
+	}
+
+	/** The saved chainstate, if any and readable (otherwise startup replays from genesis). */
+	private _readChainstate(): Chainstate | undefined {
+		if (!this._options.useChainstate) return undefined;
+		try {
+			return readChainstate(this._chainstatePath);
+		} catch (error) {
+			log.warn(`ignoring the saved chainstate: ${(error as Error).message}`);
+			return undefined;
+		}
 	}
 
 	/** Add a newly active block's transactions to the txid index, or remove a disconnected one's. */
@@ -1103,11 +1155,17 @@ export class Blockchain {
 			// Activate the best valid branch (fork choice, as in _isBetter). Stored side blocks
 			// were never fully validated, so fall back when a branch fails.
 			const candidates = [...index.values()].sort((a, b) => (Blockchain._isBetter(a, b) ? -1 : 1));
+			const saved = this._readChainstate();
 			for (const candidate of candidates) {
 				if (this._hasInvalidAncestor(candidate, index)) continue;
 				const branch = this._branchTo(candidate, index);
 				try {
-					const state = this._replayChain(branch);
+					// The saved state stands for every block up to its tip: validate only the rest
+					const start = saved && branch[saved.height]?.hash === saved.tip ? saved : undefined;
+					const state = this._replayChain(branch, start);
+					if (start) {
+						log.info(`chainstate at height ${start.height}; validated ${branch.length - 1 - start.height} newer block(s)`);
+					}
 					this.chain = branch;
 					this._txIndex = new Map();
 					for (const block of branch) this._indexTransactions(block, true);

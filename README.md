@@ -176,6 +176,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
+| `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
 | `wallet.dat`            | Wallet keys and address (protobuf, 0600; the private key encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
@@ -385,6 +386,10 @@ kill -9 <PID>
 ```
 
 If only the API port (P2P port + 1000) is taken, the node keeps running without the API and logs `API could not listen on ...`. Set `API_PORT` to another port.
+
+### Suspect chain state
+
+Start once with `--reindex`: the node ignores `blocks/chainstate.json`, validates every stored block from genesis, and saves a fresh chainstate at the next shutdown.
 
 ### Node Can't Connect to Peers
 

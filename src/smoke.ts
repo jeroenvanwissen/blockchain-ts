@@ -151,6 +151,8 @@ async function main(): Promise<void> {
 			new RegExp(`Chain loaded: height ${lastHeight}, tip ${lastHash}`),
 			'loading the mined chain',
 		);
+		// A saved its chainstate on shutdown: the restart starts from it instead of revalidating
+		await waitFor(nodeA, /chainstate at height \d+; validated 0 newer block\(s\)/, 'starting from the saved chainstate');
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
 
 		step('the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
