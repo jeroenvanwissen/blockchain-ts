@@ -6,6 +6,7 @@ import { BlockStore } from './BlockStore.js';
 import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
 import { requiredBits } from './retarget.js';
+import { minRelayFee } from './fees.js';
 import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import {
 	GENESIS_STAKE_MODIFIER,
@@ -27,6 +28,7 @@ import {
 	MAX_FUTURE_BLOCK_TIME,
 	MAX_TRANSACTION_INPUTS,
 	MAX_TRANSACTION_OUTPUTS,
+	MIN_RELAY_FEE_PER_KB,
 	STAKE_MIN_AGE,
 	STAKE_MIN_CONFIRMATIONS,
 	STAKE_TIMESTAMP_GRANULARITY,
@@ -41,6 +43,8 @@ export interface BlockchainOptions {
 	powCutoffBlock?: number;
 	/** Directory for blk*.dat and index.dat (defaults to BLOCKS_DIR from config) */
 	blocksDir?: string;
+	/** Mempool and wallet minimum fee in base units per 1000 bytes (default MIN_RELAY_FEE_PER_KB) */
+	minRelayFeePerKb?: bigint;
 }
 
 /** What happened to a block passed to addMinedBlock. */
@@ -83,6 +87,7 @@ export class Blockchain {
 			validateTimestamps: true,
 			powCutoffBlock: POW_CUTOFF_BLOCK,
 			blocksDir: BLOCKS_DIR,
+			minRelayFeePerKb: MIN_RELAY_FEE_PER_KB,
 			...options,
 		};
 		this.blockStore = new BlockStore(this._options.blocksDir);
@@ -152,20 +157,24 @@ export class Blockchain {
 				throw new Error('block contains multiple coinbase transactions');
 			}
 		}
-		const expectedReward = block.isProofOfStake()
-			? POS_BLOCK_REWARD
-			: POW_BLOCK_REWARD;
-		if (coinbaseTx.outputs[0].amount !== expectedReward) {
-			throw new Error('invalid coinbase reward amount');
-		}
 		if (coinbaseTx.inputs[0].outputIndex !== block.index) {
 			throw new Error('coinbase height does not match block index');
 		}
 	}
 
+	/** The coinbase pays exactly the block reward plus the fees of the block's transactions. */
+	private static _checkCoinbaseReward(block: Block, fees: bigint): void {
+		const reward = block.isProofOfStake() ? POS_BLOCK_REWARD : POW_BLOCK_REWARD;
+		const paid = block.transactions[0].outputs[0].amount;
+		if (paid !== reward + fees) {
+			throw new Error(`invalid coinbase reward amount: expected ${reward + fees} (reward + fees), got ${paid}`);
+		}
+	}
+
 	/**
 	 * Inputs of a non-coinbase transaction against `lookup`: each must be unspent, owned by
-	 * the signing key, and mature at `height`; inputs must cover outputs. Returns the input sum.
+	 * the signing key, and mature at `height`; inputs must cover outputs. Returns the fee
+	 * (inputs − outputs).
 	 */
 	private _checkInputs(
 		tx: Transaction,
@@ -193,7 +202,7 @@ export class Blockchain {
 		if (inputSum < outputSum) {
 			throw new Error('output amounts exceed input amounts');
 		}
-		return inputSum;
+		return inputSum - outputSum;
 	}
 
 	/**
@@ -257,6 +266,7 @@ export class Blockchain {
 		// Transactions, in order, against a block-local view of the UTXO set
 		const created = new Map<string, UTXO>();
 		const spent = new Map<string, [string, number]>();
+		let fees = 0n;
 		const lookup = (txHash: string, outputIndex: number): UTXO | undefined => {
 			const key = outpointKey(txHash, outputIndex);
 			if (spent.has(key)) return undefined;
@@ -272,7 +282,7 @@ export class Blockchain {
 				}
 				if (!tx.isCoinbase()) {
 					tx.validate(); // structure and signatures
-					this._checkInputs(tx, lookup, height);
+					fees += this._checkInputs(tx, lookup, height);
 					for (const input of tx.inputs) {
 						spent.set(outpointKey(input.previousTx, input.outputIndex), [
 							input.previousTx,
@@ -298,6 +308,8 @@ export class Blockchain {
 				});
 			});
 		});
+
+		Blockchain._checkCoinbaseReward(block, fees);
 
 		// Every check passed: apply
 		const undo: UTXO[] = [];
@@ -710,19 +722,24 @@ export class Blockchain {
 		if (!this.validateAddress(from)) {
 			throw new Error('invalid sender address');
 		}
-		return this.buildPayment(from, [{ address: to, amount }], wallet);
+		return this.buildPayment(from, [{ address: to, amount }], wallet).transaction;
 	}
 
 	/**
-	 * Build and sign a payment from `wallet` to one or more outputs. Spendable outputs are taken
-	 * largest first until they cover the total, and any change goes back to the wallet. No fee
-	 * yet (TASK-0018). The result still has to go through addTransaction.
+	 * Build and sign a payment from `wallet` to one or more outputs, paying the minimum relay
+	 * fee for its size. Spendable outputs are taken largest first until they cover the amount
+	 * plus fee; change goes back to the wallet (no change output when nothing is left). The
+	 * result still has to go through addTransaction.
 	 */
-	public createPayment(wallet: Wallet, payTo: TxOutput[]): Transaction {
+	public createPayment(wallet: Wallet, payTo: TxOutput[]): { transaction: Transaction; fee: bigint } {
 		return this.buildPayment(wallet.address, payTo, wallet);
 	}
 
-	private buildPayment(from: string, payTo: TxOutput[], wallet: Wallet): Transaction {
+	private buildPayment(
+		from: string,
+		payTo: TxOutput[],
+		wallet: Wallet,
+	): { transaction: Transaction; fee: bigint } {
 		const maxRecipients = MAX_TRANSACTION_OUTPUTS - 1; // room for change
 		if (payTo.length === 0 || payTo.length > maxRecipients) {
 			throw new Error(`a payment needs 1 to ${maxRecipients} outputs`);
@@ -732,6 +749,9 @@ export class Blockchain {
 			if (output.amount <= 0n) throw new Error('payment amounts must be positive');
 		}
 		const amount = payTo.reduce((sum, output) => sum + output.amount, 0n);
+		const recipients = payTo.map((output) => ({ ...output }));
+		const feeFor = (inputs: TxInput[], outputs: TxOutput[]) =>
+			minRelayFee(Blockchain._draftSize(inputs, outputs), this._options.minRelayFeePerKb);
 
 		const candidates = this.getSpendableUTXOs(from).sort((a, b) =>
 			a.output.amount === b.output.amount ? 0 : a.output.amount > b.output.amount ? -1 : 1,
@@ -739,25 +759,37 @@ export class Blockchain {
 		let inputSum = 0n;
 		const inputs: TxInput[] = [];
 		for (const utxo of candidates) {
-			if (inputSum >= amount || inputs.length === MAX_TRANSACTION_INPUTS) break;
+			if (inputs.length === MAX_TRANSACTION_INPUTS) break;
 			inputSum += utxo.output.amount;
 			inputs.push({ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' });
-		}
-		if (inputSum < amount) {
-			throw new Error(
-				inputs.length === MAX_TRANSACTION_INPUTS
-					? `payment needs more than ${MAX_TRANSACTION_INPUTS} inputs; send a smaller amount`
-					: 'Insufficient funds',
-			);
-		}
 
-		const outputs: TxOutput[] = payTo.map((output) => ({ ...output }));
-		const change = inputSum - amount;
-		if (change > 0n) outputs.push({ address: from, amount: change });
+			const changeOutput = { address: from, amount: 1n }; // amount doesn't affect the size
+			const feeWithChange = feeFor(inputs, [...recipients, changeOutput]);
+			let outputs: TxOutput[] | undefined;
+			if (inputSum >= amount + feeWithChange) {
+				const change = inputSum - amount - feeWithChange;
+				outputs = change > 0n ? [...recipients, { address: from, amount: change }] : recipients;
+			} else if (inputSum >= amount + feeFor(inputs, recipients)) {
+				outputs = recipients; // what's left over is too little for a change output: it's fee
+			}
+			if (outputs) {
+				const transaction = new Transaction(inputs, outputs);
+				wallet.signTransaction(transaction);
+				const outputSum = outputs.reduce((sum, output) => sum + output.amount, 0n);
+				return { transaction, fee: inputSum - outputSum };
+			}
+		}
+		throw new Error(
+			inputs.length === MAX_TRANSACTION_INPUTS
+				? `payment needs more than ${MAX_TRANSACTION_INPUTS} inputs; send a smaller amount`
+				: 'Insufficient funds (amount plus fee)',
+		);
+	}
 
-		const transaction = new Transaction(inputs, outputs);
-		wallet.signTransaction(transaction);
-		return transaction;
+	/** Size of a signed transaction with these inputs and outputs (witness lengths are fixed). */
+	private static _draftSize(inputs: TxInput[], outputs: TxOutput[]): number {
+		const witness = { publicKey: '02'.padEnd(66, '0'), signature: '0'.repeat(128) }; // 33 and 64 bytes
+		return new Transaction(inputs.map((input) => ({ ...input, ...witness })), outputs).size();
 	}
 
 	validateAddress(address: string): boolean {
@@ -778,9 +810,22 @@ export class Blockchain {
 		return requiredBits(this.chain, this.chain.length, proofOfStake);
 	}
 
-	/** Unsolved PoW block on the current tip: coinbase to `rewardAddress` plus pending transactions. */
+	/** Fees of the pending transactions (their inputs are confirmed outputs, checked at admission). */
+	private _pendingFees(): bigint {
+		const lookup = (txHash: string, outputIndex: number) => this._utxos.get(txHash, outputIndex);
+		return this.pendingTransactions.reduce(
+			(total, tx) => total + this._checkInputs(tx, lookup, this.chain.length),
+			0n,
+		);
+	}
+
+	/**
+	 * Unsolved PoW block on the current tip: pending transactions plus a coinbase to
+	 * `rewardAddress` for the reward and their fees.
+	 */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
-		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD, this.chain.length, timestamp);
+		const reward = POW_BLOCK_REWARD + this._pendingFees();
+		const coinbase = Transaction.coinbase(rewardAddress, reward, this.chain.length, timestamp);
 		return new Block(
 			timestamp,
 			[coinbase, ...this.pendingTransactions],
@@ -839,7 +884,7 @@ export class Blockchain {
 			const block = new Block(
 				timestamp,
 				[
-					Transaction.coinbase(wallet.address, POS_BLOCK_REWARD, height, timestamp),
+					Transaction.coinbase(wallet.address, POS_BLOCK_REWARD + this._pendingFees(), height, timestamp),
 					coinstake,
 					...this.pendingTransactions,
 				],
@@ -890,11 +935,15 @@ export class Blockchain {
 		}
 
 		// Same input rules as block validation, at the next block's height
-		this._checkInputs(
+		const fee = this._checkInputs(
 			transaction,
 			(txHash, outputIndex) => this._utxos.get(txHash, outputIndex),
 			this.chain.length,
 		);
+		const minimum = minRelayFee(transaction.size(), this._options.minRelayFeePerKb);
+		if (fee < minimum) {
+			throw new Error(`fee ${fee} is below the minimum relay fee ${minimum} for ${transaction.size()} bytes`);
+		}
 
 		for (const input of transaction.inputs) {
 			if (this._pendingUTXOSpends.has(outpointKey(input.previousTx, input.outputIndex))) {

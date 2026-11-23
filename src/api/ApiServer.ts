@@ -174,24 +174,25 @@ export class ApiServer {
 	}
 
 	/**
-	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet, admit to
-	 * the mempool, relay. Returns the txid. Chain-side rejections (funds, mempool rules) are 422.
+	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet (plus the
+	 * minimum relay fee), admit to the mempool, relay. Returns the txid and fee. Chain-side
+	 * rejections (funds, mempool rules) are 422.
 	 */
 	private async _sendPayment(body: unknown) {
 		const payTo = parsePayment(body);
 		const release = await this._sendLock.acquire();
 		try {
-			let transaction: Transaction;
+			let payment: { transaction: Transaction; fee: bigint };
 			try {
-				transaction = this._blockchain.createPayment(this._wallet(), payTo);
-				await this._blockchain.addTransaction(transaction);
+				payment = this._blockchain.createPayment(this._wallet(), payTo);
+				await this._blockchain.addTransaction(payment.transaction);
 			} catch (error) {
 				throw new HttpError(422, (error as Error).message);
 			}
-			this._walletAccess!.broadcast(transaction);
-			const txid = transaction.calculateHash();
-			console.log(`[API] sent ${txid.slice(0, 16)} from the wallet`);
-			return { txid };
+			this._walletAccess!.broadcast(payment.transaction);
+			const txid = payment.transaction.calculateHash();
+			console.log(`[API] sent ${txid.slice(0, 16)} from the wallet (fee ${payment.fee})`);
+			return { txid, fee: payment.fee.toString() };
 		} finally {
 			release();
 		}

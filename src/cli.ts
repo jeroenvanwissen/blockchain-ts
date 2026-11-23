@@ -9,7 +9,8 @@ commands:
   status                                    chain status of the node
   balance                                   the node wallet's address and balance
   send <address> <coins> [<address> <coins> ...]
-                                            pay from the node's wallet; prints the txid
+                                            pay from the node's wallet plus the minimum fee;
+                                            prints the txid (and the fee on stderr)
 
 options:
   --data-dir <dir>   the node's data dir, for its api.cookie (default: the default data dir)
@@ -95,8 +96,9 @@ async function run(argv: string[]): Promise<void> {
 			for (let i = 0; i < rest.length; i += 2) {
 				outputs.push({ address: rest[i], amount: parseCoins(rest[i + 1]).toString() });
 			}
-			const { txid } = await request<{ txid: string }>(api, 'POST', '/wallet/send', { outputs });
+			const { txid, fee } = await request<{ txid: string; fee: string }>(api, 'POST', '/wallet/send', { outputs });
 			console.log(txid);
+			console.error(`fee: ${formatCoins(BigInt(fee))}`);
 			return;
 		}
 		default:

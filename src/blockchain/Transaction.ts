@@ -102,6 +102,11 @@ export class Transaction {
 		);
 	}
 
+	/** Serialized size in bytes, witness included (what fees are charged on). */
+	size(): number {
+		return this.serialize(true).length;
+	}
+
 	/**
 	 * Canonical encoding. Without witness data (public keys and signatures) it defines the
 	 * txid, so signing never changes a transaction's id. Throws on values that can't be encoded.

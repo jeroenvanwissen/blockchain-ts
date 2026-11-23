@@ -4,6 +4,7 @@ import { ApiServer } from '../../api/ApiServer.js';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
+import { minRelayFee } from '../../blockchain/fees.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
 import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
 import type { PeerInfo } from '../../networking/P2PServer.js';
@@ -240,11 +241,16 @@ describe('HTTP API', () => {
 				{ address: r1.address, amount: COIN },
 				{ address: r2.address, amount: 2n * COIN },
 			]);
+			// The minimum relay fee for its size, reported and left out of the change
+			const fee = minRelayFee(payment.size());
+			expect(body.fee).toBe(fee.toString());
 			const inputTotal = POW_BLOCK_REWARD * BigInt(payment.inputs.length);
-			expect(payment.outputs[2]).toEqual({ address: miner.address, amount: inputTotal - 3n * COIN });
+			expect(payment.outputs[2]).toEqual({ address: miner.address, amount: inputTotal - 3n * COIN - fee });
 
+			// The next block's coinbase claims the fee
 			await buildBlocks(chain, miner.address, 1);
 			expect(chain.getBalance(r2.address)).toBe(2n * COIN);
+			expect(chain.getLatestBlock().transactions[0].outputs[0].amount).toBe(POW_BLOCK_REWARD + fee);
 		});
 
 		it('should reject malformed payments (400) and unaffordable ones (422)', async () => {

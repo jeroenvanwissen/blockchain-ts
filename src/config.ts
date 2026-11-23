@@ -100,6 +100,9 @@ export const MAX_TRANSACTION_OUTPUTS = 256;
 
 // Block limits
 export const MAX_BLOCK_TRANSACTIONS = 1000;
+// Fees (TASK-0018): fee = inputs − outputs, claimed by the block's coinbase (consensus). The
+// minimum is mempool and wallet policy, not a block rule.
+export const MIN_RELAY_FEE_PER_KB = 10_000n; // base units per 1000 bytes of serialized transaction (0.0001 coin)
 export const MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60 * 1000; // 2 hours in ms
 
 // Block timing and targets

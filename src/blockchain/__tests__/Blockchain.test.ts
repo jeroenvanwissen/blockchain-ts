@@ -4,6 +4,7 @@ import { Blockchain, type BlockchainOptions } from '../Blockchain.js';
 import { Wallet } from '../Wallet.js';
 import { NULL_HASH, Transaction } from '../Transaction.js';
 import { blockWork, MAX_TARGET_BITS, targetToBits } from '../target.js';
+import { minRelayFee } from '../fees.js';
 import {
 	COIN,
 	POW_CUTOFF_BLOCK,
@@ -15,6 +16,8 @@ import {
 import * as fs from 'fs';
 
 const coins = (n: number): bigint => BigInt(n) * COIN;
+// What the setups send from one mature 10-coin coinbase, leaving room for the fee
+const SENDER_FUNDS = coins(9);
 // Target equivalent to the old difficulty of `hexZeros` leading zero hex digits
 const bitsFor = (hexZeros: number): number =>
 	targetToBits((1n << BigInt(256 - 4 * hexZeros)) - 1n);
@@ -135,7 +138,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				minerAddr,
 				senderWallet.getAddress(),
-				POW_BLOCK_REWARD,
+				SENDER_FUNDS,
 				minerWallet
 			);
 			await blockchain.addTransaction(tx);
@@ -256,13 +259,13 @@ describe('Blockchain', () => {
 			jest.setSystemTime(new Date(blockTime));
 			await blockchain.minePendingTransactions(minerAddr);
 
-			// Pending pool is now empty; the sender can spend its 5-coin change
+			// Pending pool is now empty; the sender can spend its change (funds - 5 - fee)
 			const remainingBalance = blockchain.getBalance(senderAddr);
-			expect(remainingBalance).toBe(POW_BLOCK_REWARD - coins(5));
+			expect(remainingBalance).toBe(SENDER_FUNDS - coins(5) - minRelayFee(tx.size()));
 			const tx2 = blockchain.createTransaction(
 				senderAddr,
 				receiverWallet2.getAddress(),
-				remainingBalance,
+				coins(1),
 				senderWallet
 			);
 			await expect(blockchain.addTransaction(tx2)).resolves.not.toThrow();
@@ -468,7 +471,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				minerAddr,
 				receiverWallet.getAddress(),
-				POW_BLOCK_REWARD,
+				coins(5),
 				minerWallet
 			);
 			await expect(blockchain.addTransaction(tx)).resolves.not.toThrow();
@@ -534,7 +537,7 @@ describe('Blockchain', () => {
 			const tx = blockchain.createTransaction(
 				minerAddr,
 				senderWallet.getAddress(),
-				POW_BLOCK_REWARD,
+				SENDER_FUNDS,
 				minerWallet
 			);
 			await blockchain.addTransaction(tx);

@@ -51,7 +51,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0016](TASK-0016-http-api.md) | Local HTTP API for chain queries | done | P2 | medium | TASK-0006 | old D3 |
 | [TASK-0017](TASK-0017-wallet-send.md) | Wallet send and balance from chain state | done | P2 | medium | TASK-0005, TASK-0016 | old D4 |
-| TASK-0018 | Transaction fees | pending | P2 | medium | TASK-0006 | old E1 |
+| [TASK-0018](TASK-0018-fees.md) | Transaction fees | done | P2 | medium | TASK-0006 | old E1 |
 | TASK-0019 | Mempool with conflict handling and revalidation | pending | P2 | medium | TASK-0006, TASK-0012 | old E2, F-007 |
 | TASK-0020 | Peer limits and reconnect policy | pending | P2 | small | TASK-0013 | old E4 |
 | [TASK-0021](TASK-0021-lint.md) | Fix lint errors and gate changes on build, test and lint | done | P2 | small | none | F-017 |
@@ -61,7 +61,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes for the later tasks (expand into task files when they're picked up):
 
-- **TASK-0018:** fee = inputs − outputs, claimed in the coinbase or coinstake, with a minimum relay fee.
 - **TASK-0019:** replace the pending array with a mempool: conflict detection, size limit with fee-rate eviction, revalidation on a new tip or reorg. A rejected block must never wedge block production (F-007 symptom).
 - **TASK-0020:** caps on inbound and outbound connections, capped backoff, and a misbehavior score that leads to a temporary ban.
 - **TASK-0023:** replace `console.*` with a small leveled logger (debug output off by default). Never log key material.
@@ -92,7 +91,7 @@ The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/
 | D2 Message relaying | pending | TASK-0014 |
 | D3 REST API for blockchain | done | TASK-0016 |
 | D4 REST API for transactions | done | TASK-0017 |
-| E1 Transaction fees | pending | TASK-0018 |
+| E1 Transaction fees | done | TASK-0018 |
 | E2 Mempool | pending | TASK-0019 |
 | E3 Miner integration | pending | TASK-0004 |
 | E4 Reconnect limiting | pending | TASK-0020 |

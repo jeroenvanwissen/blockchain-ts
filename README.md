@@ -19,7 +19,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- payments carry no fee yet (TASK-0018), and the mempool has no size limit or conflict eviction (TASK-0019).
+- the mempool has no size limit, fee-rate ordering or conflict eviction (TASK-0019).
 
 Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api).
 
@@ -152,6 +152,7 @@ Key constants in `src/config.ts`:
 | `POW_BLOCK_REWARD`              | 10 coins | Mining reward per block (PoW)                 |
 | `POS_BLOCK_REWARD`              | 10 coins | Staking reward per block (PoS)                |
 | `COIN_MATURITY`                 | 10      | Blocks before coinbase/coinstake outputs are spendable |
+| `MIN_RELAY_FEE_PER_KB`          | 0.0001 coin | Minimum fee per 1000 bytes the mempool accepts and the wallet pays |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
 | `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
@@ -214,7 +215,7 @@ npm run dev -- --stake
 
 ### Sending Coins
 
-The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, change back to the wallet), admits the payment to the mempool, relays it, and prints the txid. Amounts are in coins with up to 8 decimals:
+The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, change back to the wallet) plus the minimum relay fee for the transaction's size, admits the payment to the mempool, relays it, and prints the txid (the fee goes to stderr). The fee goes to whoever produces the block. Amounts are in coins with up to 8 decimals:
 
 ```bash
 npm run cli -- status
@@ -274,7 +275,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /mempool` | Pending txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
 | `GET /wallet` | The node wallet's address, balance, spendable balance and number of outputs (token required) |
-| `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet and returns `{"txid": "..."}` (token required) |
+| `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}` (token required) |
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 
