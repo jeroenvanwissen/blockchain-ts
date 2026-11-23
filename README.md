@@ -221,6 +221,8 @@ After block 100 blocks are proof of stake. Start a node with `--stake` to stake 
 npm run dev -- --stake
 ```
 
+Check on it with `npm run cli -- staking`: whether staking is enabled, how many outputs are eligible, the chance per slot of finding a kernel (with the expected wait), and the last block the wallet staked.
+
 ### Sending Coins
 
 The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, change back to the wallet) plus the minimum relay fee for the transaction's size, admits the payment to the mempool, relays it, and prints the txid (the fee goes to stderr). The fee goes to whoever produces the block. Amounts are in coins with up to 8 decimals:
@@ -301,6 +303,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the key at rest and locks the wallet (token required) |
 | `POST /wallet/unlock` | Body `{"passphrase": "...", "timeout": <seconds, 0 = no limit>, "stakingOnly": <bool>}`; 403 for a wrong passphrase (token required) |
 | `POST /wallet/lock` | Wipes the key from memory (token required) |
+| `GET /wallet/staking` | Whether the node stakes, whether its wallet can sign, eligible outputs and value, the chance per 16 s slot of finding a kernel and the expected wait, blocks staked since start, and the last block it staked (token required) |
 | `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the key under the new passphrase and deletes backups (token required) |
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
@@ -366,6 +369,7 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | Node status       | `npm run cli -- status`                                       |
 | Wallet balance    | `npm run cli -- balance`                                      |
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
+| Staking status    | `npm run cli -- staking`                                      |
 
 ---
 

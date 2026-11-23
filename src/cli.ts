@@ -19,6 +19,8 @@ commands:
   lock                                      lock an encrypted wallet
   change-passphrase                         re-encrypt the wallet under a new passphrase (current
                                             and new are asked for; two stdin lines otherwise)
+  staking                                   whether the node stakes, eligible outputs, the chance
+                                            of a kernel per slot, and the last block it staked
 
 options:
   --data-dir <dir>   the node's data dir, for its api.cookie (default: the default data dir)
@@ -43,6 +45,27 @@ interface WalletInfo {
 	locked: boolean;
 	stakingOnly: boolean;
 	unlockedUntil: string | null;
+}
+
+interface StakingInfo {
+	enabled: boolean;
+	phase: string;
+	locked: boolean;
+	stakingOnly: boolean;
+	eligibleOutputs: number;
+	eligibleValue: string;
+	chancePerSlot: number;
+	expectedSeconds: number | null;
+	stakedSinceStart: number;
+	lastStaked: { height: number; hash: string; time: string } | null;
+}
+
+/** Seconds as "45 s", "12 min", "3.5 h" or "2.1 days". */
+function formatDuration(seconds: number): string {
+	if (seconds < 90) return `${Math.round(seconds)} s`;
+	if (seconds < 90 * 60) return `${Math.round(seconds / 60)} min`;
+	if (seconds < 48 * 3600) return `${(seconds / 3600).toFixed(1)} h`;
+	return `${(seconds / 86_400).toFixed(1)} days`;
 }
 
 function walletState(w: WalletInfo): string {
@@ -186,6 +209,17 @@ async function run(argv: string[]): Promise<void> {
 		case 'lock': {
 			const w = await request<WalletInfo>(api, 'POST', '/wallet/lock', {});
 			console.log(`wallet: ${walletState(w)}`);
+			return;
+		}
+		case 'staking': {
+			const s = await request<StakingInfo>(api, 'GET', '/wallet/staking');
+			console.log(`staking: ${s.enabled ? 'enabled' : 'disabled (start the node with --stake)'}, phase ${s.phase}`);
+			if (s.locked) console.log('wallet: locked; unlock it to stake (cli unlock --staking-only)');
+			console.log(`eligible: ${s.eligibleOutputs} output(s), ${formatCoins(BigInt(s.eligibleValue))} coins`);
+			const expected = s.expectedSeconds === null ? '' : `, expected in ${formatDuration(s.expectedSeconds)}`;
+			console.log(`kernel chance per slot: ${(s.chancePerSlot * 100).toFixed(2)}%${expected}`);
+			console.log(`staked since start: ${s.stakedSinceStart}`);
+			console.log(`last staked: ${s.lastStaked ? `block ${s.lastStaked.height} at ${s.lastStaked.time}` : 'none in the last 10,000 blocks'}`);
 			return;
 		}
 		case 'change-passphrase': {

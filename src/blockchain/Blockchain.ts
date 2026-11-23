@@ -10,7 +10,7 @@ import { minRelayFee } from './fees.js';
 import { readChainstate, writeChainstate, type Chainstate } from './chainstate.js';
 import * as path from 'path';
 import { Mempool } from './Mempool.js';
-import { MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
+import { bitsToTarget, MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
 import {
 	GENESIS_STAKE_MODIFIER,
 	kernelHash,
@@ -997,12 +997,7 @@ export class Blockchain {
 		const bits = this.getRequiredBits(true);
 		const modifier = this._modifiers[height - 1];
 
-		for (const utxo of this.getUTXOs(wallet.address)) {
-			if (this._mempool.isSpent(utxo.txHash, utxo.outputIndex)) continue;
-			if (!this._isMature(utxo, height)) continue;
-			if (height - utxo.blockIndex < STAKE_MIN_CONFIRMATIONS) continue;
-			if (timestamp - utxo.blockTimestamp < this._options.minStakeAge * 1000) continue;
-			if (timestamp < utxo.txTimestamp) continue;
+		for (const utxo of this.getStakeableUTXOs(wallet.address, timestamp)) {
 			const hash = kernelHash(modifier, utxo.txTimestamp, utxo.txHash, utxo.outputIndex, timestamp);
 			if (!meetsKernelTarget(hash, bits, utxo.output.amount)) continue;
 
@@ -1028,6 +1023,58 @@ export class Blockchain {
 			return block;
 		}
 		return null;
+	}
+
+	/**
+	 * Outputs of `address` that may stake a block at `timestamp`: mature, with
+	 * STAKE_MIN_CONFIRMATIONS, old enough by their block's time, and not claimed by the mempool.
+	 * createStakeBlock and the staking status use the same rules.
+	 */
+	public getStakeableUTXOs(address: string, timestamp: number): UTXO[] {
+		const height = this.chain.length;
+		return this.getUTXOs(address).filter(
+			(utxo) =>
+				!this._mempool.isSpent(utxo.txHash, utxo.outputIndex) &&
+				this._isMature(utxo, height) &&
+				height - utxo.blockIndex >= STAKE_MIN_CONFIRMATIONS &&
+				timestamp - utxo.blockTimestamp >= this._options.minStakeAge * 1000 &&
+				timestamp >= utxo.txTimestamp,
+		);
+	}
+
+	/**
+	 * Staking outlook for `address` at `timestamp`: its eligible outputs, the chance that one of
+	 * them has a kernel meeting the current PoS target in a slot (each output: target × value /
+	 * 2^256), and the expected time to find one. Ignores other stakers, who may win a slot first.
+	 */
+	public getStakingOutlook(
+		address: string,
+		timestamp: number,
+	): { outputs: number; value: bigint; chancePerSlot: number; expectedSeconds: number | null } {
+		const eligible = this.getStakeableUTXOs(address, timestamp);
+		const value = eligible.reduce((total, utxo) => total + utxo.output.amount, 0n);
+		if (!this.isProofOfStakePhase() || eligible.length === 0) {
+			return { outputs: eligible.length, value, chancePerSlot: 0, expectedSeconds: null };
+		}
+		const target = bitsToTarget(this.getRequiredBits(true));
+		const scale = 10n ** 15n;
+		let miss = 1;
+		for (const utxo of eligible) {
+			const hit = Math.min(1, Number((target * utxo.output.amount * scale) >> 256n) / Number(scale));
+			miss *= 1 - hit;
+		}
+		const chancePerSlot = 1 - miss;
+		const expectedSeconds = chancePerSlot > 0 ? STAKE_TIMESTAMP_GRANULARITY / 1000 / chancePerSlot : null;
+		return { outputs: eligible.length, value, chancePerSlot, expectedSeconds };
+	}
+
+	/** The newest block on the active chain staked by `address`, looking back at most `depth` blocks. */
+	public findLastStakedBlock(address: string, depth = 10_000): Block | undefined {
+		for (let height = this.chain.length - 1; height > 0 && height >= this.chain.length - depth; height--) {
+			const block = this.chain[height];
+			if (block.isProofOfStake() && block.transactions[1].outputs[1]?.address === address) return block;
+		}
+		return undefined;
 	}
 
 	/** Current stake modifier (after the tip); exposed for tests and tooling. */

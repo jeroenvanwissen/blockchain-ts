@@ -78,6 +78,9 @@ const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
 const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic, banListPath: BAN_LIST_PATH });
 if (isRegtest) log.info('Regtest network');
 
+// Proof-of-stake block production with this node's wallet; started below with --stake
+const staking = new StakingService(blockchain, wallet, (block) => p2pServer.broadcastBlock(block));
+
 // HTTP API (loopback by default). Chain routes are public; /wallet routes need the token that
 // is written to api.cookie on every start (never logged)
 const api = new ApiServer(
@@ -88,6 +91,7 @@ const api = new ApiServer(
 		wallet,
 		token: writeApiCookie(API_COOKIE_PATH),
 		broadcast: (transaction) => p2pServer.broadcastTransaction(transaction),
+		staking,
 	},
 );
 api
@@ -134,7 +138,6 @@ if (isMining) {
 }
 
 // Optional proof-of-stake block production (--stake) with this node's wallet
-const staking = new StakingService(blockchain, wallet, (block) => p2pServer.broadcastBlock(block));
 if (isStaking) {
 	log.info('Staking enabled');
 	staking.start();

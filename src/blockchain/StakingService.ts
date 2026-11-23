@@ -21,6 +21,7 @@ export class StakingService {
 	private _lastAttempt = ''; // `${tipHash}:${slot}`
 	private _isBusy = false;
 	private _lockedNoticeShown = false;
+	private _staked = 0; // blocks staked since start()
 
 	constructor(
 		private readonly _blockchain: Blockchain,
@@ -30,6 +31,11 @@ export class StakingService {
 
 	isRunning(): boolean {
 		return this._timer !== null;
+	}
+
+	/** Blocks this service staked since the node started (the chain keeps the full history). */
+	stakedCount(): number {
+		return this._staked;
 	}
 
 	start(): void {
@@ -72,6 +78,7 @@ export class StakingService {
 		this._isBusy = true;
 		try {
 			await this._blockchain.addMinedBlock(block);
+			this._staked++;
 			log.info(`staked block ${block.index} (${block.hash.slice(0, 16)})`);
 			this._onBlockStaked(block);
 			return block;

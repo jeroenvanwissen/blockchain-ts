@@ -30,6 +30,7 @@ export interface WalletAccess {
 	wallet: Wallet;
 	token: string; // required as `Authorization: Bearer <token>` (the node's api.cookie)
 	broadcast(transaction: Transaction): void;
+	staking?: { isRunning(): boolean; stakedCount(): number }; // the node's StakingService
 }
 
 class HttpError extends Error {
@@ -78,6 +79,7 @@ export class ApiServer {
 		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
 		{ method: 'POST', pattern: /^\/wallet\/lock$/, wallet: true, handle: () => this._lock() },
 		{ method: 'POST', pattern: /^\/wallet\/passphrase$/, wallet: true, handle: (_, body) => this._changePassphrase(body) },
+		{ method: 'GET', pattern: /^\/wallet\/staking$/, wallet: true, handle: () => this._staking() },
 	];
 
 	constructor(
@@ -236,6 +238,30 @@ export class ApiServer {
 		this._walletCall(() => this._wallet().unlock(passphrase, { timeoutMs: timeout * 1000, stakingOnly }));
 		log.info(`wallet unlocked${stakingOnly ? ' for staking only' : ''}${timeout ? ` for ${timeout} s` : ''}`);
 		return this._walletInfo();
+	}
+
+	/**
+	 * GET /wallet/staking: whether this node stakes, whether its wallet can sign, its eligible
+	 * outputs, the chance per 16 s slot of finding a kernel and the expected wait, and the last
+	 * block it staked (from the chain).
+	 */
+	private _staking() {
+		const wallet = this._wallet();
+		const staking = this._walletAccess!.staking;
+		const outlook = this._blockchain.getStakingOutlook(wallet.address, Date.now());
+		const last = this._blockchain.findLastStakedBlock(wallet.address);
+		return {
+			enabled: staking?.isRunning() ?? false,
+			phase: this._blockchain.isProofOfStakePhase() ? 'pos' : 'pow',
+			locked: wallet.isLocked(),
+			stakingOnly: wallet.isStakingOnly(),
+			eligibleOutputs: outlook.outputs,
+			eligibleValue: outlook.value.toString(),
+			chancePerSlot: outlook.chancePerSlot,
+			expectedSeconds: outlook.expectedSeconds,
+			stakedSinceStart: staking?.stakedCount() ?? 0,
+			lastStaked: last ? { height: last.index, hash: last.hash, time: new Date(last.timestamp).toISOString() } : null,
+		};
 	}
 
 	/** POST /wallet/passphrase { passphrase, newPassphrase }: re-encrypt under a new passphrase. */

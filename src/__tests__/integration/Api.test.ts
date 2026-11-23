@@ -56,7 +56,7 @@ describe('HTTP API', () => {
 			chain,
 			{ getPeerInfo: () => peers },
 			{ host: '127.0.0.1', port: 0, network: 'test-net' },
-			{ wallet: miner, token: TOKEN, broadcast: (tx) => broadcasts.push(tx) },
+			{ wallet: miner, token: TOKEN, broadcast: (tx) => broadcasts.push(tx), staking: { isRunning: () => true, stakedCount: () => 3 } },
 		);
 		await api.listen();
 	});
@@ -322,6 +322,25 @@ describe('HTTP API', () => {
 			expect((await post('/wallet/passphrase', { passphrase, newPassphrase: 'fresh passphrase' })).status).toBe(200);
 			expect((await post('/wallet/unlock', { passphrase })).status).toBe(403);
 			expect((await post('/wallet/unlock', { passphrase: 'fresh passphrase' })).status).toBe(200);
+		});
+
+		it('should report staking status behind the token', async () => {
+			expect((await get('/wallet/staking')).status).toBe(401);
+			const { status, body } = await get('/wallet/staking', { headers: { authorization: `Bearer ${TOKEN}` } });
+
+			expect(status).toBe(200);
+			expect(body).toEqual({
+				enabled: true,
+				phase: 'pow', // this chain stays in the PoW phase
+				locked: false,
+				stakingOnly: false,
+				eligibleOutputs: chain.getStakeableUTXOs(miner.address, Date.now()).length,
+				eligibleValue: expect.any(String) as string,
+				chancePerSlot: 0,
+				expectedSeconds: null,
+				stakedSinceStart: 3,
+				lastStaked: null,
+			});
 		});
 
 		it('should refuse wallet routes to clients on other machines, even with the token', async () => {

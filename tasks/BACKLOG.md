@@ -76,9 +76,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0031](TASK-0031-tx-index.md) | Transaction index | done | P3 | small | TASK-0016 | F-028 |
 | [TASK-0032](TASK-0032-change-passphrase.md) | Change the wallet passphrase | done | P3 | small | TASK-0024 | F-029 |
 
-Scope notes (expand into task files when picked up):
-
-
 ## Milestone 7: running the node as a service (from reassessment 2)
 
 | ID | Task | Status | Priority | Size | Depends on | Source |
@@ -86,11 +83,7 @@ Scope notes (expand into task files when picked up):
 | [TASK-0037](TASK-0037-process-lifecycle.md) | Graceful shutdown on SIGTERM; fail fast when the P2P port is taken | done | P2 | small | none | F-031, F-032 |
 | [TASK-0038](TASK-0038-node-versions.md) | Declare and test the supported Node versions | done | P2 | small | TASK-0033 | F-033 |
 | [TASK-0039](TASK-0039-address-book.md) | Peer address book: evict failing addresses, choose outbound peers at random | done | P2 | medium | TASK-0020 | F-034 |
-| TASK-0040 | Staking status in the API and CLI | pending | P3 | small | TASK-0016 | F-035 |
-
-Scope notes (expand into task files when picked up):
-
-- **TASK-0040:** `GET /staking` (enabled, wallet locked or staking-only, eligible outputs and value, last staked block) and `cli staking`.
+| [TASK-0040](TASK-0040-staking-status.md) | Staking status in the API and CLI | done | P3 | small | TASK-0016 | F-035 |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

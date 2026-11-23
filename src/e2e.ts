@@ -155,6 +155,10 @@ async function main(): Promise<void> {
 		);
 		if (!isConfirmed()) throw new Error('payment not in the converged chain');
 		if (harnessChain.getBalance(addressC) < paymentTotal) throw new Error('C lost its payment');
+		const stakingA = await runCli(['--data-dir', dirs.a, '--api', apiUrl(nodeA), 'staking']);
+		if (!/^staking: enabled/m.test(stakingA.stdout) || !/^last staked: block \d+/m.test(stakingA.stdout)) {
+			throw new Error(`A's CLI doesn't report its staking: ${stakingA.stdout.trim()} ${stakingA.stderr.trim()}`);
+		}
 		const balanceC = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'balance']);
 		const reported = /^balance: ([\d.]+)$/m.exec(balanceC.stdout);
 		if (!reported || parseCoins(reported[1]) < paymentTotal) {

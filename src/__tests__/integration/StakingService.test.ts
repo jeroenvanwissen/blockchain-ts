@@ -148,6 +148,29 @@ describe('StakingService', () => {
 		]);
 	});
 
+	it('should report the staking outlook, staked count and last staked block', async () => {
+		const staker = openWallet(dir, 'staker');
+		const chain = openChain(dir, { powCutoffBlock: 12, minStakeAge: 0 });
+		const service = new StakingService(chain, staker);
+		const before = chain.getStakingOutlook(staker.address, Date.now());
+		expect(before).toMatchObject({ chancePerSlot: 0, expectedSeconds: null }); // PoW phase
+
+		await finishPowPhase(chain, staker.address);
+		const eligible = chain.getStakeableUTXOs(staker.address, Date.now() + SLOT);
+		const outlook = chain.getStakingOutlook(staker.address, Date.now() + SLOT);
+		expect(outlook.outputs).toBe(eligible.length);
+		expect(outlook.outputs).toBeGreaterThan(0);
+		expect(outlook.value).toBe(eligible.reduce((sum, u) => sum + u.output.amount, 0n));
+		// At the start of PoS the target is at its limit: every eligible output hits every slot
+		expect(outlook.chancePerSlot).toBe(1);
+		expect(outlook.expectedSeconds).toBe(SLOT / 1000);
+		expect(chain.findLastStakedBlock(staker.address)).toBeUndefined();
+
+		await runSlots([service], 5, () => posBlocks(chain).length > 0);
+		expect(service.stakedCount()).toBe(1);
+		expect(chain.findLastStakedBlock(staker.address)?.hash).toBe(posBlocks(chain)[0].hash);
+	});
+
 	it('should keep staking after a rejected block', async () => {
 		const staker = openWallet(dir, 'staker');
 		const chain = openChain(dir, { powCutoffBlock: 12, minStakeAge: 0 });
