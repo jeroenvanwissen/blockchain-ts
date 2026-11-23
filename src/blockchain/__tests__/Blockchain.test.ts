@@ -906,22 +906,20 @@ describe('Blockchain', () => {
 			await blockchain.stake(minerAddr, 100, minerWallet);
 
 			const latestBlock = blockchain.getLatestBlock();
-			// Check multiple slots with very short timeSinceLastBlock
-			// so the staker has low probability per slot
+			// Vary the slot but keep timeSinceLastBlock at 1 s, so each check wins with
+			// probability 1/BLOCK_TIME (1/30) for a sole staker
 			const results = new Set<boolean>();
-			for (let slot = 0; slot < 100; slot++) {
-				// 1 second after last block — low probability per check
+			for (let slot = 0; slot < 1000; slot++) {
 				const timestamp = latestBlock.timestamp + 1000 + slot * 60000;
 				const result = blockchain.isEligibleValidator(
 					minerAddr,
 					timestamp,
 					latestBlock.hash,
-					latestBlock.timestamp,
+					timestamp - 1000,
 				);
 				results.add(result);
 			}
-			// With low probability per slot, we should see both true and false
-			// over 100 attempts (extremely unlikely to get all same)
+			// P(no win in 1000 slots) = (29/30)^1000 ≈ 2e-15; P(all wins) is negligible
 			expect(results.size).toBe(2);
 		});
 
