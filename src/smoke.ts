@@ -1,12 +1,14 @@
 // Smoke check against the real runtime (native ESM, real filesystem, real protobuf).
 // From an unrelated working directory and temp data dirs: node A mines, node B syncs from it
-// and accepts A's next block live, both answer over the HTTP API and the CLI, then A restarts
-// and keeps its chain. A fresh chain mines
+// and accepts A's next block live, both answer over the HTTP API and the CLI, A's wallet is
+// encrypted, then A restarts with its chain and a locked wallet that the CLI unlocks. A fresh chain mines
 // quickly until the retarget catches up, so heights are read from the logs, not assumed.
 // Run with `npm run smoke`; --keep keeps the temp dir.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import protobuf from 'protobufjs';
+import { WALLET_SCHEMA } from './blockchain/protoSchemas.js';
 import {
 	API_READY,
 	apiGet,
@@ -24,6 +26,14 @@ import {
 } from './nodeHarness.js';
 
 const NEXT_BLOCK_TIMEOUT_MS = 120_000; // up to a few target spacings once the retarget settles
+const PASSPHRASE = 'smoke test passphrase';
+
+/** The private key stored in a wallet file (empty once encrypted). */
+function storedPrivateKey(file: string): Buffer {
+	const type = protobuf.parse(WALLET_SCHEMA).root.lookupType('WalletData');
+	const { privateKey } = type.decode(fs.readFileSync(file)) as unknown as { privateKey?: Uint8Array };
+	return Buffer.from(privateKey ?? []);
+}
 
 function assertFile(file: string): void {
 	if (!fs.existsSync(file)) throw new Error(`expected file missing: ${file}`);
@@ -113,6 +123,20 @@ async function main(): Promise<void> {
 			throw new Error('the API token appeared in output');
 		}
 
+		step("encrypt A's wallet with the CLI; the unencrypted key must leave the disk");
+		const walletFile = path.join(dataA, 'wallet.dat');
+		const plainKey = storedPrivateKey(walletFile);
+		const encrypted = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'encrypt-wallet'], `${PASSPHRASE}\n`);
+		if (encrypted.code !== 0 || !encrypted.stdout.includes('wallet: encrypted, locked')) {
+			throw new Error(`cli encrypt-wallet failed: ${encrypted.stderr.trim()}`);
+		}
+		if (plainKey.length !== 32 || fs.readFileSync(walletFile).includes(plainKey)) {
+			throw new Error('the unencrypted key is still in wallet.dat');
+		}
+		if (fs.readdirSync(dataA).some((f) => f.startsWith('wallet.dat.') && f.endsWith('.backup'))) {
+			throw new Error('unencrypted wallet backups were left behind');
+		}
+
 		step('restart node A without mining; expect the same chain and wallet');
 		await stopNode(nodeB);
 		await stopNode(nodeA);
@@ -128,6 +152,19 @@ async function main(): Promise<void> {
 			'loading the mined chain',
 		);
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
+
+		step('the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
+		await waitFor(nodeA, API_READY, 'API');
+		const cli = (args: string[], input?: string) => runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), ...args], input);
+		if (!(await cli(['balance'])).stdout.includes('wallet: encrypted, locked')) throw new Error('wallet not locked after restart');
+		const wrong = await cli(['unlock'], 'not the passphrase\n');
+		if (wrong.code === 0 || !wrong.stderr.includes('wrong passphrase')) throw new Error('a wrong passphrase unlocked the wallet');
+		const unlocked = await cli(['unlock', '--staking-only'], `${PASSPHRASE}\n`);
+		if (!unlocked.stdout.includes('wallet: encrypted, unlocked for staking only')) {
+			throw new Error(`cli unlock failed: ${unlocked.stdout.trim()} ${unlocked.stderr.trim()}`);
+		}
+		if (!(await cli(['lock'])).stdout.includes('wallet: encrypted, locked')) throw new Error('cli lock failed');
+		if (running.some((node) => node.output().includes(PASSPHRASE))) throw new Error('the passphrase appeared in output');
 
 		running.forEach(noErrors);
 		step('PASS');

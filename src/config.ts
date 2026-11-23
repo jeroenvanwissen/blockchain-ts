@@ -134,6 +134,10 @@ export const MINER_RETRY_DELAY = 1000; // ms to wait after a rejected block befo
 // Wallet configuration
 export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
+// Wallet encryption (TASK-0024): scrypt KDF + AES-256-GCM. log2(N) = 15, r = 8 → 32 MiB and about
+// 0.1 s per unlock attempt. Stored per wallet, so stronger settings apply to newly encrypted ones.
+export const WALLET_SCRYPT = { logN: 15, r: 8, p: 1 };
+export const MIN_PASSPHRASE_LENGTH = 8;
 
 // Timestamp rules
 export const MEDIAN_TIME_SPAN = 11; // Number of blocks for median time calculation

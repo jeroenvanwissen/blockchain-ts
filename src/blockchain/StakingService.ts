@@ -20,6 +20,7 @@ export class StakingService {
 	private _timer: NodeJS.Timeout | null = null;
 	private _lastAttempt = ''; // `${tipHash}:${slot}`
 	private _isBusy = false;
+	private _lockedNoticeShown = false;
 
 	constructor(
 		private readonly _blockchain: Blockchain,
@@ -54,6 +55,12 @@ export class StakingService {
 	/** One staking attempt for the slot containing `now`; returns the staked block, if any. */
 	async tryStake(now = Date.now()): Promise<Block | null> {
 		if (this._isBusy || !this._blockchain.isProofOfStakePhase()) return null;
+		if (this._wallet.isLocked()) {
+			if (!this._lockedNoticeShown) log.info('wallet is locked; staking resumes once it is unlocked (cli unlock)');
+			this._lockedNoticeShown = true;
+			return null;
+		}
+		this._lockedNoticeShown = false;
 		const slot = Math.floor(now / STAKE_TIMESTAMP_GRANULARITY) * STAKE_TIMESTAMP_GRANULARITY;
 		const attempt = `${this._blockchain.getLatestBlock().hash}:${slot}`;
 		if (attempt === this._lastAttempt) return null;

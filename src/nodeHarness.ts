@@ -110,11 +110,15 @@ export async function apiGet<T>(node: NodeProcess, path: string): Promise<T> {
 	return (await res.json()) as T;
 }
 
-/** Run the CLI (`npm run cli`) to completion. */
-export function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+/** Run the CLI (`npm run cli`) to completion; `input` goes to its stdin (e.g. a passphrase). */
+export function runCli(
+	args: string[],
+	input?: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
 	const child = spawn(process.execPath, ['--import', TSX_LOADER, CLI_ENTRY, ...args], {
-		stdio: ['ignore', 'pipe', 'pipe'],
+		stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
 	});
+	child.stdin?.end(input);
 	let stdout = '';
 	let stderr = '';
 	child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()));

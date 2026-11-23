@@ -65,7 +65,9 @@ log.info(
 
 // Initialize wallet
 const wallet = new Wallet();
-log.info('Wallet initialized with address:', wallet.address);
+log.info(
+	`Wallet initialized with address: ${wallet.address}${wallet.isEncrypted() ? ' (encrypted, locked: unlock with cli unlock)' : ''}`,
+);
 
 // Create P2P server
 const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;

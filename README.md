@@ -17,13 +17,9 @@
 
 ## Status
 
-**Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
+**Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`).
 
-- wallet keys are stored unencrypted (TASK-0024).
-
-Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api).
-
-The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
 
 ---
 
@@ -178,7 +174,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
-| `wallet.dat`            | Wallet keys and address (protobuf, 0600)   |
+| `wallet.dat`            | Wallet keys and address (protobuf, 0600; the private key encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
 
@@ -232,6 +228,19 @@ npm run cli -- send <address1> 1 <address2> 2.25     # several recipients in one
 
 For another node, pass its data dir (for its `api.cookie`) and API URL: `npm run cli -- --data-dir ./data/node2 --api http://127.0.0.1:6002 balance`.
 
+### Wallet Encryption
+
+`wallet.dat` holds the private key unencrypted (mode 0600) until you encrypt it. Encryption uses a passphrase (scrypt, AES-256-GCM), deletes the old unencrypted backups, and locks the wallet:
+
+```bash
+npm run cli -- encrypt-wallet                    # asks for the passphrase twice
+npm run cli -- unlock --staking-only             # stake, but no payments
+npm run cli -- unlock --timeout 300              # full unlock for 5 minutes
+npm run cli -- lock
+```
+
+An encrypted wallet is locked whenever the node starts. While locked the node doesn't stake and `send` is refused; mining rewards still arrive. Without a terminal the CLI reads the passphrase from the first line of stdin. There's no passphrase recovery: losing it means losing the coins.
+
 ### Step 4: Verify
 
 ```bash
@@ -281,7 +290,10 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /mempool` | Number and total size of pending transactions, and their txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
 | `GET /wallet` | The node wallet's address, balance, spendable balance and number of outputs (token required) |
-| `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}` (token required) |
+| `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}`; 423 while the wallet is locked or unlocked for staking only (token required) |
+| `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the key at rest and locks the wallet (token required) |
+| `POST /wallet/unlock` | Body `{"passphrase": "...", "timeout": <seconds, 0 = no limit>, "stakingOnly": <bool>}`; 403 for a wrong passphrase (token required) |
+| `POST /wallet/lock` | Wipes the key from memory (token required) |
 
 The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 

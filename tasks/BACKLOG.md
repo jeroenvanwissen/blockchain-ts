@@ -57,11 +57,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0021](TASK-0021-lint.md) | Fix lint errors and gate changes on build, test and lint | done | P2 | small | none | F-017 |
 | [TASK-0022](TASK-0022-dead-code.md) | Remove dead code and stale files | done | P2 | small | none | F-018, old F1 |
 | [TASK-0023](TASK-0023-logging.md) | Leveled logging | done | P3 | small | TASK-0002 | old F2 |
-| TASK-0024 | Encrypt wallet keys at rest | pending | P3 | medium | TASK-0005 | — |
-
-Scope notes for the later tasks (expand into task files when they're picked up):
-
-- **TASK-0024:** passphrase-based key encryption (scrypt + AES-256-GCM) with an unlock step for staking.
+| [TASK-0024](TASK-0024-wallet-encryption.md) | Encrypt wallet keys at rest | done | P3 | medium | TASK-0005 | — |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

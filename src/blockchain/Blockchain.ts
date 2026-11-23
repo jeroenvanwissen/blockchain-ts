@@ -877,6 +877,7 @@ export class Blockchain {
 		) {
 			return null;
 		}
+		if (wallet.isLocked()) return null; // an encrypted wallet must be unlocked to stake
 		const bits = this.getRequiredBits(true);
 		const modifier = this._modifiers[height - 1];
 
@@ -896,7 +897,7 @@ export class Blockchain {
 				],
 				timestamp,
 			);
-			wallet.signTransaction(coinstake);
+			wallet.signTransaction(coinstake, 'stake');
 			const { transactions, fees } = this._selectForBlock(2);
 			const block = new Block(
 				timestamp,

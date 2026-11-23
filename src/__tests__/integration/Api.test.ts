@@ -219,7 +219,13 @@ describe('HTTP API', () => {
 
 			const wallet = await get('/wallet', { headers: { authorization: `Bearer ${TOKEN}` } });
 			expect(wallet.status).toBe(200);
-			expect(wallet.body).toEqual((await get(`/addresses/${miner.address}`)).body);
+			expect(wallet.body).toEqual({
+				...(await get(`/addresses/${miner.address}`)).body,
+				encrypted: false,
+				locked: false,
+				stakingOnly: false,
+				unlockedUntil: null,
+			});
 		});
 
 		it('should pay several outputs with change back to the wallet, and relay the payment', async () => {
@@ -273,6 +279,41 @@ describe('HTTP API', () => {
 			expect((await send({ outputs: [] }, { 'content-type': 'text/plain' })).status).toBe(415);
 			expect(chain.getPendingTransactions()).toHaveLength(0);
 			expect(broadcasts).toHaveLength(0);
+		});
+
+		it('should encrypt, unlock and lock the wallet, and refuse payments while locked or staking-only', async () => {
+			const post = (route: string, body: unknown) =>
+				get(route, {
+					method: 'POST',
+					headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+			const payment = { outputs: [{ address: openWallet(dir, 'to').address, amount: COIN.toString() }] };
+			const passphrase = 'correct horse battery';
+
+			expect((await post('/wallet/lock', {})).status).toBe(409); // not encrypted yet
+			expect((await post('/wallet/encrypt', { passphrase: 'short' })).status).toBe(400);
+			const encrypted = await post('/wallet/encrypt', { passphrase });
+			expect(encrypted.body).toMatchObject({ address: miner.address, encrypted: true, locked: true });
+			expect((await post('/wallet/encrypt', { passphrase })).status).toBe(409);
+
+			expect((await send(payment)).status).toBe(423);
+			expect((await post('/wallet/unlock', { passphrase: 'wrong passphrase' })).status).toBe(403);
+			expect((await post('/wallet/unlock', { passphrase, timeout: -1 })).status).toBe(400);
+
+			const stakingOnly = await post('/wallet/unlock', { passphrase, stakingOnly: true });
+			expect(stakingOnly.body).toMatchObject({ locked: false, stakingOnly: true, unlockedUntil: null });
+			const refused = await send(payment);
+			expect(refused.status).toBe(423);
+			expect(refused.body.error).toContain('staking only');
+
+			const unlocked = await post('/wallet/unlock', { passphrase, timeout: 60 });
+			expect(unlocked.body).toMatchObject({ locked: false, stakingOnly: false });
+			expect(typeof unlocked.body.unlockedUntil).toBe('string');
+			expect((await send(payment)).status).toBe(200);
+
+			expect((await post('/wallet/lock', {})).body).toMatchObject({ locked: true });
+			expect((await send(payment)).status).toBe(423);
 		});
 
 		it('should answer 405 for the wrong method and 404 on a node without wallet access', async () => {

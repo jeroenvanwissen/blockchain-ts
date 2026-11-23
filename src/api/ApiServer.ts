@@ -7,7 +7,7 @@ import type { Blockchain } from '../blockchain/Blockchain.js';
 import type { Transaction, TxOutput } from '../blockchain/Transaction.js';
 import { isValidAddress } from '../blockchain/address.js';
 import { outpointKey, type UTXO } from '../blockchain/UtxoSet.js';
-import type { Wallet } from '../blockchain/Wallet.js';
+import { WalletError, type Wallet, type WalletErrorCode } from '../blockchain/Wallet.js';
 import { MAX_API_BODY_BYTES, MAX_TRANSACTION_OUTPUTS } from '../config.js';
 import type { PeerInfo } from '../networking/P2PServer.js';
 import { logger } from '../logger.js';
@@ -71,8 +71,11 @@ export class ApiServer {
 		{ method: 'GET', pattern: /^\/addresses\/([^/]+)\/utxos$/, handle: ([address]) => this._utxos(address) },
 		{ method: 'GET', pattern: /^\/mempool$/, handle: () => this._mempool() },
 		{ method: 'GET', pattern: /^\/peers$/, handle: () => this._peers.getPeerInfo() },
-		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._address(this._wallet().address) },
+		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._walletInfo() },
 		{ method: 'POST', pattern: /^\/wallet\/send$/, wallet: true, handle: (_, body) => this._sendPayment(body) },
+		{ method: 'POST', pattern: /^\/wallet\/encrypt$/, wallet: true, handle: (_, body) => this._encrypt(body) },
+		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
+		{ method: 'POST', pattern: /^\/wallet\/lock$/, wallet: true, handle: () => this._lock() },
 	];
 
 	constructor(
@@ -181,8 +184,66 @@ export class ApiServer {
 	 * minimum relay fee), admit to the mempool, relay. Returns the txid and fee. Chain-side
 	 * rejections (funds, mempool rules) are 422.
 	 */
+	/** GET /wallet: balances plus the encryption and lock state. */
+	private _walletInfo() {
+		const wallet = this._wallet();
+		const until = wallet.unlockedUntil();
+		return {
+			...this._address(wallet.address),
+			encrypted: wallet.isEncrypted(),
+			locked: wallet.isLocked(),
+			stakingOnly: wallet.isStakingOnly(),
+			unlockedUntil: until === null ? null : new Date(until).toISOString(),
+		};
+	}
+
+	/** Run a wallet operation, mapping its WalletError codes to responses. */
+	private _walletCall<T>(operation: () => T): T {
+		try {
+			return operation();
+		} catch (error) {
+			if (error instanceof WalletError) throw new HttpError(WALLET_ERROR_STATUS[error.code], error.message);
+			throw error;
+		}
+	}
+
+	/** POST /wallet/encrypt { passphrase }: encrypt the key at rest; the wallet is locked afterwards. */
+	private _encrypt(body: unknown) {
+		const passphrase = parsePassphrase(body);
+		this._walletCall(() => this._wallet().encrypt(passphrase));
+		return this._walletInfo();
+	}
+
+	/**
+	 * POST /wallet/unlock { passphrase, timeout?, stakingOnly? }: decrypt the key into memory,
+	 * for `timeout` seconds (0 or absent: until locked or restarted), optionally for staking only.
+	 */
+	private _unlock(body: unknown) {
+		const passphrase = parsePassphrase(body);
+		const options = body as { timeout?: unknown; stakingOnly?: unknown };
+		const timeout = options.timeout ?? 0;
+		const stakingOnly = options.stakingOnly ?? false;
+		if (typeof timeout !== 'number' || !Number.isSafeInteger(timeout) || timeout < 0) {
+			throw new HttpError(400, 'timeout must be a whole number of seconds (0: no limit)');
+		}
+		if (typeof stakingOnly !== 'boolean') throw new HttpError(400, 'stakingOnly must be true or false');
+		this._walletCall(() => this._wallet().unlock(passphrase, { timeoutMs: timeout * 1000, stakingOnly }));
+		log.info(`wallet unlocked${stakingOnly ? ' for staking only' : ''}${timeout ? ` for ${timeout} s` : ''}`);
+		return this._walletInfo();
+	}
+
+	/** POST /wallet/lock: wipe the key from memory. */
+	private _lock() {
+		this._walletCall(() => this._wallet().lock());
+		log.info('wallet locked');
+		return this._walletInfo();
+	}
+
 	private async _sendPayment(body: unknown) {
 		const payTo = parsePayment(body);
+		const wallet = this._wallet();
+		if (wallet.isLocked()) throw new HttpError(423, 'wallet is locked: unlock it first (cli unlock)');
+		if (wallet.isStakingOnly()) throw new HttpError(423, 'wallet is unlocked for staking only');
 		const release = await this._sendLock.acquire();
 		try {
 			let payment: { transaction: Transaction; fee: bigint };
@@ -291,6 +352,24 @@ export class ApiServer {
 	private _confirmations(height: number): number {
 		return this._blockchain.getLatestBlock().index - height + 1;
 	}
+}
+
+/** HTTP status for each wallet state error. */
+const WALLET_ERROR_STATUS: Record<WalletErrorCode, number> = {
+	locked: 423,
+	'staking-only': 423,
+	'not-encrypted': 409,
+	'already-encrypted': 409,
+	'wrong-passphrase': 403,
+	'weak-passphrase': 400,
+};
+
+function parsePassphrase(body: unknown): string {
+	const passphrase = (body as { passphrase?: unknown } | null)?.passphrase;
+	if (typeof passphrase !== 'string' || passphrase.length === 0 || passphrase.length > 1024) {
+		throw new HttpError(400, 'expected { passphrase } (1 to 1024 characters)');
+	}
+	return passphrase;
 }
 
 /** Validate a /wallet/send body (400 on anything malformed). */

@@ -64,10 +64,23 @@ message BlockIndex {
 export const WALLET_SCHEMA = `
 syntax = "proto3";
 
+// The private key encrypted with a passphrase (TASK-0024): AES-256-GCM under a scrypt-derived key,
+// with the public key as additional authenticated data
+message EncryptedKey {
+  bytes salt = 1;
+  bytes nonce = 2;
+  bytes ciphertext = 3;
+  bytes auth_tag = 4;
+  uint32 scrypt_log_n = 5;
+  uint32 scrypt_r = 6;
+  uint32 scrypt_p = 7;
+}
+
 message WalletData {
-  bytes private_key = 1;
+  bytes private_key = 1; // empty when encrypted
   bytes public_key = 2;
   string address = 3;
   reserved 4, 5; // were transaction history and UTXOs; balances come from the chain (TASK-0017)
+  EncryptedKey encrypted_key = 6;
 }
 `;

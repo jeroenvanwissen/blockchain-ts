@@ -11,6 +11,12 @@ commands:
   send <address> <coins> [<address> <coins> ...]
                                             pay from the node's wallet plus the minimum fee;
                                             prints the txid (and the fee on stderr)
+  encrypt-wallet                            encrypt the wallet key with a passphrase (asked for;
+                                            read from stdin when it isn't a terminal); locks it
+  unlock [--timeout <seconds>] [--staking-only]
+                                            unlock an encrypted wallet (staking-only: can stake,
+                                            can't send)
+  lock                                      lock an encrypted wallet
 
 options:
   --data-dir <dir>   the node's data dir, for its api.cookie (default: the default data dir)
@@ -31,6 +37,50 @@ interface WalletInfo {
 	balance: string;
 	spendable: string;
 	utxos: number;
+	encrypted: boolean;
+	locked: boolean;
+	stakingOnly: boolean;
+	unlockedUntil: string | null;
+}
+
+function walletState(w: WalletInfo): string {
+	if (!w.encrypted) return 'not encrypted';
+	if (w.locked) return 'encrypted, locked';
+	const scope = w.stakingOnly ? 'unlocked for staking only' : 'unlocked';
+	return `encrypted, ${scope}${w.unlockedUntil ? ` until ${w.unlockedUntil}` : ''}`;
+}
+
+/** Read a passphrase without echo from a terminal, or the first line of stdin otherwise. */
+async function readPassphrase(prompt: string): Promise<string> {
+	const stdin = process.stdin;
+	if (!stdin.isTTY) {
+		const chunks: Buffer[] = [];
+		for await (const chunk of stdin as AsyncIterable<Buffer>) chunks.push(chunk);
+		return Buffer.concat(chunks).toString('utf8').split(/\r?\n/)[0];
+	}
+	process.stderr.write(prompt);
+	return new Promise((resolve, reject) => {
+		let input = '';
+		const finish = (error?: Error) => {
+			stdin.off('data', onData);
+			stdin.setRawMode(false);
+			stdin.pause();
+			process.stderr.write('\n');
+			if (error) reject(error);
+			else resolve(input);
+		};
+		const onData = (data: string) => {
+			for (const char of data) {
+				if (char === '\r' || char === '\n') return finish();
+				if (char === '\u0003') return finish(new Error('cancelled'));
+				input = char === '\u007f' || char === '\b' ? input.slice(0, -1) : input + char;
+			}
+		};
+		stdin.setRawMode(true);
+		stdin.setEncoding('utf8');
+		stdin.resume();
+		stdin.on('data', onData);
+	});
 }
 
 /** Split off --data-dir (read by config.ts) and --api; the rest is the command. */
@@ -85,6 +135,7 @@ async function run(argv: string[]): Promise<void> {
 		case 'balance': {
 			const w = await request<WalletInfo>(api, 'GET', '/wallet');
 			console.log(`address: ${w.address}`);
+			console.log(`wallet: ${walletState(w)}`);
 			console.log(`balance: ${formatCoins(BigInt(w.balance))}`);
 			console.log(`spendable: ${formatCoins(BigInt(w.spendable))}`);
 			console.log(`outputs: ${w.utxos}`);
@@ -99,6 +150,35 @@ async function run(argv: string[]): Promise<void> {
 			const { txid, fee } = await request<{ txid: string; fee: string }>(api, 'POST', '/wallet/send', { outputs });
 			console.log(txid);
 			console.error(`fee: ${formatCoins(BigInt(fee))}`);
+			return;
+		}
+		case 'encrypt-wallet': {
+			if (rest.length > 0) throw new UsageError('encrypt-wallet takes no arguments');
+			const passphrase = await readPassphrase('New wallet passphrase: ');
+			if (process.stdin.isTTY && (await readPassphrase('Repeat passphrase: ')) !== passphrase) {
+				throw new Error('passphrases do not match');
+			}
+			const w = await request<WalletInfo>(api, 'POST', '/wallet/encrypt', { passphrase });
+			console.log(`wallet: ${walletState(w)}`);
+			console.log('Keep the passphrase safe: without it the wallet cannot be unlocked.');
+			return;
+		}
+		case 'unlock': {
+			let timeout = 0;
+			let stakingOnly = false;
+			for (let i = 0; i < rest.length; i++) {
+				if (rest[i] === '--staking-only') stakingOnly = true;
+				else if (rest[i] === '--timeout' && /^\d+$/.test(rest[i + 1] ?? '')) timeout = Number(rest[++i]);
+				else throw new UsageError(`unlock: unexpected ${rest[i]}`);
+			}
+			const passphrase = await readPassphrase('Wallet passphrase: ');
+			const w = await request<WalletInfo>(api, 'POST', '/wallet/unlock', { passphrase, timeout, stakingOnly });
+			console.log(`wallet: ${walletState(w)}`);
+			return;
+		}
+		case 'lock': {
+			const w = await request<WalletInfo>(api, 'POST', '/wallet/lock', {});
+			console.log(`wallet: ${walletState(w)}`);
 			return;
 		}
 		default:
