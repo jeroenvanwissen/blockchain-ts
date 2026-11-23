@@ -1,6 +1,6 @@
-import * as secp256k1 from 'secp256k1';
 import * as crypto from 'crypto';
 import { MAX_TRANSACTION_INPUTS, MAX_TRANSACTION_OUTPUTS } from '../config.js';
+import { secp256k1 } from './secp256k1.js';
 
 export interface TxInput {
 	previousTx: string; // Reference to previous transaction hash

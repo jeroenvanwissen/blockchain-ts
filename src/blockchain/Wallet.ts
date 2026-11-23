@@ -1,11 +1,12 @@
 import * as crypto from 'crypto';
-import * as secp256k1 from 'secp256k1';
 import * as fs from 'fs';
 import * as path from 'path';
 import CryptoJS from 'crypto-js';
 import protobuf from 'protobufjs';
 import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
-import { MAX_WALLET_BACKUPS, WALLET_DATA_FILENAME, WALLET_PROTO_PATH } from '../config.js';
+import { WALLET_SCHEMA } from './protoSchemas.js';
+import { secp256k1 } from './secp256k1.js';
+import { DATA_DIR, MAX_WALLET_BACKUPS, WALLET_DATA_FILENAME } from '../config.js';
 
 interface WalletData {
 	privateKey: Uint8Array;
@@ -28,7 +29,7 @@ interface WalletData {
 let _walletProtoRoot: protobuf.Root | null = null;
 function getWalletProto(): protobuf.Type {
 	if (!_walletProtoRoot) {
-		_walletProtoRoot = protobuf.loadSync(WALLET_PROTO_PATH);
+		_walletProtoRoot = protobuf.parse(WALLET_SCHEMA).root;
 	}
 	return _walletProtoRoot.lookupType('WalletData');
 }
@@ -49,14 +50,8 @@ export class Wallet {
 	private utxos: UTXO[] = [];
 
 	constructor(walletPath?: string) {
-		if (!walletPath) {
-			const dataDir = path.join(process.cwd(), 'data');
-			if (!fs.existsSync(dataDir)) {
-				fs.mkdirSync(dataDir, { recursive: true });
-			}
-			walletPath = path.join(dataDir, WALLET_DATA_FILENAME);
-		}
-		this.walletPath = walletPath;
+		// saveWallet() creates the directory when needed
+		this.walletPath = walletPath ?? path.join(DATA_DIR, WALLET_DATA_FILENAME);
 
 		if (fs.existsSync(this.walletPath)) {
 			this.loadWallet();
@@ -106,7 +101,7 @@ export class Wallet {
 		try {
 			const WalletDataType = getWalletProto();
 			const decoded = WalletDataType.decode(fileBuffer as Uint8Array);
-			data = WalletDataType.toObject(decoded, { longs: Number }) as WalletData;
+			data = WalletDataType.toObject(decoded, { longs: Number, arrays: true }) as WalletData;
 		} catch (error) {
 			console.error('[Wallet] wallet file is corrupted (invalid protobuf):', error);
 			console.log('[Wallet] generating new wallet');
@@ -317,7 +312,10 @@ export class Wallet {
 			const fileBuffer = fs.readFileSync(importPath) as Buffer;
 			const WalletDataType = getWalletProto();
 			const decoded = WalletDataType.decode(fileBuffer as Uint8Array);
-			importedData = WalletDataType.toObject(decoded, { longs: Number }) as WalletData;
+			importedData = WalletDataType.toObject(decoded, {
+				longs: Number,
+				arrays: true,
+			}) as WalletData;
 		} catch {
 			throw new Error('failed to read or parse import file');
 		}
@@ -344,9 +342,10 @@ export class Wallet {
 			throw new Error('invalid wallet file: public key does not match private key');
 		}
 
-		fs.copyFileSync(importPath, targetPath || path.join(process.cwd(), 'data', WALLET_DATA_FILENAME));
-		const wallet = new Wallet(targetPath);
-		return wallet;
+		const destination = targetPath ?? path.join(DATA_DIR, WALLET_DATA_FILENAME);
+		fs.mkdirSync(path.dirname(destination), { recursive: true });
+		fs.copyFileSync(importPath, destination);
+		return new Wallet(destination);
 	}
 
 	private encodeAddress(hash: Buffer): string {

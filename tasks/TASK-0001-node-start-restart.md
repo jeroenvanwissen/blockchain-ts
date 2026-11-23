@@ -1,6 +1,6 @@
 # TASK-0001: Make the node start and restart from disk
 
-Status: pending
+Status: done
 Priority: P0
 Size: small
 Depends on: none
@@ -23,12 +23,20 @@ Excluded: consensus or format changes.
 
 ## Acceptance criteria
 
-- [ ] `npx tsx src/index.ts --data-dir <tmp>` reaches "P2P Server listening" on a fresh dir.
-- [ ] The same command on the same dir starts again without errors and keeps the stored chain.
-- [ ] Starting from a directory other than the repo root works.
-- [ ] `wallet.dat` is created inside the data dir.
-- [ ] A second node with its own `--data-dir` and `--peers ws://localhost:5001` connects to the first.
+- [x] `npx tsx src/index.ts --data-dir <tmp>` reaches "P2P Server listening" on a fresh dir.
+- [x] The same command on the same dir starts again without errors and keeps the stored chain.
+- [x] Starting from a directory other than the repo root works.
+- [x] `wallet.dat` is created inside the data dir.
+- [x] A second node with its own `--data-dir` and `--peers ws://localhost:5001` connects to the first.
 
 ## Validation
 
 `npm run build`, `npm test`, `npm run smoke` (new).
+
+## Outcome
+
+- `secp256k1` is imported through `src/blockchain/secp256k1.ts`. That module reads the CommonJS `default` export when it exists, so the import works under native ESM and under ts-jest. A plain default import fails type-checking, because `@types/secp256k1` declares named exports. `secp256k1` is now a runtime dependency (^5.0.2).
+- Proto paths: ts-jest compiles to CommonJS and rejects `import.meta` (TS1343). So instead of resolving file paths, the schemas are embedded in `src/blockchain/protoSchemas.ts` and loaded with `protobuf.parse()`. The `proto/` directory and the `*_PROTO_PATH` config values are gone. This also fixes running from `dist/`, which never contained the `.proto` files.
+- `npm run smoke` (`src/smoke.ts`) covers every acceptance criterion. It runs two real node processes in a temp dir with an unrelated working directory: start, restart (same wallet address, no load errors), then a second node connects with `--peers`.
+- The smoke check fails against the pre-fix code (proto ENOENT). It also fails when the `arrays: true` fix or the import shim is reverted alone, at restart and at first start respectively.
+- The "keeps the stored chain" criterion is checked at genesis only, because no component can mine yet (TASK-0004). Round trips of longer chains belong to TASK-0003.

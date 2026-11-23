@@ -21,7 +21,7 @@ jest.mock('protobufjs', () => {
 	return {
 		__esModule: true,
 		default: {
-			loadSync: () => ({ lookupType: () => mockType }),
+			parse: () => ({ root: { lookupType: () => mockType } }),
 		},
 	};
 });

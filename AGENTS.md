@@ -7,26 +7,28 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` with `miningWorker.cjs`, `StakingService.ts`
 - `src/networking/P2PServer.ts`: WebSocket peers, chain sync, peer discovery
 - `src/config.ts`: all constants and the data-dir and port settings
-- `src/index.ts`: node entry point; `src/mine.ts`: standalone miner
-- `proto/`: protobuf schemas for blocks, the block index and the wallet
+- `src/index.ts`: node entry point; `src/mine.ts`: standalone miner; `src/smoke.ts`: runtime smoke check
+- `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)
+- `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`)
 
 ## Setup and commands
 
-Run everything from the repository root (proto files are currently resolved from the working directory).
+Run npm scripts from the repository root.
 
 - Install: `npm install`
 - Build: `npm run build` (tsc)
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
-- Lint: `npm run lint` (currently fails with 41 errors, see TASK-0021)
-- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var.
-- As of 2026-11-23 the node crashes on start (F-001) and on restart (F-002). TASK-0001 fixes both.
+- Smoke: `npm run smoke` (real node processes in a temp dir: start, restart, second node connects; about 10 s; `-- --keep` keeps the temp dir)
+- Lint: `npm run lint` (currently fails on pre-existing errors, see TASK-0021); lint touched files with `npx eslint <files>`
+- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
 ## Conventions
 
 - ES modules (`"type": "module"`). Relative imports use explicit `.js` extensions; use `import type` for type-only imports.
 - `src/blockchain/miningWorker.cjs` must stay CommonJS.
-- Import CommonJS packages (for example `secp256k1`) by default import. ts-jest compiles to CommonJS and hides namespace-import failures that crash the real runtime.
+- CommonJS packages behave differently under ts-jest (compiled to CommonJS) and the real runtime (native ESM): a namespace import can work in tests and crash the node. Verify new CommonJS imports with `npm run smoke`.
+- Don't use `import.meta` in modules that tests import; ts-jest rejects it (TS1343). Entry points such as `src/smoke.ts` may use it.
 - Put constants in `src/config.ts`. Use environment variables only for runtime settings (ports, peers, data dir).
 - `Blockchain` mutations go through its `async-mutex` lock. Public async methods acquire it; `_`-prefixed internals assume it is held. Never call a public locking method while holding the lock.
 - Formatting follows the editor Prettier settings in `.vscode/settings.json`: tabs, single quotes, trailing commas. Don't reformat code you aren't changing.
@@ -48,7 +50,7 @@ Run everything from the repository root (proto files are currently resolved from
 ## Change verification
 
 - Run `npm run build` and `npm test` for every change. Also run `npm run lint` on the files you touched.
-- Unit tests mock `fs`, `protobufjs` and time, so they don't prove the node runs. For anything touching startup, storage, wallet, mining or networking, also start a real node against a temporary `--data-dir`, restart it, and check the output (`npm run smoke` once TASK-0001 adds it).
+- Unit tests mock `fs`, `protobufjs` and time, so they don't prove the node runs. For anything touching startup, storage, wallet, mining, networking or imports, also run `npm run smoke`.
 - When an attack scenario from the assessment is fixed, turn its regression test from `test.failing` into `test`.
 
 ## Safety

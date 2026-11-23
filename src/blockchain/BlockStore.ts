@@ -3,11 +3,8 @@ import * as path from 'path';
 import protobuf from 'protobufjs';
 import { Block } from './Block.js';
 import { Transaction } from './Transaction.js';
-import {
-	BLOCKCHAIN_PROTO_PATH,
-	BLOCK_INDEX_PROTO_PATH,
-	MAX_BLOCK_FILE_SIZE,
-} from '../config.js';
+import { BLOCKCHAIN_SCHEMA, BLOCK_INDEX_SCHEMA } from './protoSchemas.js';
+import { MAX_BLOCK_FILE_SIZE } from '../config.js';
 
 interface IndexEntry {
 	hash: string;
@@ -20,7 +17,7 @@ interface IndexEntry {
 let _blockProtoRoot: protobuf.Root | null = null;
 function getBlockProto(): protobuf.Type {
 	if (!_blockProtoRoot) {
-		_blockProtoRoot = protobuf.loadSync(BLOCKCHAIN_PROTO_PATH);
+		_blockProtoRoot = protobuf.parse(BLOCKCHAIN_SCHEMA).root;
 	}
 	return _blockProtoRoot.lookupType('SerializedBlock');
 }
@@ -28,7 +25,7 @@ function getBlockProto(): protobuf.Type {
 let _indexProtoRoot: protobuf.Root | null = null;
 function getIndexProto(): protobuf.Type {
 	if (!_indexProtoRoot) {
-		_indexProtoRoot = protobuf.loadSync(BLOCK_INDEX_PROTO_PATH);
+		_indexProtoRoot = protobuf.parse(BLOCK_INDEX_SCHEMA).root;
 	}
 	return _indexProtoRoot.lookupType('BlockIndex');
 }
@@ -225,7 +222,8 @@ export class BlockStore {
 	private _deserializeBlock(buffer: Buffer): Block {
 		const SerializedBlock = getBlockProto();
 		const decoded = SerializedBlock.decode(buffer as Uint8Array);
-		const data = SerializedBlock.toObject(decoded, { longs: Number }) as {
+		// arrays: true — proto3 omits empty repeated fields (e.g. coinbase inputs) on decode
+		const data = SerializedBlock.toObject(decoded, { longs: Number, arrays: true }) as {
 			timestamp: number;
 			transactions: {
 				inputs: { previousTx: string; outputIndex: number; signature: string }[];
@@ -282,7 +280,7 @@ export class BlockStore {
 
 			const IndexType = getIndexProto();
 			const decoded = IndexType.decode(fileBuffer as Uint8Array);
-			const obj = IndexType.toObject(decoded, { longs: Number }) as {
+			const obj = IndexType.toObject(decoded, { longs: Number, arrays: true }) as {
 				entries: IndexEntry[];
 				currentFileNumber: number;
 				currentFileSize: number;

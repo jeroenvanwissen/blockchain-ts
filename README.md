@@ -17,9 +17,8 @@
 
 ## Status
 
-**Not functional end to end yet (assessed 2026-11-23).** The build and unit tests pass, but:
+**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, and connect to each other (`npm run smoke`), but:
 
-- the node crashes on first start and on restart (fixes: TASK-0001);
 - nothing produces blocks the node accepts (TASK-0004);
 - signatures are not verified, and block transactions are not checked against the UTXO set (TASK-0005, TASK-0006);
 - stake state is node-local, so nodes disagree after restarts (TASK-0009, TASK-0011).
@@ -36,7 +35,8 @@ The feature list below describes the intended design. See the [assessment](tasks
 3. Start a second node:      P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001
 4. Run the miner:            npm run mine
 5. Run tests:                npm test
-6. Build for production:     npm run build
+6. Run the smoke check:      npm run smoke
+7. Build for production:     npm run build
 ```
 
 ---
@@ -185,6 +185,7 @@ npm run mine
 
 ```bash
 npm test                # Run test suite
+npm run smoke           # Start, restart and connect real nodes in a temp dir
 npm run build           # Compile TypeScript
 ```
 
@@ -252,6 +253,7 @@ await blockchain.stake(wallet.address, 50, wallet);
 | Run node          | `npm start`                                                   |
 | Run miner         | `npm run mine`                                                |
 | Run tests         | `npm test`                                                    |
+| Smoke check       | `npm run smoke`                                               |
 | Build             | `npm run build`                                               |
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |

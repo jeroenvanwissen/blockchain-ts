@@ -76,11 +76,6 @@ export const BLOCK_TIME = 30; // Target time between blocks in seconds
 export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
 
-// Proto schema paths
-export const BLOCKCHAIN_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockchain.proto');
-export const BLOCK_INDEX_PROTO_PATH = path.join(process.cwd(), 'proto', 'blockindex.proto');
-export const WALLET_PROTO_PATH = path.join(process.cwd(), 'proto', 'wallet.proto');
-
 // Staking security
 export const UNSTAKE_DELAY = 100; // Blocks before unstaked funds are released
 export const MAX_STAKE_AGE_MULTIPLIER = 4; // Maximum age multiplier for stake weight
