@@ -128,7 +128,9 @@ describe('Block validation (single path)', () => {
 			new BlockStore(path.join(dir, 'blocks')).appendBlock(bad);
 			const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
 			const reopened = openChain(dir);
-			expect(errors).toHaveBeenCalledWith(`[Blockchain] invalid stored block: block 4: ${reason}`);
+			expect(errors).toHaveBeenCalledWith(
+				expect.stringContaining(`WARN  [Blockchain] invalid stored block: block 4: ${reason}`),
+			);
 			expect(reopened.getLatestBlock().hash).toBe(chain.getLatestBlock().hash);
 		} finally {
 			removeTempDir(otherDir);

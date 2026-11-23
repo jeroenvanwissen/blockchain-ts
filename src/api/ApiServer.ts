@@ -10,6 +10,9 @@ import { outpointKey, type UTXO } from '../blockchain/UtxoSet.js';
 import type { Wallet } from '../blockchain/Wallet.js';
 import { MAX_API_BODY_BYTES, MAX_TRANSACTION_OUTPUTS } from '../config.js';
 import type { PeerInfo } from '../networking/P2PServer.js';
+import { logger } from '../logger.js';
+
+const log = logger('API');
 
 export interface ApiOptions {
 	host: string;
@@ -128,7 +131,7 @@ export class ApiServer {
 			this._send(res, 200, await route.handle(params, body));
 		} catch (error) {
 			if (error instanceof HttpError) return this._send(res, error.status, { error: error.message }, headers);
-			console.error('[API] request failed:', error);
+			log.error('request failed:', error);
 			this._send(res, 500, { error: 'internal error' });
 		}
 	}
@@ -191,7 +194,7 @@ export class ApiServer {
 			}
 			this._walletAccess!.broadcast(payment.transaction);
 			const txid = payment.transaction.calculateHash();
-			console.log(`[API] sent ${txid.slice(0, 16)} from the wallet (fee ${payment.fee})`);
+			log.info(`sent ${txid.slice(0, 16)} from the wallet (fee ${payment.fee})`);
 			return { txid, fee: payment.fee.toString() };
 		} finally {
 			release();

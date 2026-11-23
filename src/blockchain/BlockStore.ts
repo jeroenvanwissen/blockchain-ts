@@ -5,6 +5,9 @@ import { Block } from './Block.js';
 import { Transaction } from './Transaction.js';
 import { BLOCKCHAIN_SCHEMA, BLOCK_INDEX_SCHEMA } from './protoSchemas.js';
 import { MAX_BLOCK_FILE_SIZE } from '../config.js';
+import { logger } from '../logger.js';
+
+const log = logger('BlockStore');
 
 interface IndexEntry {
 	hash: string;
@@ -291,7 +294,7 @@ export class BlockStore {
 				this._heightMap.set(this._entries[i].height, i);
 			}
 		} catch (error) {
-			console.error('[BlockStore] error loading index:', error);
+			log.error('error loading index:', error);
 			this.rebuildIndex();
 		}
 	}

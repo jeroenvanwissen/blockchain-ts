@@ -158,7 +158,7 @@ describe('StakingService', () => {
 		const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
 
 		await runSlots([service], 1);
-		expect(errors).toHaveBeenCalledWith('[Staking] block rejected:', 'simulated');
+		expect(errors).toHaveBeenCalledWith(expect.stringContaining('WARN  [Staking] block rejected:'), 'simulated');
 		await runSlots([service], 5, () => posBlocks(chain).length > 0);
 		expect(posBlocks(chain).length).toBe(1);
 	});

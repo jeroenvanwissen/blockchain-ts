@@ -205,20 +205,21 @@ describe('P2PServer', () => {
 	});
 
 	// Add test for socket error handling with proper error event
-	it('should handle socket connection errors', () => {
-		const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+	it('should log socket errors (routine on P2P: info level) and forget the socket', () => {
+		const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 		const mockError = new Error('Connection failed');
 
 		p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
 		mockSocket.emit('error', mockError);
 
-		expect(consoleSpy).toHaveBeenCalled();
+		expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('INFO  [P2P] Socket connection error:'), 'Connection failed');
+		expect(p2pServer.getSockets()).not.toContain(mockSocket);
 		consoleSpy.mockRestore();
 	});
 
 	// Add test for message parsing with proper message event
 	it('should count unparseable messages as misbehavior', () => {
-		const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+		const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
 		p2pServer['connectSocket'](mockSocket as unknown as WebSocket);
 		mockSocket.emit('message', 'invalid-json');
@@ -491,7 +492,7 @@ describe('P2PServer', () => {
 			p2pServer['_persistPeers']();
 
 			expect(console.error).toHaveBeenCalledWith(
-				'Error writing peers.json:',
+				expect.stringContaining('ERROR [P2P] Error writing peers.json:'),
 				expect.any(Error),
 			);
 		});

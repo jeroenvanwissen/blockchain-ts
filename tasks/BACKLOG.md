@@ -56,12 +56,11 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0020](TASK-0020-peer-limits.md) | Peer limits and reconnect policy | done | P2 | small | TASK-0013 | old E4 |
 | [TASK-0021](TASK-0021-lint.md) | Fix lint errors and gate changes on build, test and lint | done | P2 | small | none | F-017 |
 | [TASK-0022](TASK-0022-dead-code.md) | Remove dead code and stale files | done | P2 | small | none | F-018, old F1 |
-| TASK-0023 | Leveled logging | pending | P3 | small | TASK-0002 | old F2 |
+| [TASK-0023](TASK-0023-logging.md) | Leveled logging | done | P3 | small | TASK-0002 | old F2 |
 | TASK-0024 | Encrypt wallet keys at rest | pending | P3 | medium | TASK-0005 | — |
 
 Scope notes for the later tasks (expand into task files when they're picked up):
 
-- **TASK-0023:** replace `console.*` with a small leveled logger (debug output off by default). Never log key material.
 - **TASK-0024:** passphrase-based key encryption (scrypt + AES-256-GCM) with an unlock step for staking.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
@@ -96,5 +95,5 @@ The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/
 | E5 Self-connection | pending | TASK-0013 |
 | E6 Test coverage | pending | Replaced by TASK-0003 and TASK-0015 (targeted runtime tests rather than a coverage number). |
 | F1 Dead code and config | done | TASK-0022 |
-| F2 Logging cleanup | pending | TASK-0023 |
+| F2 Logging cleanup | done | TASK-0023 |
 | F3 Merkle tree | pending | TASK-0007 |

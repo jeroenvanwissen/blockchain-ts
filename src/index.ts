@@ -20,6 +20,9 @@ import {
 	REGTEST_STAKE_MIN_AGE,
 	SEED_NODES,
 } from './config.js';
+import { logger } from './logger.js';
+
+const log = logger('Node');
 
 // miningWorker.cjs sits next to Miner (copied to dist/ by tsc via allowJs)
 const MINING_WORKER_PATH = fileURLToPath(
@@ -52,22 +55,22 @@ try {
 	// Create blockchain instance
 	blockchain = new Blockchain(chainOptions);
 } catch (error) {
-	console.error('Failed to load blockchain:', error);
+	log.error('Failed to load blockchain:', error);
 	process.exit(1);
 }
 const loadedTip = blockchain.getLatestBlock();
-console.log(
+log.info(
 	`Chain loaded: height ${loadedTip.index}, tip ${loadedTip.hash.slice(0, 16)}`,
 );
 
 // Initialize wallet
 const wallet = new Wallet();
-console.log('Wallet initialized with address:', wallet.address);
+log.info('Wallet initialized with address:', wallet.address);
 
 // Create P2P server
 const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
 const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic });
-if (isRegtest) console.log('Regtest network');
+if (isRegtest) log.info('Regtest network');
 
 // HTTP API (loopback by default). Chain routes are public; /wallet routes need the token that
 // is written to api.cookie on every start (never logged)
@@ -83,8 +86,8 @@ const api = new ApiServer(
 );
 api
 	.listen()
-	.then(() => console.log(`API listening on http://${API_HOST}:${api.port()}`))
-	.catch((error: Error) => console.error(`[API] could not listen on ${API_HOST}:${API_PORT}:`, error.message));
+	.then(() => log.info(`API listening on http://${API_HOST}:${api.port()}`))
+	.catch((error: Error) => log.error(`API could not listen on ${API_HOST}:${API_PORT}:`, error.message));
 
 
 // Start P2P server
@@ -99,7 +102,7 @@ try {
 	const data = fs.readFileSync(PEER_DATA_PATH, 'utf-8');
 	filePeers = JSON.parse(data);
 } catch (error) {
-	console.error('Error reading peer data file:', error);
+	log.error('Error reading peer data file:', error);
 }
 
 // Combine peers from seed nodes, command line, and file
@@ -111,27 +114,27 @@ p2pServer.loadInitialPeers(allPeers);
 // Connect to all peers
 p2pServer.connectToPeers(allPeers);
 
-console.log('Blockchain node started. Listening for peers...');
+log.info('Blockchain node started. Listening for peers...');
 
 // Optional proof-of-work mining (--mine); rewards go to this node's wallet
 const miner = new Miner(blockchain, wallet.address, MINING_WORKER_PATH, (block) =>
 	p2pServer.broadcastBlock(block),
 );
 if (isMining) {
-	console.log('Mining enabled');
+	log.info('Mining enabled');
 	miner.start();
 }
 
 // Optional proof-of-stake block production (--stake) with this node's wallet
 const staking = new StakingService(blockchain, wallet, (block) => p2pServer.broadcastBlock(block));
 if (isStaking) {
-	console.log('Staking enabled');
+	log.info('Staking enabled');
 	staking.start();
 }
 
 // Handle process termination
 process.on('SIGINT', () => {
-	console.log('\nStopping blockchain node...');
+	log.info('Stopping blockchain node...');
 	staking.stop();
 	void miner.stop().finally(() => process.exit(0));
 });

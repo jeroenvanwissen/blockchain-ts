@@ -23,6 +23,9 @@ import {
 	RELAY_SEEN_CACHE_SIZE,
 	SYNC_BATCH_SIZE,
 } from '../config.js';
+import { logger } from '../logger.js';
+
+const log = logger('P2P');
 
 export enum MessageType {
 	VERSION = 'VERSION',
@@ -177,21 +180,21 @@ export class P2PServer {
 				return;
 			}
 			if (this._countPeers(true) >= MAX_INBOUND_PEERS) {
-				console.log(`Refusing inbound connection from ${ip}: ${MAX_INBOUND_PEERS} inbound peers already`);
+				log.info(`Refusing inbound connection from ${ip}: ${MAX_INBOUND_PEERS} inbound peers already`);
 				socket.close(1013, 'too many peers');
 				return;
 			}
-			console.log(`New connection from ${remoteAddress}`);
+			log.debug(`New connection from ${remoteAddress}`);
 			this.connectSocket(socket, remoteAddress);
 		});
 
 		server.on('error', (error) => {
-			console.error('WebSocket Server error:', error);
+			log.error('WebSocket Server error:', error);
 		});
 
 		return new Promise((resolve) => {
 			server.on('listening', () => {
-				console.log(`P2P Server listening on 0.0.0.0:${this.p2pPort}`);
+				log.info(`P2P Server listening on 0.0.0.0:${this.p2pPort}`);
 				this._startPeerBroadcast();
 				resolve();
 			});
@@ -217,7 +220,7 @@ export class P2PServer {
 		for (const peer of newPeers) {
 			const normalizedPeer = this.normalizePeerUrl(peer);
 			if (!isValidPeerAddress(normalizedPeer)) {
-				console.log(`Invalid peer address, skipping: ${peer}`);
+				log.warn(`Invalid peer address, skipping: ${peer}`);
 				continue;
 			}
 			if (this._ownAddresses.has(normalizedPeer) || this.isBanned(normalizedPeer)) continue;
@@ -254,7 +257,7 @@ export class P2PServer {
 	/** Open an outbound connection; `onFail` runs if it never opens. */
 	private _dial(url: string, onFail?: () => void): void {
 		this.connectedPeers.add(url); // connecting or connected
-		console.log(`Attempting to connect to peer: ${url}`);
+		log.debug(`Attempting to connect to peer: ${url}`);
 		const socket = new WebSocket(url, {
 			handshakeTimeout: 5000,
 			maxPayload: MAX_MESSAGE_BYTES,
@@ -265,7 +268,7 @@ export class P2PServer {
 		socket.on('open', () => {
 			opened = true;
 			this._dialing.delete(socket);
-			console.log(`Successfully connected to peer: ${url}`);
+			log.info(`Successfully connected to peer: ${url}`);
 			this.connectSocket(socket);
 		});
 		socket.on('error', (error) => {
@@ -274,7 +277,7 @@ export class P2PServer {
 			// connectSocket handles errors on established connections; close() cancels dials
 			if (opened || this._isClosing) return;
 			// Unreachable peers are routine (offline, wrong address): not an error
-			console.log(`Connection failed to peer: ${url} (${error.message})`);
+			log.info(`Connection failed to peer: ${url} (${error.message})`);
 			onFail?.();
 		});
 		socket.on('close', () => {
@@ -296,11 +299,11 @@ export class P2PServer {
 		const state = this._peerState.get(socket);
 		if (!state || points <= 0) return;
 		state.score += points;
-		console.log(`Peer misbehaving (+${points}, score ${state.score}/${BAN_SCORE}): ${reason}`);
+		log.warn(`Peer misbehaving (+${points}, score ${state.score}/${BAN_SCORE}): ${reason}`);
 		if (state.score < BAN_SCORE) return;
 		const key = this._banKey(socket, state);
 		this._banned.set(key, Date.now() + BAN_DURATION);
-		console.log(`Banning peer ${key} for ${BAN_DURATION / 3_600_000} h`);
+		log.warn(`Banning peer ${key} for ${BAN_DURATION / 3_600_000} h`);
 		const url = (socket as unknown as { url?: string }).url;
 		if (url && this._knownPeers.delete(this.normalizePeerUrl(url))) this._persistPeers();
 		socket.close(1008, 'misbehaving');
@@ -320,10 +323,10 @@ export class P2PServer {
 	/** A peer's block was rejected: misbehavior unless an honest peer could cause it. */
 	private _blockRejected(socket: WebSocket | undefined, error: Error): void {
 		if (BENIGN_BLOCK_ERRORS.some((benign) => error.message.includes(benign))) {
-			console.log('Block from peer not accepted:', error.message);
+			log.debug('Block from peer not accepted:', error.message);
 			return;
 		}
-		console.error('Rejected invalid block from peer:', error.message);
+		log.warn('Rejected invalid block from peer:', error.message);
 		if (socket) this._misbehaving(socket, 50, `invalid block (${error.message})`);
 	}
 
@@ -336,7 +339,7 @@ export class P2PServer {
 			remoteAddress,
 			handshakeTimer: setTimeout(() => {
 				if (!this._isReady(socket)) {
-					console.log('Peer did not complete the handshake in time, disconnecting');
+					log.info('Peer did not complete the handshake in time, disconnecting');
 					socket.close();
 				}
 			}, HANDSHAKE_TIMEOUT),
@@ -346,7 +349,7 @@ export class P2PServer {
 		this._peerState.set(socket, state);
 
 		socket.on('error', (error) => {
-			console.error('Socket connection error:', error);
+			log.info('Socket connection error:', error.message);
 			this._forget(socket);
 		});
 
@@ -398,14 +401,14 @@ export class P2PServer {
 	 */
 	private reconnectToPeer(peer: string, attempt: number = 1): void {
 		if (attempt > MAX_RECONNECT_ATTEMPTS) {
-			console.log(`Max reconnection attempts reached for peer: ${peer}`);
+			log.info(`Max reconnection attempts reached for peer: ${peer}`);
 			return;
 		}
 		const delay = Math.min(RECONNECT_BASE_DELAY * 2 ** (attempt - 1), RECONNECT_MAX_DELAY);
 		const timer = setTimeout(() => {
 			if (!this._canDial(peer)) return;
 			this._dial(peer, () => {
-				console.log(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
+				log.debug(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
 				this.reconnectToPeer(peer, attempt + 1);
 			});
 		}, delay);
@@ -415,7 +418,7 @@ export class P2PServer {
 	private logPeerConnection(socket: WebSocket): void {
 		const peerAddress = (socket as unknown as { url?: string }).url;
 		if (!peerAddress || !/^wss?:\/\//.test(peerAddress)) {
-			console.log('Invalid peer address, not logging');
+			log.debug('Invalid peer address, not logging');
 			return;
 		}
 		const normalized = this.normalizePeerUrl(peerAddress);
@@ -486,7 +489,7 @@ export class P2PServer {
 		const state = this._peerState.get(socket);
 		if (!state || state.versionReceived) return;
 		const reject = (reason: string) => {
-			console.log(`Disconnecting peer: ${reason}`);
+			log.info(`Disconnecting peer: ${reason}`);
 			socket.close();
 		};
 		if (!isVersionPayload(data)) return reject('malformed VERSION');
@@ -605,7 +608,7 @@ export class P2PServer {
 		}
 		if (accepted > 0) {
 			const tip = this.blockchain.getLatestBlock();
-			console.log(
+			log.info(
 				`Synced ${accepted} block(s) from peer: height ${tip.index}, tip ${tip.hash.slice(0, 16)}`,
 			);
 		}
@@ -637,7 +640,7 @@ export class P2PServer {
 		try {
 			block = Block.fromJSON(blockData);
 		} catch (error) {
-			console.error('Error handling block message:', (error as Error).message);
+			log.warn('Error handling block message:', (error as Error).message);
 			if (from) this._misbehaving(from, 50, (error as Error).message);
 			return;
 		}
@@ -651,7 +654,7 @@ export class P2PServer {
 			}
 			const outcome = await this.blockchain.addMinedBlock(block);
 			const label = outcome === 'side' ? 'Stored side-branch block' : 'Accepted block';
-			console.log(`${label} ${block.index} (${block.hash.slice(0, 16)}) from peer`);
+			log.info(`${label} ${block.index} (${block.hash.slice(0, 16)}) from peer`);
 			// Relay only accepted blocks, and not back to the sender
 			this.broadcast({ type: MessageType.BLOCK, data: block }, from);
 		} catch (error) {
@@ -665,7 +668,7 @@ export class P2PServer {
 			// fromJSON keeps every field, so the txid matches the sender's
 			transaction = Transaction.fromJSON(txData);
 		} catch (error) {
-			console.error('Error handling transaction message:', (error as Error).message);
+			log.warn('Error handling transaction message:', (error as Error).message);
 			if (from) this._misbehaving(from, 20, (error as Error).message);
 			return;
 		}
@@ -676,7 +679,7 @@ export class P2PServer {
 			this.broadcast({ type: MessageType.TRANSACTION, data: transaction }, from);
 		} catch (error) {
 			// Policy rejections (fee, conflicts, behind on blocks) are normal: no points
-			console.log('Transaction not accepted:', (error as Error).message);
+			log.debug('Transaction not accepted:', (error as Error).message);
 		}
 	}
 
@@ -775,7 +778,7 @@ export class P2PServer {
 		try {
 			fs.writeFileSync(this.peerDataPath, JSON.stringify(peers, null, 2));
 		} catch (error) {
-			console.error('Error writing peers.json:', error);
+			log.error('Error writing peers.json:', error);
 		}
 	}
 

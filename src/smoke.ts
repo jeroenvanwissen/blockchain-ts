@@ -37,7 +37,8 @@ function assertMined(node: NodeProcess, height: string, hashPrefix: string): voi
 }
 
 function noErrors(node: NodeProcess): void {
-	const line = node.output().split('\n').find((l) => /Error|rejected|misbehaving|Banning/.test(l));
+	// Any warning or error from the node's logger, plus older message wording
+	const line = node.output().split('\n').find((l) => / (?:WARN |ERROR) \[|Error|rejected/.test(l));
 	if (line) throw new Error(`${node.name}: logged an error: ${line.trim()}`);
 }
 

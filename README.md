@@ -144,6 +144,7 @@ Key constants in `src/config.ts`:
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
 | `API_PORT`                      | P2P port + 1000 | HTTP API port (env: `API_PORT`; `0` picks a free port) |
 | `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
+| `LOG_LEVEL`                     | info    | Node log level: debug, info, warn or error (env: `LOG_LEVEL`) |
 | `POW_CUTOFF_BLOCK`              | 100     | Last PoW height; PoS from the next block       |
 | `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake           |
 | `STAKE_MIN_CONFIRMATIONS`       | 10      | Confirmations a UTXO needs before it can stake |
@@ -362,7 +363,7 @@ lsof -i :5001
 kill -9 <PID>
 ```
 
-If only the API port (P2P port + 1000) is taken, the node keeps running without the API and logs `[API] could not listen on ...`. Set `API_PORT` to another port.
+If only the API port (P2P port + 1000) is taken, the node keeps running without the API and logs `API could not listen on ...`. Set `API_PORT` to another port.
 
 ### Node Can't Connect to Peers
 

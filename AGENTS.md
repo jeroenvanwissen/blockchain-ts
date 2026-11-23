@@ -39,6 +39,7 @@ Run npm scripts from the repository root.
 - `src/blockchain/miningWorker.cjs` must stay CommonJS.
 - CommonJS packages behave differently under ts-jest (compiled to CommonJS) and the real runtime (native ESM): a namespace import can work in tests and crash the node. Verify new CommonJS imports with `npm run smoke`.
 - Don't use `import.meta` in modules that tests import; ts-jest rejects it (TS1343). Entry points such as `src/smoke.ts` may use it.
+- Node modules log through `logger(scope)` from `src/logger.ts` (`<time> LEVEL [scope] message`; `LOG_LEVEL` env, default info), not `console`. Use debug for per-connection noise, warn for anything an operator should look at. The CLI and the smoke/e2e scripts use plain console output. Smoke fails on any WARN or ERROR line, and the scripts match some log wording (`P2P Server listening`, `API listening on`, `Chain loaded`, `[Staking] staked block`, `[Blockchain] reorganized`), so keep those messages.
 - Put constants in `src/config.ts`. Use environment variables only for runtime settings (ports, peers, data dir).
 - Amounts are `bigint` base units (`COIN` = 10^8 per coin); never use `number` for money. On the JSON wire amounts are decimal strings: send with `JSON.stringify` (`Transaction.toJSON`), parse with `Transaction.fromJSON`, which validates strictly.
 - Build coinbases with `Transaction.coinbase(address, amount, height)`; its null input carries the block height.

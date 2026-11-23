@@ -37,6 +37,9 @@ import {
 	STAKE_MIN_CONFIRMATIONS,
 	STAKE_TIMESTAMP_GRANULARITY,
 } from '../config.js';
+import { logger } from '../logger.js';
+
+const log = logger('Blockchain');
 
 export interface BlockchainOptions {
 	/** Seconds a UTXO must exist before it can stake (default STAKE_MIN_AGE) */
@@ -544,8 +547,8 @@ export class Blockchain {
 			throw new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`);
 		}
 
-		console.log(
-			`[Blockchain] reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
+		log.info(
+			`reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
 				`replaced by ${branch.length}, tip ${target.block.hash.slice(0, 16)}`,
 		);
 		this._readmitTransactions(disconnected.flatMap((block) => block.transactions));
@@ -957,7 +960,7 @@ export class Blockchain {
 
 		// Conflicts, duplicates and the size limit (may evict lower fee rates)
 		const evicted = this._mempool.add({ transaction, txid: transaction.calculateHash(), fee, size: transaction.size() });
-		if (evicted.length > 0) console.log(`[Mempool] evicted ${evicted.length} lower-fee transaction(s)`);
+		if (evicted.length > 0) log.info(`mempool: evicted ${evicted.length} lower-fee transaction(s)`);
 	}
 
 	async addTransaction(transaction: Transaction): Promise<void> {
@@ -974,7 +977,7 @@ export class Blockchain {
 			this._replayChain(this.chain);
 			return true;
 		} catch (error) {
-			console.log(`[Blockchain] chain invalid: ${(error as Error).message}`);
+			log.warn(`chain invalid: ${(error as Error).message}`);
 			return false;
 		}
 	}
@@ -1019,7 +1022,7 @@ export class Blockchain {
 			for (const block of stored.slice(1)) {
 				const parent = index.get(block.previousHash);
 				if (!parent || index.has(block.hash) || block.hash !== block.calculateHash()) {
-					console.error(`[Blockchain] skipping unusable stored block ${block.hash.slice(0, 16)}`);
+					log.warn(`skipping unusable stored block ${block.hash.slice(0, 16)}`);
 					continue;
 				}
 				const work = parent.work + Blockchain.blockWeight(block);
@@ -1046,11 +1049,11 @@ export class Blockchain {
 				} catch (error) {
 					const height = (error as Error & { height?: number }).height ?? 0;
 					index.get(branch[height].hash)!.isInvalid = true;
-					console.error(`[Blockchain] invalid stored block: ${(error as Error).message}`);
+					log.warn(`invalid stored block: ${(error as Error).message}`);
 				}
 			}
 		} catch (error) {
-			console.error('Error loading blockchain:', error);
+			log.error('Error loading blockchain:', error);
 			throw error;
 		}
 	}

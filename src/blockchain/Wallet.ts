@@ -7,6 +7,9 @@ import { addressFromPublicKey } from './address.js';
 import { WALLET_SCHEMA } from './protoSchemas.js';
 import { secp256k1 } from './secp256k1.js';
 import { DATA_DIR, MAX_WALLET_BACKUPS, WALLET_DATA_FILENAME } from '../config.js';
+import { logger } from '../logger.js';
+
+const log = logger('Wallet');
 
 /** Decoded protobuf form. Fields 4 and 5 (old history and UTXO lists) are skipped on load. */
 interface StoredWalletData {
@@ -77,8 +80,8 @@ export class Wallet {
 		try {
 			fileBuffer = fs.readFileSync(this.walletPath) as Buffer;
 		} catch (error) {
-			console.error('[Wallet] failed to read wallet file:', error);
-			console.log('[Wallet] generating new wallet');
+			log.error('failed to read wallet file:', error);
+			log.warn('generating new wallet');
 			this.generateNewWallet();
 			return;
 		}
@@ -87,15 +90,15 @@ export class Wallet {
 		try {
 			data = decodeWalletData(fileBuffer);
 		} catch (error) {
-			console.error('[Wallet] wallet file is corrupted (invalid protobuf):', error);
-			console.log('[Wallet] generating new wallet');
+			log.error('wallet file is corrupted (invalid protobuf):', error);
+			log.warn('generating new wallet');
 			this.generateNewWallet();
 			return;
 		}
 
 		if (!data.privateKey || !data.publicKey || !data.address) {
-			console.error('[Wallet] wallet file is missing required fields');
-			console.log('[Wallet] generating new wallet');
+			log.error('wallet file is missing required fields');
+			log.warn('generating new wallet');
 			this.generateNewWallet();
 			return;
 		}
@@ -119,12 +122,12 @@ export class Wallet {
 			// derivation so the file matches what the node uses
 			this.address = addressFromPublicKey(this.publicKey);
 			if (data.address !== this.address) {
-				console.log('[Wallet] address re-derived from public key');
+				log.info('address re-derived from public key');
 				this.saveWallet();
 			}
 		} catch (error) {
-			console.error('[Wallet] wallet file contains invalid key data:', error);
-			console.log('[Wallet] generating new wallet');
+			log.error('wallet file contains invalid key data:', error);
+			log.warn('generating new wallet');
 			this.generateNewWallet();
 		}
 	}
@@ -155,7 +158,7 @@ export class Wallet {
 		try {
 			fs.chmodSync(this.walletPath, 0o600);
 		} catch (error) {
-			console.error('[Wallet] failed to set file permissions:', error);
+			log.warn('failed to set file permissions:', error);
 		}
 	}
 
@@ -172,7 +175,7 @@ export class Wallet {
 				fs.unlinkSync(path.join(dir, oldest));
 			}
 		} catch (error) {
-			console.error('[Wallet] failed to prune backups:', error);
+			log.warn('failed to prune backups:', error);
 		}
 	}
 
@@ -185,7 +188,7 @@ export class Wallet {
 		try {
 			fs.chmodSync(exportPath, 0o600);
 		} catch (error) {
-			console.error('[Wallet] failed to set export file permissions:', error);
+			log.warn('failed to set export file permissions:', error);
 		}
 	}
 

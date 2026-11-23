@@ -3,6 +3,9 @@ import type { Block } from './Block.js';
 import type { Blockchain } from './Blockchain.js';
 import { MAX_BLOCK_NONCE, MINER_RETRY_DELAY, MINER_TIP_POLL_INTERVAL } from '../config.js';
 import { targetHex } from './target.js';
+import { logger } from '../logger.js';
+
+const log = logger('Miner');
 
 type WorkerResult = { type: 'found'; nonce: number; hash: string } | { type: 'exhausted' };
 
@@ -53,7 +56,7 @@ export class Miner {
 			try {
 				await this._mineOne();
 			} catch (error) {
-				console.error('[Miner] block rejected:', (error as Error).message);
+				log.warn('block rejected:', (error as Error).message);
 				await this._sleep(MINER_RETRY_DELAY);
 			}
 		}
@@ -61,7 +64,7 @@ export class Miner {
 
 	private async _mineOne(): Promise<void> {
 		if (!this._blockchain.canAcceptPowBlock()) {
-			console.log('[Miner] PoW phase is over; stopping');
+			log.info('PoW phase is over; stopping');
 			this._running = false;
 			return;
 		}
@@ -82,7 +85,7 @@ export class Miner {
 		block.nonce = solution.nonce;
 		block.hash = solution.hash;
 		await this._blockchain.addMinedBlock(block);
-		console.log(`[Miner] mined block ${block.index} (${block.hash.slice(0, 16)})`);
+		log.info(`mined block ${block.index} (${block.hash.slice(0, 16)})`);
 		this._onBlockMined(block);
 	}
 

@@ -2,6 +2,9 @@ import type { Block } from './Block.js';
 import type { Blockchain } from './Blockchain.js';
 import type { Wallet } from './Wallet.js';
 import { STAKE_CHECK_INTERVAL, STAKE_CHECK_OFFSET, STAKE_TIMESTAMP_GRANULARITY } from '../config.js';
+import { logger } from '../logger.js';
+
+const log = logger('Staking');
 
 /**
  * Stakes PoS blocks with the node's wallet. For each 16 s timestamp slot (and again when the
@@ -62,12 +65,12 @@ export class StakingService {
 		this._isBusy = true;
 		try {
 			await this._blockchain.addMinedBlock(block);
-			console.log(`[Staking] staked block ${block.index} (${block.hash.slice(0, 16)})`);
+			log.info(`staked block ${block.index} (${block.hash.slice(0, 16)})`);
 			this._onBlockStaked(block);
 			return block;
 		} catch (error) {
 			// e.g. another block arrived first; the next slot or tip gets a fresh attempt
-			console.error('[Staking] block rejected:', (error as Error).message);
+			log.warn('block rejected:', (error as Error).message);
 			return null;
 		} finally {
 			this._isBusy = false;
