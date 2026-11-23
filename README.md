@@ -1,5 +1,7 @@
 # Blockchain TypeScript
 
+[![check](https://github.com/jeroenvanwissen/blockchain-ts/actions/workflows/check.yml/badge.svg)](https://github.com/jeroenvanwissen/blockchain-ts/actions/workflows/check.yml)
+
 > A TypeScript blockchain implementation featuring hybrid PoW/PoS consensus, UTXO-based transactions, P2P networking, and wallet management.
 
 ---

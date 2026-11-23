@@ -30,7 +30,7 @@ Finding IDs continue the first assessment's numbering. Severity is the impact if
 | F-027 | **Bans are lost on restart** (`P2PServer._banned` is in memory only). | Low | P3 | verified (code) | TASK-0030 |
 | F-028 | **Confirmed transaction lookup scans the chain** (`Blockchain.findTransaction`). | Low | P3 | verified (code) | TASK-0031 |
 | F-029 | **An encrypted wallet's passphrase can't be changed**, and the only way out is a new wallet. | Low | P3 | verified (code) | TASK-0032 |
-| F-030 | **No CI.** `.github/` has only Dependabot; `npm run check` runs only when someone remembers. | Low | — | verified | Owner decision |
+| F-030 | **No CI.** `.github/` has only Dependabot; `npm run check` runs only when someone remembers. | Low | P2 | verified | TASK-0033 (owner approved) |
 
 ## Architecture and documentation
 

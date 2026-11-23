@@ -68,6 +68,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0027](TASK-0027-wallet-loopback.md) | Keep wallet routes on loopback | done | P2 | small | TASK-0017 | F-023 |
 | [TASK-0028](TASK-0028-signature-cache.md) | Mempool revalidation without re-verifying signatures | done | P3 | small | TASK-0019 | F-024 |
 | TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
+| [TASK-0033](TASK-0033-ci.md) | CI: check, smoke and e2e on every push and pull request | done | P2 | small | TASK-0021 | F-030 |
 | [TASK-0030](TASK-0030-request-limits.md) | Throttle block requests; persist bans | done | P3 | small | TASK-0020 | F-026, F-027 |
 | [TASK-0031](TASK-0031-tx-index.md) | Transaction index | done | P3 | small | TASK-0016 | F-028 |
 | [TASK-0032](TASK-0032-change-passphrase.md) | Change the wallet passphrase | done | P3 | small | TASK-0024 | F-029 |

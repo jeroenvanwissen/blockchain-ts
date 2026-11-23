@@ -70,6 +70,7 @@ Run npm scripts from the repository root.
 ## Change verification
 
 - Run `npm run check` (build, test and lint) for every change; all three must pass.
+- CI (`.github/workflows/check.yml`) runs `npm ci`, `npm run check` and `npm run smoke` on every push to `main` and every pull request, then `npm run e2e`. Keep it green; a red run on `main` is the next thing to fix.
 - Unit tests mock `fs`, `protobufjs` and time, so they don't prove the node runs. For anything touching startup, storage, wallet, mining, networking or imports, also run `npm run smoke`.
 - When an attack scenario from the assessment is fixed, turn its regression test from `test.failing` into `test`.
 
