@@ -13,6 +13,7 @@ import {
 	NETWORK_MAGIC,
 	PEER_BROADCAST_INTERVAL,
 	PROTOCOL_VERSION,
+	RELAY_SEEN_CACHE_SIZE,
 	SYNC_BATCH_SIZE,
 } from '../config.js';
 
@@ -100,6 +101,7 @@ export class P2PServer {
 	private readonly _nonce = crypto.randomBytes(8).toString('hex');
 	private _server: WebSocketServer | null = null;
 	private _isClosing = false;
+	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
 
 	constructor(
 		private blockchain: Blockchain,
@@ -381,7 +383,7 @@ export class P2PServer {
 				}
 				case MessageType.TRANSACTION: {
 					const payload = data.data;
-					enqueue(() => this.handleTransactionMessage(payload));
+					enqueue(() => this.handleTransactionMessage(payload, socket));
 					break;
 				}
 				case MessageType.PEERS:
@@ -508,14 +510,34 @@ export class P2PServer {
 				`Synced ${accepted} block(s) from peer: height ${tip.index}, tip ${tip.hash.slice(0, 16)}`,
 			);
 		}
-		if (payload.more === true && lastHash) this._requestBlocks(socket, lastHash);
+		if (payload.more === true && lastHash) {
+			this._requestBlocks(socket, lastHash);
+		} else if (accepted > 0) {
+			// Caught up: announce the new tip so peers that lack it can sync from us
+			const tip = this.blockchain.getLatestBlock();
+			this._markSeen(`b:${tip.hash}`);
+			this.broadcast({ type: MessageType.BLOCK, data: tip }, socket);
+		}
+	}
+
+	/**
+	 * Remember a relayed item; false if it was seen recently (duplicate, echo, or something
+	 * already rejected), so it is neither re-validated nor relayed again.
+	 */
+	private _markSeen(id: string): boolean {
+		if (this._seen.has(id)) return false;
+		this._seen.add(id);
+		if (this._seen.size > RELAY_SEEN_CACHE_SIZE) {
+			this._seen.delete(this._seen.values().next().value as string);
+		}
+		return true;
 	}
 
 	private async handleBlockMessage(blockData: unknown, from?: WebSocket): Promise<void> {
 		try {
 			const block = Block.fromJSON(blockData);
-			// Ignore blocks we already have (e.g. our own block echoed back by a peer)
-			if (this.blockchain.hasBlock(block.hash)) return;
+			// Ignore blocks seen recently or already known (e.g. our own block echoed back)
+			if (!this._markSeen(`b:${block.hash}`) || this.blockchain.hasBlock(block.hash)) return;
 			// Unknown parent: we are missing blocks; fetch them from this peer
 			if (!this.blockchain.hasBlock(block.previousHash)) {
 				if (from) this._requestBlocks(from);
@@ -524,35 +546,42 @@ export class P2PServer {
 			const outcome = await this.blockchain.addMinedBlock(block);
 			const label = outcome === 'side' ? 'Stored side-branch block' : 'Accepted block';
 			console.log(`${label} ${block.index} (${block.hash.slice(0, 16)}) from peer`);
-			// Only broadcast if we successfully added the block
-			this.broadcast({ type: MessageType.BLOCK, data: block });
+			// Relay only accepted blocks, and not back to the sender
+			this.broadcast({ type: MessageType.BLOCK, data: block }, from);
 		} catch (error) {
 			console.error('Error handling block message:', error);
 		}
 	}
 
-	private async handleTransactionMessage(txData: unknown): Promise<void> {
+	private async handleTransactionMessage(txData: unknown, from?: WebSocket): Promise<void> {
 		try {
 			// fromJSON keeps every field, so the txid matches the sender's
 			const transaction = Transaction.fromJSON(txData);
+			if (!this._markSeen(`t:${transaction.calculateHash()}`)) return;
 			await this.blockchain.addTransaction(transaction);
+			// Relay only accepted transactions, and not back to the sender
+			this.broadcast({ type: MessageType.TRANSACTION, data: transaction }, from);
 		} catch (error) {
 			console.error('Error handling transaction message:', error);
 		}
 	}
 
+	/** Announce a transaction accepted locally. */
 	broadcastTransaction(transaction: Transaction): void {
+		this._markSeen(`t:${transaction.calculateHash()}`);
 		this.broadcast({ type: MessageType.TRANSACTION, data: transaction });
 	}
 
+	/** Announce a block produced or accepted locally. */
 	broadcastBlock(block: Block): void {
+		this._markSeen(`b:${block.hash}`);
 		this.broadcast({ type: MessageType.BLOCK, data: block });
 	}
 
-	/** Send to every peer that completed the handshake. */
-	private broadcast(message: Message): void {
+	/** Send to every peer that completed the handshake, except `except` (the sender). */
+	private broadcast(message: Message, except?: WebSocket): void {
 		for (const socket of this.sockets) {
-			if (this._isReady(socket)) this._send(socket, message);
+			if (socket !== except && this._isReady(socket)) this._send(socket, message);
 		}
 	}
 

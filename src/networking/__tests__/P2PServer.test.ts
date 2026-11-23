@@ -114,6 +114,10 @@ describe('P2PServer', () => {
 		jest.spyOn(console, 'error').mockImplementation(() => {});
 	});
 
+	afterEach(async () => {
+		await p2pServer.close(); // clears handshake timers of the mock sockets
+	});
+
 	it('should not log invalid peer addresses', () => {
 		const invalidSocket = { url: '' } as WebSocket;
 		const validSocket = { url: 'ws://valid-peer:5002' } as WebSocket;
@@ -612,6 +616,95 @@ describe('P2PServer', () => {
 			}
 			await new Promise((resolve) => setImmediate(resolve));
 			expect(addSpy).not.toHaveBeenCalled();
+		});
+	});
+	describe('relay', () => {
+		const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+		function signedTransaction(): Transaction {
+			const tx = new Transaction(
+				[{ previousTx: 'ab'.repeat(32), outputIndex: 0, publicKey: '', signature: '' }],
+				[{ address: '1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH', amount: 123n }],
+				1_700_000_000_000,
+			);
+			tx.signTransaction(Buffer.alloc(32, 7));
+			return tx;
+		}
+
+		function readyPair(): [MockWebSocket, MockWebSocket] {
+			const s1 = new MockWebSocket('ws://peer1:5001');
+			const s2 = new MockWebSocket('ws://peer2:5001');
+			connectReady(s1);
+			connectReady(s2);
+			s1.send.mockClear();
+			s2.send.mockClear();
+			return [s1, s2];
+		}
+
+		const txMessage = (tx: Transaction) => JSON.stringify({ type: MessageType.TRANSACTION, data: tx });
+
+		it('should relay an accepted transaction to other peers but not back to the sender', async () => {
+			const [s1, s2] = readyPair();
+			jest.spyOn(blockchain, 'addTransaction').mockResolvedValue(undefined);
+			const tx = signedTransaction();
+
+			s1.emit('message', txMessage(tx));
+			await flush();
+
+			expect(s2.sent()).toEqual([{ type: MessageType.TRANSACTION, data: JSON.parse(JSON.stringify(tx)) }]);
+			expect(s1.send).not.toHaveBeenCalled();
+		});
+
+		it('should not relay a rejected transaction', async () => {
+			const [s1, s2] = readyPair();
+			jest.spyOn(blockchain, 'addTransaction').mockRejectedValue(new Error('invalid'));
+
+			s1.emit('message', txMessage(signedTransaction()));
+			await flush();
+
+			expect(s2.send).not.toHaveBeenCalled();
+		});
+
+		it('should process each transaction once, however many peers send it', async () => {
+			const [s1, s2] = readyPair();
+			const add = jest.spyOn(blockchain, 'addTransaction').mockResolvedValue(undefined);
+			const tx = signedTransaction();
+
+			s1.emit('message', txMessage(tx));
+			s2.emit('message', txMessage(tx));
+			s1.emit('message', txMessage(tx));
+			await flush();
+
+			expect(add).toHaveBeenCalledTimes(1);
+		});
+
+		it('should ignore echoes of its own broadcasts', async () => {
+			const [s1] = readyPair();
+			const addTx = jest.spyOn(blockchain, 'addTransaction');
+			const addBlock = jest.spyOn(blockchain, 'addMinedBlock');
+			const tx = signedTransaction();
+			const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], blockchain.getChain()[0].hash, 0, undefined, 1);
+			p2pServer.broadcastTransaction(tx);
+			p2pServer.broadcastBlock(block);
+
+			s1.emit('message', txMessage(tx));
+			s1.emit('message', JSON.stringify({ type: MessageType.BLOCK, data: block }));
+			await flush();
+
+			expect(addTx).not.toHaveBeenCalled();
+			expect(addBlock).not.toHaveBeenCalled();
+		});
+
+		it('should relay accepted blocks to other peers but not back to the sender', async () => {
+			const [s1, s2] = readyPair();
+			jest.spyOn(blockchain, 'addMinedBlock').mockResolvedValue('connected');
+			const block = new Block(Date.now(), [Transaction.coinbase('x', 1n, 1)], blockchain.getChain()[0].hash, 0, undefined, 1);
+
+			s1.emit('message', JSON.stringify({ type: MessageType.BLOCK, data: block }));
+			await flush();
+
+			expect(s2.sent().map((m) => m.type)).toEqual([MessageType.BLOCK]);
+			expect(s1.send).not.toHaveBeenCalled();
 		});
 	});
 });

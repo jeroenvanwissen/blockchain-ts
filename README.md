@@ -19,7 +19,6 @@
 
 **Consensus works end to end; networking is not yet hardened.** Nodes start, restart, mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set. `npm run smoke` covers two real nodes; the PoW→PoS transition is covered by integration tests with a shortened PoW phase. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- transactions aren't relayed beyond direct peers, and blocks are echoed back to their sender (TASK-0014);
 - no API or CLI yet to send coins or inspect the chain (TASK-0016, TASK-0017).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
@@ -237,8 +236,8 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | `VERACK`      | Reply     | Acknowledges a valid `VERSION`; the peer is ready after both |
 | `GET_BLOCKS`  | Request   | Block locator (tip-dense, then exponentially sparse hashes) |
 | `BLOCKS`      | Reply     | Up to 200 blocks after the highest common block, plus `more` |
-| `BLOCK`       | Broadcast | New block; an unknown parent triggers `GET_BLOCKS` to that peer |
-| `TRANSACTION` | Broadcast | New transaction |
+| `BLOCK`       | Broadcast | New or newly synced tip block; relayed once accepted, never back to the sender. An unknown parent triggers `GET_BLOCKS` to that peer |
+| `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender |
 | `PEERS`       | Broadcast | Known peer addresses (discovery) |
 
 ---

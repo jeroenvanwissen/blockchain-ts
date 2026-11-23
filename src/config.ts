@@ -52,6 +52,7 @@ export const HANDSHAKE_TIMEOUT = 10_000; // ms to complete VERSION/VERACK before
 export const SYNC_BATCH_SIZE = 200; // max blocks per BLOCKS reply
 export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS locator
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024; // larger WebSocket messages close the socket
+export const RELAY_SEEN_CACHE_SIZE = 20_000; // recent block hashes / txids remembered for relay
 
 // Peer discovery
 export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
