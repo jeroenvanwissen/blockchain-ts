@@ -47,7 +47,7 @@ Run npm scripts from the repository root.
 
 - Consensus code must be deterministic from chain data. No wall-clock reads except the future-timestamp limit, and no node-local state that peers can't rebuild from blocks.
 - Every block, whether new, synced or loaded from disk, goes through `Blockchain._connectBlock` (via `_addMinedBlockInternal` or `_replayChain`). It validates against a block-local UTXO view and changes state only if every check passes. Add consensus rules there, not in callers; mempool admission shares `_checkInputs`.
-- The target PoS model is Peercoin-style UTXO kernel staking (TASK-0009 to TASK-0011). Don't extend the current stake-registry code (`_stakes`, `stake()`, `unstake()`, slashing). It is scheduled for removal.
+- The PoS model is Peercoin-style UTXO kernel staking (TASK-0009, TASK-0010): any mature UTXO can stake, and all consensus state is derived from blocks. Don't reintroduce node-local stake state (registries, unstake queues, slashing lists).
 - Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists; tell users to delete old data dirs (README troubleshooting).
 
 ## Work tracking

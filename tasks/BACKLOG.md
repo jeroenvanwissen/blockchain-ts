@@ -32,7 +32,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| [TASK-0011](TASK-0011-remove-stake-registry.md) | Remove the registered-stake model | pending | P1 | medium | owner decision | F-006 |
+| [TASK-0011](TASK-0011-remove-stake-registry.md) | Remove the registered-stake model | done | P1 | medium | owner decision (approved 2026-11-23) | F-006 |
 | [TASK-0009](TASK-0009-kernel-pos.md) | Kernel-based proof of stake | pending | P1 | large | TASK-0006, TASK-0007, TASK-0008, TASK-0011 | F-006, F-007, F-009, F-010 |
 | [TASK-0010](TASK-0010-staking-loop.md) | Staking loop in the node | pending | P1 | medium | TASK-0009 | F-003 |
 

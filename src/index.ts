@@ -3,7 +3,6 @@ import { fileURLToPath } from 'url';
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
-import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
 import { DATA_DIR, P2P_PORT, PEER_DATA_PATH, SEED_NODES } from './config.js';
 
@@ -47,8 +46,6 @@ console.log('Wallet initialized with address:', wallet.address);
 // Create P2P server
 const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH);
 
-const stakingService = new StakingService(blockchain, wallet.address, wallet);
-stakingService.start();
 
 // Start P2P server
 p2pServer.listen();

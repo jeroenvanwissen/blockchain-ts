@@ -19,8 +19,7 @@
 
 **Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set (`npm run smoke`). Still open:
 
-- stake changes made locally (`stake()` without a transaction, unstake, slashing) never reach the chain, so nodes can disagree about stake (TASK-0009, TASK-0011);
-- a pending stake transaction can turn a PoW-phase block into an unchecked PoS block (TASK-0009);
+- proof of stake is being rebuilt: the old stake registry is gone and PoS blocks are rejected until kernel staking lands, so the chain can't grow past block 100 (TASK-0009, TASK-0010);
 - a node that misses a block only resyncs when it reconnects (TASK-0013).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
@@ -74,8 +73,7 @@ git --version          # Should be 2.30+
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
 | **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
-| **Staking**              | Stake-weighted validator lottery, age multiplier, coinstake txs  |
-| **Stake Security**       | Delayed unstaking, double-sign slashing, age-capped weight      |
+| **Staking**              | Kernel PoS: any mature UTXO can stake, signed PoS blocks (TASK-0009) |
 | **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
 | **Block Header**         | Merkle root of full transactions, compact target (`bits`), sha256d |
 | **Persistence**          | Chunked block storage with protobuf index, wallet as protobuf   |
@@ -130,15 +128,12 @@ Key constants in `src/config.ts`:
 | `COIN`                          | 10^8    | Base units per coin (amounts are `bigint`)     |
 | `POW_BLOCK_REWARD`              | 10 coins | Mining reward per block (PoW)                 |
 | `POS_BLOCK_REWARD`              | 10 coins | Staking reward per block (PoS)                |
-| `MIN_STAKE_AMOUNT`              | 100 coins | Minimum stake                                |
 | `COIN_MATURITY`                 | 10      | Blocks before coinbase outputs are spendable   |
 | `BLOCK_TIME`                    | 30      | Target seconds between blocks                  |
 | `RETARGET_WINDOW`               | 16      | Smoothing N of the per-block retarget          |
 | `MAX_RETARGET_SPACING`          | 300 s   | Longer gaps count as this much in the retarget |
 | `POW_LIMIT`                     | 2^240−1 | Easiest PoW target (~65k hashes per block)     |
 | `POS_LIMIT`                     | 2^236−1 | Easiest PoS target                             |
-| `UNSTAKE_DELAY`                 | 100     | Blocks before unstaked funds are released       |
-| `MAX_STAKE_AGE_MULTIPLIER`      | 4       | Maximum age multiplier for stake weight        |
 | `MAX_BLOCK_FILE_SIZE`           | 128 MB  | Max size per chunked block data file           |
 | `MAX_WALLET_BACKUPS`            | 3       | Maximum wallet backup files to keep            |
 
@@ -218,8 +213,6 @@ await blockchain.minePendingTransactions(wallet.address, wallet);
 // Check balance (UTXO-based, bigint base units)
 const balance = blockchain.getBalance(wallet.address);
 
-// Stake coins (PoS phase)
-await blockchain.stake(wallet.address, 100n * COIN, wallet);
 ```
 
 ---
@@ -231,8 +224,6 @@ await blockchain.stake(wallet.address, 100n * COIN, wallet);
 | `CHAIN`              | Broadcast  | Full chain synchronization   |
 | `BLOCK`              | Broadcast  | New block announcement       |
 | `TRANSACTION`        | Broadcast  | Transaction broadcast        |
-| `STAKE`              | Broadcast  | Stake registration           |
-| `UNSTAKE`            | Broadcast  | Stake withdrawal             |
 | `GET_LATEST_BLOCK`   | Request    | Request latest block         |
 | `LATEST_BLOCK`       | Response   | Latest block response        |
 

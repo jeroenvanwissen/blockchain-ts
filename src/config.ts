@@ -61,7 +61,6 @@ export const COIN = 100_000_000n; // Base units per coin
 export const COIN_MATURITY = 10; // Coins must be at least 10 blocks old
 export const POS_BLOCK_REWARD = 10n * COIN; // Reward for Proof-of-Stake blocks
 export const POW_BLOCK_REWARD = 10n * COIN; // Reward for mined blocks
-export const MIN_STAKE_AMOUNT = 100n * COIN; // Minimum stake for PoS
 
 // Transaction limits
 export const MAX_TRANSACTION_INPUTS = 256;
@@ -88,10 +87,6 @@ export const MINER_RETRY_DELAY = 1000; // ms to wait after a rejected block befo
 // Wallet configuration
 export const WALLET_DATA_FILENAME = 'wallet.dat';
 export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to keep
-
-// Staking security
-export const UNSTAKE_DELAY = 100; // Blocks before unstaked funds are released
-export const MAX_STAKE_AGE_MULTIPLIER = 4; // Maximum age multiplier for stake weight
 
 // Timestamp rules
 export const MEDIAN_TIME_SPAN = 11; // Number of blocks for median time calculation

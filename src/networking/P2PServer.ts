@@ -10,8 +10,6 @@ export enum MessageType {
 	CHAIN = 'CHAIN',
 	BLOCK = 'BLOCK',
 	TRANSACTION = 'TRANSACTION',
-	STAKE = 'STAKE',
-	UNSTAKE = 'UNSTAKE',
 	GET_LATEST_BLOCK = 'GET_LATEST_BLOCK',
 	LATEST_BLOCK = 'LATEST_BLOCK',
 	PEERS = 'PEERS',
@@ -32,22 +30,6 @@ interface BlockMessage {
 	data: Block;
 }
 
-interface StakeMessage {
-	type: MessageType.STAKE;
-	data: {
-		address: string;
-		amount: string; // base units, decimal
-	};
-}
-
-interface UnstakeMessage {
-	type: MessageType.UNSTAKE;
-	data: {
-		address: string;
-		amount: string; // base units, decimal
-	};
-}
-
 interface GetLatestBlockMessage {
 	type: MessageType.GET_LATEST_BLOCK;
 }
@@ -66,8 +48,6 @@ export type Message =
 	| ChainMessage
 	| TransactionMessage
 	| BlockMessage
-	| StakeMessage
-	| UnstakeMessage
 	| GetLatestBlockMessage
 	| LatestBlockMessage
 	| PeersMessage;
@@ -75,10 +55,6 @@ export type Message =
 /** Rebuild a block from wire data. Throws if the block or any transaction is malformed. */
 function parseBlock(data: unknown): Block {
 	return Block.fromJSON(data);
-}
-
-function parseAmount(value: unknown): bigint | null {
-	return typeof value === 'string' && /^\d{1,20}$/.test(value) ? BigInt(value) : null;
 }
 
 export function isValidPeerAddress(address: string): boolean {
@@ -318,16 +294,6 @@ export class P2PServer {
 						enqueue(() => this.handleTransactionMessage(payload));
 						break;
 					}
-					case MessageType.STAKE: {
-						const payload = data.data;
-						enqueue(() => this.handleStakeMessage(payload));
-						break;
-					}
-					case MessageType.UNSTAKE: {
-						const payload = data.data;
-						enqueue(() => this.handleUnstakeMessage(payload));
-						break;
-					}
 					case MessageType.GET_LATEST_BLOCK:
 						this.handleGetLatestBlockMessage(socket);
 						break;
@@ -408,29 +374,6 @@ export class P2PServer {
 			await this.blockchain.addTransaction(transaction);
 		} catch (error) {
 			console.error('Error handling transaction message:', error);
-		}
-	}
-
-	private async handleStakeMessage(stakeData: { address: string; amount: unknown }): Promise<void> {
-		try {
-			const amount = parseAmount(stakeData?.amount);
-			if (amount === null || typeof stakeData.address !== 'string') return;
-			await this.blockchain.stake(stakeData.address, amount);
-		} catch (error) {
-			console.error('Error handling stake message:', error);
-		}
-	}
-
-	private async handleUnstakeMessage(unstakeData: {
-		address: string;
-		amount: unknown;
-	}): Promise<void> {
-		try {
-			const amount = parseAmount(unstakeData?.amount);
-			if (amount === null || typeof unstakeData.address !== 'string') return;
-			await this.blockchain.unstake(unstakeData.address, amount);
-		} catch (error) {
-			console.error('Error handling unstake message:', error);
 		}
 	}
 
