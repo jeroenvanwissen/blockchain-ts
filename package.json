@@ -27,7 +27,7 @@
 	"homepage": "https://github.com/jeroenvanwissen/blockchain-ts#readme",
 	"devDependencies": {
 		"@types/jest": "^30.0.0",
-		"@types/node": "^24.2.1",
+		"@types/node": "^26.6.6",
 		"@types/secp256k1": "^4.0.6",
 		"@types/ws": "^8.18.2",
 		"@typescript-eslint/eslint-plugin": "^8.73.0",
