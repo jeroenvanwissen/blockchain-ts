@@ -1,6 +1,6 @@
 # TASK-0003: Add integration tests that use the real runtime
 
-Status: pending
+Status: done
 Priority: P0
 Size: medium
 Depends on: TASK-0001
@@ -21,10 +21,25 @@ Excluded: fixing the attacks themselves.
 
 ## Acceptance criteria
 
-- [ ] Integration tests run with `npm test` and touch only temp dirs, never the user's default data dir.
-- [ ] The persistence round-trip test passes.
-- [ ] The four attack scenarios exist as tests that document current behavior.
+- [x] Integration tests run with `npm test` and touch only temp dirs, never the user's default data dir.
+- [x] The persistence round-trip test passes.
+- [x] The four attack scenarios exist as tests that document current behavior.
 
 ## Validation
 
 `npm test`. The ESM runtime is covered by `npm run smoke` from TASK-0001.
+
+## Outcome
+
+- `BlockchainOptions.blocksDir` makes the block directory injectable (default `BLOCKS_DIR`). `BlockStore` and `Wallet` already took paths.
+- `src/__tests__/integration/Persistence.test.ts` (5 tests, real fs + protobuf, temp dirs) covers:
+  - genesis written and reloaded;
+  - 5 mined blocks reloaded with identical hashes and UTXO set;
+  - a signed spend reloaded with its inputs;
+  - mining continuing on a reopened chain;
+  - the wallet key surviving a reopen.
+- `src/__tests__/integration/ConsensusAttacks.test.ts` holds F-004, F-005, F-006 and F-007 as `test.failing`, each asserting the desired behaviour. Each was also run as a plain `test` to confirm it fails on its final assertion rather than in setup:
+  - F-004 and F-005: the promise resolved instead of rejecting;
+  - F-006: the restarted node reported stake 0 (expected 100);
+  - F-007: `isProofOfStake()` returned true.
+- `npm test`: 7 suites, 170 tests, about 36 s. The default data dir is untouched (its timestamp is unchanged).

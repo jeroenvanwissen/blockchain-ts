@@ -49,6 +49,8 @@ export interface BlockchainOptions {
 	validateTimestamps?: boolean;
 	stakeCheckInterval?: number;
 	allowPowAfterCutoff?: boolean;
+	/** Directory for blk*.dat and index.dat (defaults to BLOCKS_DIR from config) */
+	blocksDir?: string;
 }
 
 export class Blockchain {
@@ -78,9 +80,10 @@ export class Blockchain {
 			validateTimestamps: true,
 			stakeCheckInterval: 60 * 1000,
 			allowPowAfterCutoff: false,
+			blocksDir: BLOCKS_DIR,
 			...options,
 		};
-		this.blockStore = new BlockStore(BLOCKS_DIR);
+		this.blockStore = new BlockStore(this._options.blocksDir);
 		const genesisBlock = this.createGenesisBlock();
 		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
 		this.chain = [genesisBlock];

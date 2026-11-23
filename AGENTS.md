@@ -10,7 +10,8 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/index.ts`: node entry point; `src/mine.ts`: standalone miner; `src/smoke.ts`: runtime smoke check
 - `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)
 - `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
-- Tests sit next to their sources in `__tests__/` folders (`*.test.ts`)
+- Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
+- `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
 
 ## Setup and commands
 

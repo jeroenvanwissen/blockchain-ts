@@ -11,7 +11,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0001](TASK-0001-node-start-restart.md) | Make the node start and restart from disk | done | P0 | small | none | F-001, F-002, F-015 |
 | [TASK-0002](TASK-0002-hash-logging.md) | Remove per-hash logging from block hashing | done | P0 | small | none | F-014 |
-| [TASK-0003](TASK-0003-real-runtime-tests.md) | Add integration tests that use the real runtime | pending | P0 | medium | TASK-0001 | F-016 |
+| [TASK-0003](TASK-0003-real-runtime-tests.md) | Add integration tests that use the real runtime | done | P0 | medium | TASK-0001 | F-016 |
 | [TASK-0004](TASK-0004-in-node-mining.md) | Mine PoW blocks inside the node | pending | P0 | medium | TASK-0001, TASK-0002 | F-003, old E3 |
 
 ## Milestone 2: consensus is enforced
