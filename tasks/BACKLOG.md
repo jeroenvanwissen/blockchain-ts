@@ -64,7 +64,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0025](TASK-0025-stake-age.md) | Bound transaction timestamps; measure stake age from block time | done | P1 | medium | TASK-0009 | F-021 |
-| TASK-0026 | Equal-work tie-break that block contents can't influence | pending | P2 | small | TASK-0012 | F-022 |
+| [TASK-0026](TASK-0026-tie-break.md) | Equal-work tie-break that block contents can't influence | done | P2 | small | TASK-0012 | F-022 |
 | TASK-0027 | Keep wallet routes on loopback | pending | P2 | small | TASK-0017 | F-023 |
 | TASK-0028 | Mempool revalidation without re-verifying signatures | pending | P3 | small | TASK-0019 | F-024 |
 | TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
@@ -74,7 +74,6 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 
 Scope notes (expand into task files when picked up):
 
-- **TASK-0026:** for PoS blocks, break ties on a value fixed by the stake rather than the block contents, such as sha256d(parent hash ‖ kernel outpoint); for PoW blocks the block hash is the proof itself.
 - **TASK-0027:** wallet routes answer only loopback clients, whatever `API_HOST` is; document that exposing the API exposes only chain routes.
 - **TASK-0028:** cache signature validity per txid (witness included) so revalidation only rechecks inputs, maturity and fees.
 - **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.

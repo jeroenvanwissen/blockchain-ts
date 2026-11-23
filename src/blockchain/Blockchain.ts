@@ -14,6 +14,7 @@ import {
 	kernelHash,
 	meetsKernelTarget,
 	nextStakeModifier,
+	stakeTieBreak,
 } from './kernel.js';
 import { secp256k1 } from './secp256k1.js';
 import {
@@ -631,7 +632,8 @@ export class Blockchain {
 		block.cumulativeWeight = entry.work;
 		this._index.set(block.hash, entry);
 		this.blockStore.appendBlock(block);
-		if (!Blockchain._isBetter(entry.work, block.hash, this.getChainWeight(), this.getLatestBlock().hash)) {
+		const tip = this._index.get(this.getLatestBlock().hash)!;
+		if (!Blockchain._isBetter(entry, tip)) {
 			return 'side';
 		}
 		this._activateBranch(entry);
@@ -639,11 +641,26 @@ export class Blockchain {
 	}
 
 	/**
-	 * Fork choice: more chain work wins; equal work is broken by the lower tip hash, so all
-	 * nodes converge on the same branch (first-seen would leave simultaneous stakers split).
+	 * Fork choice: more chain work wins. Equal work goes to the lower tie-break value of the tip,
+	 * so all nodes converge on the same branch (first-seen would leave simultaneous stakers
+	 * split), and the block hash decides only between blocks with the same value.
 	 */
-	private static _isBetter(work: bigint, hash: string, otherWork: bigint, otherHash: string): boolean {
-		return work > otherWork || (work === otherWork && hash < otherHash);
+	private static _isBetter(a: { work: bigint; block: Block }, b: { work: bigint; block: Block }): boolean {
+		if (a.work !== b.work) return a.work > b.work;
+		const [tieA, tieB] = [Blockchain._tieBreak(a.block), Blockchain._tieBreak(b.block)];
+		if (tieA !== tieB) return tieA < tieB;
+		return a.block.hash < b.block.hash;
+	}
+
+	/**
+	 * A value the producer can't steer by choosing the block's contents. PoW: the block hash
+	 * (the proof itself: a lower one costs more work). PoS: derived from the parent and the
+	 * kernel outpoint only (stakeTieBreak); its hash could be ground by varying transactions.
+	 */
+	private static _tieBreak(block: Block): string {
+		if (!block.isProofOfStake()) return block.hash;
+		const kernel = block.transactions[1].inputs[0];
+		return stakeTieBreak(block.previousHash, kernel.previousTx, kernel.outputIndex);
 	}
 
 	/** Whether a block with this hash is known (active chain or side branch). */
@@ -1052,11 +1069,9 @@ export class Blockchain {
 				index.set(block.hash, { block, height: parent.height + 1, work, isInvalid: false });
 			}
 
-			// Activate the best valid branch (fork choice: work, then lower hash). Stored side
-			// blocks were never fully validated, so fall back when a branch fails.
-			const candidates = [...index.values()].sort((a, b) =>
-				Blockchain._isBetter(a.work, a.block.hash, b.work, b.block.hash) ? -1 : 1,
-			);
+			// Activate the best valid branch (fork choice, as in _isBetter). Stored side blocks
+			// were never fully validated, so fall back when a branch fails.
+			const candidates = [...index.values()].sort((a, b) => (Blockchain._isBetter(a, b) ? -1 : 1));
 			for (const candidate of candidates) {
 				if (this._hasInvalidAncestor(candidate, index)) continue;
 				const branch = this._branchTo(candidate, index);

@@ -114,7 +114,7 @@ describe('Block tree and reorganizations', () => {
 		const [b1, b2, b3] = branchB.slice(prefix.length);
 
 		await expect(chain.addMinedBlock(b1)).resolves.toBe('side');
-		// Equal work with the tip: the lower tip hash wins the tie
+		// Equal work with the tip: for PoW blocks the lower hash wins the tie
 		const tie = await chain.addMinedBlock(b2);
 		expect(tie).toBe(b2.hash < tipA.hash ? 'reorganized' : 'side');
 		await expect(chain.addMinedBlock(b3)).resolves.toBe(tie === 'reorganized' ? 'connected' : 'reorganized');
@@ -196,7 +196,7 @@ describe('Block tree and reorganizations', () => {
 		);
 	});
 
-	it('should break equal-work ties by the lower block hash, whatever the arrival order', async () => {
+	it('should break equal-work PoW ties by the lower block hash, whatever the arrival order', async () => {
 		const parent = [...chain.getChain()];
 		const x = blockOn(parent, a);
 		const y = blockOn(parent, b);

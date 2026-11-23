@@ -40,3 +40,16 @@ export function meetsKernelTarget(hash: string, bits: number, value: bigint): bo
 export function nextStakeModifier(proof: string, previousModifier: string): string {
 	return sha256d(Buffer.from(proof + previousModifier, 'hex')).toString('hex');
 }
+
+/**
+ * Equal-work tie-break value of a PoS block: sha256d(parent hash ‖ kernel outpoint). It depends
+ * only on the stake used, so a staker can't improve it by varying the block's contents (unlike
+ * the block hash). Lower wins.
+ */
+export function stakeTieBreak(parentHash: string, prevTxHash: string, prevOutputIndex: number): string {
+	const data = Buffer.alloc(32 + 32 + 4);
+	Buffer.from(parentHash, 'hex').copy(data, 0);
+	Buffer.from(prevTxHash, 'hex').copy(data, 32);
+	data.writeUInt32LE(prevOutputIndex, 64);
+	return sha256d(data).toString('hex');
+}

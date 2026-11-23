@@ -66,7 +66,7 @@ git --version          # Should be 2.30+
 | **UTXO Model**           | Unspent Transaction Output tracking with double-spend prevention  |
 | **Coinbase Maturity**    | Coinbase outputs require 10 confirmations before spending         |
 | **P2P Networking**       | WebSocket-based peer communication with chain synchronization     |
-| **Fork Resolution**      | Block tree; the branch with the most work wins; reorgs with undo data |
+| **Fork Resolution**      | Block tree; the branch with the most work wins (equal work: a tie-break block contents can't influence); reorgs with undo data |
 | **Digital Signatures**   | secp256k1 ECDSA per input (low-S), txid excludes signatures      |
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
 | **Wallet System**        | Key generation, Base58Check encoding, protobuf persistence       |

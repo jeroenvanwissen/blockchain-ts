@@ -1,13 +1,19 @@
 // Kernel proof of stake (TASK-0009): any mature UTXO can stake; PoS blocks are signed by the
 // coinstake owner; all PoS state (the stake modifier) is derived from the chain.
+import * as fs from 'fs';
+import * as path from 'path';
 import { Block } from '../../blockchain/Block.js';
+import { stakeTieBreak } from '../../blockchain/kernel.js';
 import { Transaction } from '../../blockchain/Transaction.js';
-import { POS_BLOCK_REWARD, STAKE_MIN_AGE, STAKE_TIMESTAMP_GRANULARITY } from '../../config.js';
+import type { Wallet } from '../../blockchain/Wallet.js';
+import { COIN, POS_BLOCK_REWARD, STAKE_MIN_AGE, STAKE_TIMESTAMP_GRANULARITY } from '../../config.js';
 import {
 	findStakeBlock,
 	finishPowPhase,
 	makeTempDir,
 	mineBlocks,
+	nextStakeTime,
+	openChain,
 	openPosChain,
 	openWallet,
 	POS_TEST_CUTOFF,
@@ -155,5 +161,48 @@ describe('Proof of stake (kernel)', () => {
 		await expect(chain.addTransaction(spend)).rejects.toThrow(
 			'coinstake output has not reached maturity',
 		);
+	});
+
+	it('should settle same-slot ties by the stake used, not by block contents a staker can vary', async () => {
+		const a = openWallet(dir, 'a');
+		const b = openWallet(dir, 'b');
+		const options = { powCutoffBlock: 30, minStakeAge: 0 };
+		const chain = openChain(dir, options);
+		await mineBlocks(chain, a.address, 25);
+		await chain.addTransaction(chain.createTransaction(a.address, b.address, 100n * COIN, a));
+		await mineBlocks(chain, a.address, 5);
+		await stakeBlocks(chain, a, 6); // until B's output has its confirmations
+
+		// Both stake the same slot (every kernel hits while the PoS target is near its limit)
+		const slot = nextStakeTime(chain);
+		const [blockA, blockB] = [chain.createStakeBlock(a, slot)!, chain.createStakeBlock(b, slot)!];
+		const tie = (block: Block) =>
+			stakeTieBreak(block.previousHash, block.transactions[1].inputs[0].previousTx, block.transactions[1].inputs[0].outputIndex);
+		const [winner, loser, loserWallet] = tie(blockA) < tie(blockB) ? [blockA, blockB, b] : [blockB, blockA, a];
+
+		// The loser reworks its block (same stake, different coinbase) until its hash is lower than
+		// the winner's: that used to win the tie
+		const rework = (i: number, wallet: Wallet) => {
+			const [coinbase, coinstake, ...rest] = loser.transactions;
+			const changed = Transaction.coinbase(coinbase.outputs[0].address, coinbase.outputs[0].amount, loser.index, loser.timestamp - i);
+			const variant = new Block(loser.timestamp, [changed, coinstake, ...rest], loser.previousHash, 0, loser.bits, loser.index);
+			variant.signature = wallet.signDigest(Buffer.from(variant.hash, 'hex'));
+			return variant;
+		};
+		let ground = loser;
+		for (let i = 1; ground.hash >= winner.hash; i++) ground = rework(i, loserWallet);
+		expect(tie(ground)).toBe(tie(loser));
+
+		for (const order of [[winner, ground], [ground, winner]]) {
+			const copy = makeTempDir(); // a fresh node with a copy of the stored chain
+			try {
+				fs.cpSync(path.join(dir, 'blocks'), path.join(copy, 'blocks'), { recursive: true });
+				const node = openChain(copy, options);
+				for (const block of order) await node.addMinedBlock(block);
+				expect(node.getLatestBlock().hash).toBe(winner.hash);
+			} finally {
+				removeTempDir(copy);
+			}
+		}
 	});
 });

@@ -90,7 +90,7 @@ describe('StakingService', () => {
 		advanceTime(60_000);
 
 		// Like a network: both stakers build on the same tip in each slot, both blocks arrive,
-		// and fork choice (equal work → lower hash) keeps one
+		// and fork choice (equal work → lower stake tie-break) keeps one
 		for (let i = 0; i < 3000 && posBlocks(chain).length < 200; i++) {
 			advanceTime(SLOT);
 			const slot = Math.floor(Date.now() / SLOT) * SLOT;
