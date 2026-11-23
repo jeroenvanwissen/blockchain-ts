@@ -46,15 +46,15 @@ Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API]
 
 | Tool         | Version | Purpose              | Install              |
 | ------------ | ------- | -------------------- | -------------------- |
-| **Node.js**  | 18+     | Runtime environment  | `brew install node`  |
-| **npm**      | 9+      | Package manager      | Included with Node   |
+| **Node.js**  | 22.13+ or 24+ | Runtime environment (CI tests 22 and 26) | `brew install node`  |
+| **npm**      | 10+     | Package manager      | Included with Node   |
 | **Git**      | 2.30+   | Version control      | `brew install git`   |
 
 ### Verify Setup
 
 ```bash
-node --version         # Should be 18+
-npm --version          # Should be 9+
+node --version         # Should be 22.13+ or 24+
+npm --version          # Should be 10+
 git --version          # Should be 2.30+
 ```
 

@@ -3,6 +3,9 @@
 	"version": "0.0.1",
 	"description": "A hybrid PoW/PoS blockchain node in TypeScript",
 	"type": "module",
+	"engines": {
+		"node": "^22.13.0 || >=24"
+	},
 	"scripts": {
 		"dev": "tsx watch src/index.ts",
 		"start": "tsx src/index.ts",

@@ -15,14 +15,18 @@ concurrency:
 
 jobs:
   check:
-    name: Build, test, lint, smoke
+    name: Build, test, lint, smoke (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 26] # oldest supported line (engines: ^22.13.0 || >=24) and newest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run check
