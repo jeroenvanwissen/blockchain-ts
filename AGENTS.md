@@ -4,8 +4,9 @@
 
 A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, WebSocket peers, protobuf block storage. **It doesn't work end to end yet.** See [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) for what is broken and [tasks/BACKLOG.md](tasks/BACKLOG.md) for the plan.
 
-- `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts`, `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts` (in-node staking loop, enabled with `--stake`)
-- `src/api/ApiServer.ts`: read-only HTTP API (`/status`, `/blocks/:heightOrHash`, `/transactions/:txid`, `/addresses/:address[/utxos]`, `/mempool`, `/peers`); `listen()`/`close()`, port 0 supported
+- `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts` (keys only; balances come from the chain's UTXO set), `amount.ts` (`parseCoins`, `formatCoins`), `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts` (in-node staking loop, enabled with `--stake`)
+- `src/api/ApiServer.ts`: HTTP API. Public read-only chain routes (`/status`, `/blocks/:heightOrHash`, `/transactions/:txid`, `/addresses/:address[/utxos]`, `/mempool`, `/peers`) and wallet routes (`GET /wallet`, `POST /wallet/send`) that need the bearer token from `<data dir>/api.cookie` (`src/api/cookie.ts`, rewritten at every start); `listen()`/`close()`, port 0 supported
+- `src/cli.ts`: `npm run cli -- [--data-dir <dir>] [--api <url>] status|balance|send <address> <coins> ...` against a running node's API
 - `src/networking/P2PServer.ts`: WebSocket peers: VERSION/VERACK handshake, locator-based sync (`GET_BLOCKS`/`BLOCKS`), block and transaction broadcast, peer discovery. `listen()` resolves when listening; `close()` stops everything (integration tests run real nodes in-process, see `Sync.test.ts`)
 - `src/config.ts`: all constants and the data-dir and port settings
 - `src/index.ts`: node entry point (`--data-dir`, `--peers`, `--mine`, `--stake`); `src/smoke.ts`: runtime smoke check
@@ -40,6 +41,7 @@ Run npm scripts from the repository root.
 - Put constants in `src/config.ts`. Use environment variables only for runtime settings (ports, peers, data dir).
 - Amounts are `bigint` base units (`COIN` = 10^8 per coin); never use `number` for money. On the JSON wire amounts are decimal strings: send with `JSON.stringify` (`Transaction.toJSON`), parse with `Transaction.fromJSON`, which validates strictly.
 - Build coinbases with `Transaction.coinbase(address, amount, height)`; its null input carries the block height.
+- Build payments with `Blockchain.createPayment(wallet, outputs)` (largest spendable outputs first, change back to the wallet); it doesn't admit them, so call `addTransaction` next.
 - The txid (`calculateHash`) excludes public keys and signatures; blocks commit to `witnessHash`. Inputs carry a compressed public key and a compact low-S signature over `sighash(i)`.
 - Block hash = sha256d of the header (version, previous hash, merkle root of witness hashes, timestamp in ms, `bits`, nonce); PoW means hash ≤ target. Chain work (`cumulativeWeight`, bigint) sums `2^256 / (target + 1)` per block. Build templates with `Blockchain.createBlockTemplate`; it sets `bits` for the block's type.
 - `Blockchain` mutations go through its `async-mutex` lock. Public async methods acquire it; `_`-prefixed internals assume it is held. Never call a public locking method while holding the lock.
@@ -70,6 +72,7 @@ Run npm scripts from the repository root.
 
 ## Safety
 
-- Never log or commit private keys or wallet files. `data/` is gitignored; `wallet.dat` is written with `0600` permissions.
+- Never log or commit private keys, wallet files or the API token. `data/` is gitignored; `wallet.dat` and `api.cookie` are written with `0600` permissions (smoke checks the cookie's mode and that the token never appears in output).
+- Anything that spends from the node's wallet goes behind the API token (`route.wallet` in `ApiServer`).
 - Tests must use temp directories, never the default data dir (`~/Library/Application Support/blockchain-ts` on macOS, `~/.blockchain-ts` on Linux).
 - Treat all peer data as untrusted: type-guard every message before use.

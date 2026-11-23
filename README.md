@@ -19,7 +19,9 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
-- no way yet to send coins from a node's wallet (TASK-0017). The [HTTP API](#http-api) is read-only.
+- payments carry no fee yet (TASK-0018), and the mempool has no size limit or conflict eviction (TASK-0019).
+
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
@@ -90,7 +92,8 @@ src/
 │   ├── BlockStore.ts         # Append-only chunked block storage with protobuf index
 │   ├── Transaction.ts        # Transaction format, txid/witness hash, signing, verification
 │   ├── UtxoSet.ts            # Unspent outputs by outpoint, per-address index
-│   ├── Wallet.ts             # Key management, persistence
+│   ├── Wallet.ts             # Key management, persistence (keys only)
+│   ├── amount.ts             # Coin amounts: parse "1.5", format base units
 │   ├── address.ts            # Base58Check addresses
 │   ├── kernel.ts             # PoS kernel hash, kernel target, stake modifier
 │   ├── retarget.ts           # Per-block retarget (PoW and PoS)
@@ -105,10 +108,12 @@ src/
 │   ├── P2PServer.ts          # Handshake, block sync, relay, peer discovery
 │   └── __tests__/            # Unit tests
 ├── api/
-│   └── ApiServer.ts          # Read-only HTTP API (loopback by default)
+│   ├── ApiServer.ts          # HTTP API: chain queries, token-protected wallet routes
+│   └── cookie.ts             # api.cookie token file
 ├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Node entry point
+├── cli.ts                    # npm run cli: status, balance, send via the API
 ├── smoke.ts                  # npm run smoke: two real nodes
 ├── e2e.ts                    # npm run e2e: three regtest nodes, partition, reorg
 └── nodeHarness.ts            # Helpers for driving node processes
@@ -126,7 +131,7 @@ src/
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
-| **API Server**     | `ApiServer.ts`        | Read-only HTTP API over chain state, mempool, peers  |
+| **API Server**     | `ApiServer.ts`        | HTTP API over chain state, mempool, peers; wallet send |
 
 ---
 
@@ -166,7 +171,8 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
-| `wallet.dat`            | Wallet keys and address (protobuf)         |
+| `wallet.dat`            | Wallet keys and address (protobuf, 0600)   |
+| `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
 
 ---
@@ -206,6 +212,19 @@ After block 100 blocks are proof of stake. Start a node with `--stake` to stake 
 npm run dev -- --stake
 ```
 
+### Sending Coins
+
+The CLI talks to a running node's API. `send` pays from the node's wallet (largest outputs first, change back to the wallet), admits the payment to the mempool, relays it, and prints the txid. Amounts are in coins with up to 8 decimals:
+
+```bash
+npm run cli -- status
+npm run cli -- balance
+npm run cli -- send <address> 1.5
+npm run cli -- send <address1> 1 <address2> 2.25     # several recipients in one transaction
+```
+
+For another node, pass its data dir (for its `api.cookie`) and API URL: `npm run cli -- --data-dir ./data/node2 --api http://127.0.0.1:6002 balance`.
+
 ### Step 4: Verify
 
 ```bash
@@ -243,7 +262,7 @@ const balance = blockchain.getBalance(wallet.address);
 
 ## HTTP API
 
-Every node serves a read-only JSON API, on `127.0.0.1` at the P2P port + 1000 (6001 by default, 6002 for a node with `P2P_PORT=5002`). Set `API_HOST` to expose it on other interfaces; it has no authentication. Amounts are decimal strings in base units (`COIN` = 10^8).
+Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by default, 6002 for a node with `P2P_PORT=5002`). Amounts are decimal strings in base units (`COIN` = 10^8). The chain routes are public and read-only. Set `API_HOST` to expose them on other interfaces.
 
 | Endpoint | Returns |
 | -------- | ------- |
@@ -254,13 +273,18 @@ Every node serves a read-only JSON API, on `127.0.0.1` at the P2P port + 1000 (6
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Pending txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
+| `GET /wallet` | The node wallet's address, balance, spendable balance and number of outputs (token required) |
+| `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet and returns `{"txid": "..."}` (token required) |
+
+The wallet routes require `Authorization: Bearer <token>`, where the token is the content of `<data dir>/api.cookie`. The node writes a new random token there (mode 0600) at every start, so only users who can read the data dir can spend, and the API sends no CORS headers, so web pages can't add the header.
 
 ```bash
 curl -s localhost:6001/status
 curl -s localhost:6001/blocks/1
+curl -s -H "Authorization: Bearer $(cat <data dir>/api.cookie)" localhost:6001/wallet
 ```
 
-Malformed parameters return 400, unknown items 404 and other methods 405, each with an `error` field.
+Malformed input returns 400, a missing or wrong token 401, unknown items 404, other methods 405, a non-JSON body 415, and a payment the chain rejects (for example insufficient funds) 422, each with an `error` field.
 
 ---
 
@@ -310,7 +334,9 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |
 | Start 2nd node    | `P2P_PORT=5002 npm run dev -- --data-dir ./data/node2 --peers ws://localhost:5001` |
-| Node status       | `curl -s localhost:6001/status`                               |
+| Node status       | `npm run cli -- status`                                       |
+| Wallet balance    | `npm run cli -- balance`                                      |
+| Send coins        | `npm run cli -- send <address> <coins>`                       |
 
 ---
 

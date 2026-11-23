@@ -52,6 +52,8 @@ export const API_HOST = process.env.API_HOST || '127.0.0.1';
 export const API_PORT = process.env.API_PORT
 	? parseInt(process.env.API_PORT)
 	: P2P_PORT + API_PORT_OFFSET;
+export const API_COOKIE_PATH = path.join(DATA_DIR, 'api.cookie'); // token for the /wallet routes, rewritten at startup
+export const MAX_API_BODY_BYTES = 64 * 1024; // larger request bodies get 413
 
 // Peer protocol (TASK-0013)
 export const NETWORK_MAGIC = 'blockchain-ts/devnet'; // peers on another network are dropped

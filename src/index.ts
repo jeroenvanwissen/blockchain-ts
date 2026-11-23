@@ -1,12 +1,14 @@
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ApiServer } from './api/ApiServer.js';
+import { writeApiCookie } from './api/cookie.js';
 import { Blockchain } from './blockchain/Blockchain.js';
 import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
 import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
 import {
+	API_COOKIE_PATH,
 	API_HOST,
 	API_PORT,
 	DATA_DIR,
@@ -67,8 +69,18 @@ const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
 const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic });
 if (isRegtest) console.log('Regtest network');
 
-// Read-only HTTP API (loopback by default)
-const api = new ApiServer(blockchain, p2pServer, { host: API_HOST, port: API_PORT, network: networkMagic });
+// HTTP API (loopback by default). Chain routes are public; /wallet routes need the token that
+// is written to api.cookie on every start (never logged)
+const api = new ApiServer(
+	blockchain,
+	p2pServer,
+	{ host: API_HOST, port: API_PORT, network: networkMagic },
+	{
+		wallet,
+		token: writeApiCookie(API_COOKIE_PATH),
+		broadcast: (transaction) => p2pServer.broadcastTransaction(transaction),
+	},
+);
 api
 	.listen()
 	.then(() => console.log(`API listening on http://${API_HOST}:${api.port()}`))

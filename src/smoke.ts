@@ -1,7 +1,7 @@
 // Smoke check against the real runtime (native ESM, real filesystem, real protobuf).
 // From an unrelated working directory and temp data dirs: node A mines, node B syncs from it
-// and accepts A's next block live, both answer over the HTTP API, then A restarts and keeps
-// its chain. A fresh chain mines
+// and accepts A's next block live, both answer over the HTTP API and the CLI, then A restarts
+// and keeps its chain. A fresh chain mines
 // quickly until the retarget catches up, so heights are read from the logs, not assumed.
 // Run with `npm run smoke`; --keep keeps the temp dir.
 import * as fs from 'fs';
@@ -10,10 +10,12 @@ import * as path from 'path';
 import {
 	API_READY,
 	apiGet,
+	apiUrl,
 	freePort,
 	lastLines,
 	noLoadErrors,
 	READY,
+	runCli,
 	startNode,
 	stopNode,
 	waitFor,
@@ -93,6 +95,22 @@ async function main(): Promise<void> {
 		if (blockA.hash !== statusB.tip) throw new Error("B's tip is not A's block at that height");
 		const balance = await apiGet<{ balance: string }>(nodeA, `/addresses/${address}`);
 		if (BigInt(balance.balance) <= 0n) throw new Error("A's API reports no mining rewards");
+
+		step('run the CLI against node A (status, and balance with its api.cookie)');
+		const cliStatus = await runCli(['--api', apiUrl(nodeA), 'status']);
+		if (cliStatus.code !== 0 || !/^height: \d+$/m.test(cliStatus.stdout)) {
+			throw new Error(`cli status failed: ${cliStatus.stderr.trim()}`);
+		}
+		const cliBalance = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'balance']);
+		if (cliBalance.code !== 0 || !cliBalance.stdout.includes(`address: ${address}`)) {
+			throw new Error(`cli balance failed: ${cliBalance.stderr.trim()}`);
+		}
+		const cookie = path.join(dataA, 'api.cookie');
+		if ((fs.statSync(cookie).mode & 0o777) !== 0o600) throw new Error('api.cookie is not 0600');
+		const token = fs.readFileSync(cookie, 'utf8').trim();
+		if (nodeA.output().includes(token) || cliBalance.stdout.includes(token)) {
+			throw new Error('the API token appeared in output');
+		}
 
 		step('restart node A without mining; expect the same chain and wallet');
 		await stopNode(nodeB);

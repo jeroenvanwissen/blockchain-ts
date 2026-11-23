@@ -2,42 +2,23 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import protobuf from 'protobufjs';
-import { Transaction, type TxInput, type TxOutput } from './Transaction.js';
+import type { Transaction } from './Transaction.js';
 import { addressFromPublicKey } from './address.js';
 import { WALLET_SCHEMA } from './protoSchemas.js';
 import { secp256k1 } from './secp256k1.js';
 import { DATA_DIR, MAX_WALLET_BACKUPS, WALLET_DATA_FILENAME } from '../config.js';
 
-interface WalletTransaction {
-	hash: string;
-	timestamp: number;
-	type: 'sent' | 'received';
-	amount: bigint;
-	otherParty: string;
-}
-
-interface UTXO {
-	txHash: string;
-	outputIndex: number;
-	amount: bigint;
-}
-
-/** Decoded protobuf form: 64-bit fields arrive as decimal strings (longs: String). */
+/** Decoded protobuf form. Fields 4 and 5 (old history and UTXO lists) are skipped on load. */
 interface StoredWalletData {
 	privateKey: Uint8Array;
 	publicKey: Uint8Array;
 	address: string;
-	transactions: (Omit<WalletTransaction, 'amount' | 'timestamp'> & {
-		amount: string;
-		timestamp: string;
-	})[];
-	utxos: (Omit<UTXO, 'amount'> & { amount: string })[];
 }
 
 function decodeWalletData(buffer: Buffer): StoredWalletData {
 	const WalletDataType = getWalletProto();
 	const decoded = WalletDataType.decode(buffer as Uint8Array);
-	return WalletDataType.toObject(decoded, { longs: String, arrays: true }) as StoredWalletData;
+	return WalletDataType.toObject(decoded) as StoredWalletData;
 }
 
 let _walletProtoRoot: protobuf.Root | null = null;
@@ -48,14 +29,16 @@ function getWalletProto(): protobuf.Type {
 	return _walletProtoRoot.lookupType('WalletData');
 }
 
+/**
+ * The node's key pair, persisted as protobuf at `<data dir>/wallet.dat` (0600). Holds keys only:
+ * balances and spendable outputs come from the chain's UTXO set (`Blockchain.getUTXOs`).
+ */
 export class Wallet {
 	private privateKey!: Buffer;
 	public publicKey!: Buffer;
 	public address!: string;
 
 	private readonly walletPath: string;
-	private transactions: WalletTransaction[] = [];
-	private utxos: UTXO[] = [];
 
 	constructor(walletPath?: string) {
 		// saveWallet() creates the directory when needed
@@ -132,13 +115,6 @@ export class Wallet {
 				throw new Error('public key does not match private key');
 			}
 
-			this.transactions = (data.transactions || []).map((tx) => ({
-				...tx,
-				timestamp: Number(tx.timestamp),
-				amount: BigInt(tx.amount),
-			}));
-			this.utxos = (data.utxos || []).map((utxo) => ({ ...utxo, amount: BigInt(utxo.amount) }));
-
 			// The address is always derived from the key; re-save wallets written with an older
 			// derivation so the file matches what the node uses
 			this.address = addressFromPublicKey(this.publicKey);
@@ -155,23 +131,10 @@ export class Wallet {
 
 	private saveWallet(): void {
 		const WalletDataType = getWalletProto();
-		// 64-bit fields go in as decimal strings; fromObject converts them without precision loss
 		const message = WalletDataType.fromObject({
 			privateKey: this.privateKey,
 			publicKey: this.publicKey,
 			address: this.address,
-			transactions: this.transactions.map((tx) => ({
-				hash: tx.hash,
-				timestamp: String(tx.timestamp),
-				type: tx.type,
-				amount: tx.amount.toString(),
-				otherParty: tx.otherParty,
-			})),
-			utxos: this.utxos.map((utxo) => ({
-				txHash: utxo.txHash,
-				outputIndex: utxo.outputIndex,
-				amount: utxo.amount.toString(),
-			})),
 		});
 		const buffer = WalletDataType.encode(message).finish();
 
@@ -213,102 +176,8 @@ export class Wallet {
 		}
 	}
 
-	addTransaction(
-		tx: Transaction,
-		type: 'sent' | 'received',
-		otherParty: string
-	): void {
-		// Add to transaction history
-		this.transactions.push({
-			hash: tx.calculateHash(),
-			timestamp: tx.timestamp,
-			type,
-			amount:
-				type === 'sent'
-					? tx.outputs.reduce(
-							(sum: bigint, out: TxOutput) =>
-								out.address !== this.address ? sum + out.amount : sum,
-							0n,
-						)
-					: tx.outputs.reduce(
-							(sum: bigint, out: TxOutput) =>
-								out.address === this.address ? sum + out.amount : sum,
-							0n,
-						),
-			otherParty,
-		});
-
-		const txHash = tx.calculateHash();
-
-		// Update UTXOs
-		if (type === 'sent') {
-			// Remove spent UTXOs
-			const spentUtxos = new Set(
-				tx.inputs.map((input: TxInput) => input.previousTx)
-			);
-			this.utxos = this.utxos.filter((utxo) => !spentUtxos.has(utxo.txHash));
-
-			// Add change output if any
-			tx.outputs.forEach((output: TxOutput, index: number) => {
-				if (output.address === this.address) {
-					this.utxos.push({
-						txHash,
-						outputIndex: index,
-						amount: output.amount,
-					});
-				}
-			});
-		} else {
-			// Add new UTXOs for received amounts
-			tx.outputs.forEach((output: TxOutput, index: number) => {
-				if (output.address === this.address) {
-					this.utxos.push({
-						txHash,
-						outputIndex: index,
-						amount: output.amount,
-					});
-				}
-			});
-		}
-
-		this.saveWallet();
-	}
-
-	getBalance(): bigint {
-		return this.utxos.reduce((sum, utxo) => sum + utxo.amount, 0n);
-	}
-
 	getAddress(): string {
 		return this.address;
-	}
-
-	getSpendableOutputs(amount: bigint): { outputs: UTXO[]; total: bigint } {
-		let total = 0n;
-		const outputs: UTXO[] = [];
-
-		// Sort UTXOs by amount (largest first) for efficient selection
-		const sortedUtxos = [...this.utxos].sort((a, b) =>
-			b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0,
-		);
-
-		for (const utxo of sortedUtxos) {
-			total += utxo.amount;
-			outputs.push(utxo);
-
-			if (total >= amount) {
-				break;
-			}
-		}
-
-		if (total < amount) {
-			throw new Error('Insufficient funds');
-		}
-
-		return { outputs, total };
-	}
-
-	getTransactionHistory(): WalletTransaction[] {
-		return [...this.transactions].sort((a, b) => b.timestamp - a.timestamp);
 	}
 
 	exportWallet(exportPath: string): void {

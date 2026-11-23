@@ -10,8 +10,9 @@ export const API_READY = /API listening on (http:\/\/\S+)/;
 export const TIMEOUT_MS = 30_000;
 
 const SELF = fileURLToPath(import.meta.url);
-// index.ts under tsx, index.js when run from dist/
+// index.ts / cli.ts under tsx, .js when run from dist/
 const ENTRY = path.join(path.dirname(SELF), `index${path.extname(SELF)}`);
+const CLI_ENTRY = path.join(path.dirname(SELF), `cli${path.extname(SELF)}`);
 const TSX_LOADER = import.meta.resolve('tsx');
 
 export interface NodeProcess {
@@ -107,6 +108,18 @@ export async function apiGet<T>(node: NodeProcess, path: string): Promise<T> {
 	const res = await fetch(`${apiUrl(node)}${path}`, { signal: AbortSignal.timeout(5_000) });
 	if (!res.ok) throw new Error(`${node.name}: GET ${path} returned ${res.status}`);
 	return (await res.json()) as T;
+}
+
+/** Run the CLI (`npm run cli`) to completion. */
+export function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	const child = spawn(process.execPath, ['--import', TSX_LOADER, CLI_ENTRY, ...args], {
+		stdio: ['ignore', 'pipe', 'pipe'],
+	});
+	let stdout = '';
+	let stderr = '';
+	child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+	child.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+	return new Promise((resolve) => child.once('exit', (code) => resolve({ code, stdout, stderr })));
 }
 
 export function walletAddress(node: NodeProcess): string {

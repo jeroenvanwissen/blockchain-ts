@@ -1,5 +1,5 @@
-// Read-only HTTP API (TASK-0016) against a real chain over real HTTP. Difficulty validation is
-// off so blocks build instantly; real timers (fetch needs them).
+// HTTP API (TASK-0016, wallet routes TASK-0017) against a real chain over real HTTP. Difficulty
+// validation is off so blocks build instantly; real timers (fetch needs them).
 import { ApiServer } from '../../api/ApiServer.js';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
@@ -27,10 +27,20 @@ describe('HTTP API', () => {
 	let miner: Wallet;
 	let api: ApiServer;
 	let peers: PeerInfo[];
+	let broadcasts: Transaction[];
+	const TOKEN = 'test-token';
 
 	async function get(path: string, init?: RequestInit) {
 		const res = await fetch(`http://127.0.0.1:${api.port()}${path}`, init);
 		return { status: res.status, headers: res.headers, body: (await res.json()) as Record<string, unknown> };
+	}
+
+	function send(body: unknown, headers: Record<string, string> = {}) {
+		return get('/wallet/send', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers },
+			body: typeof body === 'string' ? body : JSON.stringify(body),
+		});
 	}
 
 	beforeEach(async () => {
@@ -40,7 +50,13 @@ describe('HTTP API', () => {
 		miner = openWallet(dir, 'miner');
 		await buildBlocks(chain, miner.address, COIN_MATURITY + 2);
 		peers = [];
-		api = new ApiServer(chain, { getPeerInfo: () => peers }, { host: '127.0.0.1', port: 0, network: 'test-net' });
+		broadcasts = [];
+		api = new ApiServer(
+			chain,
+			{ getPeerInfo: () => peers },
+			{ host: '127.0.0.1', port: 0, network: 'test-net' },
+			{ wallet: miner, token: TOKEN, broadcast: (tx) => broadcasts.push(tx) },
+		);
 		await api.listen();
 	});
 
@@ -190,5 +206,82 @@ describe('HTTP API', () => {
 		const post = await get('/status', { method: 'POST' });
 		expect(post.status).toBe(405);
 		expect(post.headers.get('allow')).toBe('GET');
+	});
+
+	describe('wallet routes', () => {
+		it('should require the API token', async () => {
+			const missing = await get('/wallet');
+			expect(missing.status).toBe(401);
+			expect(missing.headers.get('www-authenticate')).toBe('Bearer');
+			expect((await get('/wallet', { headers: { authorization: 'Bearer wrong' } })).status).toBe(401);
+			expect((await send({ outputs: [] }, { authorization: '' })).status).toBe(401);
+
+			const wallet = await get('/wallet', { headers: { authorization: `Bearer ${TOKEN}` } });
+			expect(wallet.status).toBe(200);
+			expect(wallet.body).toEqual((await get(`/addresses/${miner.address}`)).body);
+		});
+
+		it('should pay several outputs with change back to the wallet, and relay the payment', async () => {
+			const [r1, r2] = [openWallet(dir, 'r1'), openWallet(dir, 'r2')];
+
+			const { status, body } = await send({
+				outputs: [
+					{ address: r1.address, amount: COIN.toString() },
+					{ address: r2.address, amount: (2n * COIN).toString() },
+				],
+			});
+
+			expect(status).toBe(200);
+			const txid = body.txid as string;
+			expect(chain.getPendingTransactions().map((tx) => tx.calculateHash())).toEqual([txid]);
+			expect(broadcasts.map((tx) => tx.calculateHash())).toEqual([txid]);
+			const [payment] = broadcasts;
+			expect(payment.outputs.slice(0, 2)).toEqual([
+				{ address: r1.address, amount: COIN },
+				{ address: r2.address, amount: 2n * COIN },
+			]);
+			const inputTotal = POW_BLOCK_REWARD * BigInt(payment.inputs.length);
+			expect(payment.outputs[2]).toEqual({ address: miner.address, amount: inputTotal - 3n * COIN });
+
+			await buildBlocks(chain, miner.address, 1);
+			expect(chain.getBalance(r2.address)).toBe(2n * COIN);
+		});
+
+		it('should reject malformed payments (400) and unaffordable ones (422)', async () => {
+			const to = openWallet(dir, 'to').address;
+			const cases: [unknown, number, string][] = [
+				['{not json', 400, 'not valid JSON'],
+				[{}, 400, 'expected { outputs'],
+				[{ outputs: [] }, 400, 'expected { outputs'],
+				[{ outputs: [{ address: 'nope', amount: '1' }] }, 400, 'output 0: invalid address'],
+				[{ outputs: [{ address: to, amount: '1.5' }] }, 400, 'output 0: amount'],
+				[{ outputs: [{ address: to, amount: '0' }] }, 400, 'output 0: amount'],
+				[{ outputs: [{ address: to, amount: 5 }] }, 400, 'output 0: amount'],
+				[{ outputs: [{ address: to, amount: (1000n * COIN).toString() }] }, 422, 'Insufficient funds'],
+			];
+			for (const [body, status, error] of cases) {
+				const res = await send(body);
+				expect({ body, status: res.status }).toEqual({ body, status });
+				expect(res.body.error).toContain(error);
+			}
+			expect((await send({ outputs: [] }, { 'content-type': 'text/plain' })).status).toBe(415);
+			expect(chain.getPendingTransactions()).toHaveLength(0);
+			expect(broadcasts).toHaveLength(0);
+		});
+
+		it('should answer 405 for the wrong method and 404 on a node without wallet access', async () => {
+			const wrongMethod = await get('/wallet/send', { headers: { authorization: `Bearer ${TOKEN}` } });
+			expect(wrongMethod.status).toBe(405);
+			expect(wrongMethod.headers.get('allow')).toBe('POST');
+
+			const plain = new ApiServer(chain, { getPeerInfo: () => [] }, { host: '127.0.0.1', port: 0, network: 'x' });
+			await plain.listen();
+			try {
+				const res = await fetch(`http://127.0.0.1:${plain.port()}/wallet`);
+				expect(res.status).toBe(404);
+			} finally {
+				await plain.close();
+			}
+		});
 	});
 });

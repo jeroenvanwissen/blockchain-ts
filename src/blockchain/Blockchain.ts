@@ -25,6 +25,8 @@ import {
 	MEDIAN_TIME_SPAN,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_FUTURE_BLOCK_TIME,
+	MAX_TRANSACTION_INPUTS,
+	MAX_TRANSACTION_OUTPUTS,
 	STAKE_MIN_AGE,
 	STAKE_MIN_CONFIRMATIONS,
 	STAKE_TIMESTAMP_GRANULARITY,
@@ -703,48 +705,58 @@ export class Blockchain {
 		return this.getUTXOs(address).reduce((sum, utxo) => sum + utxo.output.amount, 0n);
 	}
 
-	createTransaction(
-		from: string,
-		to: string,
-		amount: bigint,
-		wallet: Wallet
-	): Transaction {
+	/** Single-recipient payment from `from` (the wallet's address); see createPayment. */
+	createTransaction(from: string, to: string, amount: bigint, wallet: Wallet): Transaction {
 		if (!this.validateAddress(from)) {
 			throw new Error('invalid sender address');
 		}
-		if (!this.validateAddress(to)) {
-			throw new Error('invalid recipient address');
-		}
+		return this.buildPayment(from, [{ address: to, amount }], wallet);
+	}
 
+	/**
+	 * Build and sign a payment from `wallet` to one or more outputs. Spendable outputs are taken
+	 * largest first until they cover the total, and any change goes back to the wallet. No fee
+	 * yet (TASK-0018). The result still has to go through addTransaction.
+	 */
+	public createPayment(wallet: Wallet, payTo: TxOutput[]): Transaction {
+		return this.buildPayment(wallet.address, payTo, wallet);
+	}
+
+	private buildPayment(from: string, payTo: TxOutput[], wallet: Wallet): Transaction {
+		const maxRecipients = MAX_TRANSACTION_OUTPUTS - 1; // room for change
+		if (payTo.length === 0 || payTo.length > maxRecipients) {
+			throw new Error(`a payment needs 1 to ${maxRecipients} outputs`);
+		}
+		for (const output of payTo) {
+			if (!this.validateAddress(output.address)) throw new Error('invalid recipient address');
+			if (output.amount <= 0n) throw new Error('payment amounts must be positive');
+		}
+		const amount = payTo.reduce((sum, output) => sum + output.amount, 0n);
+
+		const candidates = this.getSpendableUTXOs(from).sort((a, b) =>
+			a.output.amount === b.output.amount ? 0 : a.output.amount > b.output.amount ? -1 : 1,
+		);
 		let inputSum = 0n;
 		const inputs: TxInput[] = [];
-
-		for (const utxo of this.getSpendableUTXOs(from)) {
+		for (const utxo of candidates) {
+			if (inputSum >= amount || inputs.length === MAX_TRANSACTION_INPUTS) break;
 			inputSum += utxo.output.amount;
-			inputs.push({
-				previousTx: utxo.txHash,
-				outputIndex: utxo.outputIndex,
-				publicKey: '',
-					signature: '',
-			});
-
-			if (inputSum >= amount) break;
+			inputs.push({ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' });
 		}
-
 		if (inputSum < amount) {
-			throw new Error('Insufficient funds');
+			throw new Error(
+				inputs.length === MAX_TRANSACTION_INPUTS
+					? `payment needs more than ${MAX_TRANSACTION_INPUTS} inputs; send a smaller amount`
+					: 'Insufficient funds',
+			);
 		}
 
-		const outputs: TxOutput[] = [{ address: to, amount }];
-
+		const outputs: TxOutput[] = payTo.map((output) => ({ ...output }));
 		const change = inputSum - amount;
-		if (change > 0n) {
-			outputs.push({ address: from, amount: change });
-		}
+		if (change > 0n) outputs.push({ address: from, amount: change });
 
 		const transaction = new Transaction(inputs, outputs);
 		wallet.signTransaction(transaction);
-
 		return transaction;
 	}
 

@@ -2,23 +2,22 @@
 // 20 PoW blocks, no minimum stake age). Run with `npm run e2e` (a few minutes); --keep keeps
 // the temp dir.
 //
-//   1. A mines and stakes; B and C join through A. An in-process harness peer (H) joins too.
-//   2. H signs a payment from A's wallet to C (no wallet API yet): 12 separate coins, so C
-//      has enough outputs to keep staking alone (each staked output waits 10 confirmations).
+//   1. A mines and stakes; B and C join through A. An in-process harness peer (H) follows the
+//      network to check the final chain independently.
+//   2. A's wallet pays C through the CLI (`send`): 12 separate coins, so C has enough outputs
+//      to keep staking alone (each staked output waits 10 confirmations).
 //   3. After block 20 the chain is proof of stake; A and C both stake.
 //   4. C is partitioned (restarted on a new port with no peers) and stakes alone.
 //   5. C reconnects: one side reorganizes and all tips converge.
-//   6. A restarts and the network converges again.
+//   6. A restarts and the network converges again; C's CLI reports the payment.
 // Node tips and balances are read from each node's HTTP API.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { parseCoins } from './blockchain/amount.js';
 import { Blockchain } from './blockchain/Blockchain.js';
-import { Transaction } from './blockchain/Transaction.js';
-import { Wallet } from './blockchain/Wallet.js';
 import {
 	COIN,
-	COIN_MATURITY,
 	REGTEST_NETWORK_MAGIC,
 	REGTEST_POW_CUTOFF_BLOCK,
 	REGTEST_STAKE_MIN_AGE,
@@ -26,10 +25,12 @@ import {
 import { P2PServer } from './networking/P2PServer.js';
 import {
 	apiGet,
+	apiUrl,
 	freePort,
 	lastLines,
 	noLoadErrors,
 	READY,
+	runCli,
 	startNode,
 	stopNode,
 	waitFor,
@@ -97,30 +98,23 @@ async function main(): Promise<void> {
 		await harness.listen();
 		harness.connectToPeers([`ws://127.0.0.1:${portA}`]);
 
-		step(`pay C ${PAYMENT_OUTPUTS} separate coins from A once A has two mature coinbases`);
-		await waitUntil(() => harnessChain.getChain().length > COIN_MATURITY + 2, 'mature coinbases', PHASE_TIMEOUT_MS);
-		const walletA = new Wallet(path.join(dirs.a, 'wallet.dat'));
+		step(`pay C ${PAYMENT_OUTPUTS} separate coins from A's wallet with the CLI once A can afford it`);
+		const addressA = walletAddress(nodeA);
 		const addressC = walletAddress(nodeC);
-		const height = harnessChain.getChain().length;
-		const inputs = harnessChain
-			.getUTXOs(walletA.address)
-			.filter((utxo) => utxo.isCoinbase && height - utxo.blockIndex >= COIN_MATURITY)
-			.slice(0, 2);
-		const total = inputs.reduce((sum, utxo) => sum + utxo.output.amount, 0n);
-		const payment = new Transaction(
-			inputs.map((utxo) => ({ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' })),
-			[
-				...Array.from({ length: PAYMENT_OUTPUTS }, () => ({ address: addressC, amount: COIN })),
-				{ address: walletA.address, amount: total - BigInt(PAYMENT_OUTPUTS) * COIN },
-			],
+		const paymentTotal = BigInt(PAYMENT_OUTPUTS) * COIN;
+		await waitUntil(
+			() =>
+				apiGet<{ spendable: string }>(nodeA, `/addresses/${addressA}`)
+					.then((a) => BigInt(a.spendable) >= paymentTotal)
+					.catch(() => false),
+			"A's coins to mature",
+			PHASE_TIMEOUT_MS,
 		);
-		walletA.signTransaction(payment);
-		await harnessChain.addTransaction(payment);
-		harness.broadcastTransaction(payment);
-		const isConfirmed = () =>
-			harnessChain.getChain().some((block) =>
-				block.transactions.some((tx) => tx.calculateHash() === payment.calculateHash()),
-			);
+		const pairs = Array.from({ length: PAYMENT_OUTPUTS }, () => [addressC, '1']).flat();
+		const sent = await runCli(['--data-dir', dirs.a, '--api', apiUrl(nodeA), 'send', ...pairs]);
+		if (sent.code !== 0) throw new Error(`cli send failed: ${sent.stderr.trim()}`);
+		const txid = sent.stdout.trim();
+		const isConfirmed = () => !!harnessChain.findTransaction(txid)?.block;
 		await waitUntil(isConfirmed, 'the payment to be confirmed', PHASE_TIMEOUT_MS);
 
 		step(`wait for proof of stake after block ${REGTEST_POW_CUTOFF_BLOCK}, staked by both A and C`);
@@ -160,9 +154,12 @@ async function main(): Promise<void> {
 			PHASE_TIMEOUT_MS,
 		);
 		if (!isConfirmed()) throw new Error('payment not in the converged chain');
-		if (harnessChain.getBalance(addressC) < BigInt(PAYMENT_OUTPUTS) * COIN) throw new Error('C lost its payment');
-		const balanceC = await apiGet<{ balance: string }>(nodeC, `/addresses/${addressC}`);
-		if (BigInt(balanceC.balance) < BigInt(PAYMENT_OUTPUTS) * COIN) throw new Error("C's API reports less than its payment");
+		if (harnessChain.getBalance(addressC) < paymentTotal) throw new Error('C lost its payment');
+		const balanceC = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'balance']);
+		const reported = /^balance: ([\d.]+)$/m.exec(balanceC.stdout);
+		if (!reported || parseCoins(reported[1]) < paymentTotal) {
+			throw new Error(`C's CLI reports less than its payment: ${balanceC.stdout.trim()} ${balanceC.stderr.trim()}`);
+		}
 		if (!harnessChain.isChainValid()) throw new Error('converged chain is not valid');
 		running.filter((node) => node.child.exitCode === null).forEach(noLoadErrors);
 		const posBlocks = harnessChain.getChain().filter((block) => block.isProofOfStake()).length;

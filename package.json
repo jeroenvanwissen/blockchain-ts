@@ -12,7 +12,8 @@
 		"check": "npm run build && npm test && npm run lint",
 		"test": "jest",
 		"smoke": "tsx src/smoke.ts",
-		"e2e": "tsx src/e2e.ts"
+		"e2e": "tsx src/e2e.ts",
+		"cli": "tsx src/cli.ts"
 	},
 	"repository": {
 		"type": "git",

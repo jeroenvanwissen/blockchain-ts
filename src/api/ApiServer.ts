@@ -1,9 +1,14 @@
+import { Mutex } from 'async-mutex';
+import * as crypto from 'crypto';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
 import type { Block } from '../blockchain/Block.js';
 import type { Blockchain } from '../blockchain/Blockchain.js';
+import type { Transaction, TxOutput } from '../blockchain/Transaction.js';
 import { isValidAddress } from '../blockchain/address.js';
 import { outpointKey, type UTXO } from '../blockchain/UtxoSet.js';
+import type { Wallet } from '../blockchain/Wallet.js';
+import { MAX_API_BODY_BYTES, MAX_TRANSACTION_OUTPUTS } from '../config.js';
 import type { PeerInfo } from '../networking/P2PServer.js';
 
 export interface ApiOptions {
@@ -15,6 +20,13 @@ export interface ApiOptions {
 /** Where /peers and /status get peer data (the node's P2PServer). */
 export interface PeerSource {
 	getPeerInfo(): PeerInfo[];
+}
+
+/** The node's wallet, for the /wallet routes. Without it those routes are 404. */
+export interface WalletAccess {
+	wallet: Wallet;
+	token: string; // required as `Authorization: Bearer <token>` (the node's api.cookie)
+	broadcast(transaction: Transaction): void;
 }
 
 class HttpError extends Error {
@@ -29,37 +41,47 @@ class HttpError extends Error {
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const HEIGHT_PATTERN = /^\d{1,15}$/;
 const MAX_ADDRESS_LENGTH = 64; // real addresses are 25 bytes in Base58, about 34 characters
+const AMOUNT_PATTERN = /^\d{1,20}$/; // base units as a decimal string
 
 interface Route {
+	method: 'GET' | 'POST';
 	pattern: RegExp;
-	handle: (params: string[]) => unknown;
+	wallet?: boolean; // needs WalletAccess and its token
+	handle: (params: string[], body: unknown) => unknown;
 }
 
 /**
- * Read-only HTTP API over the node's chain state: GET only, JSON responses, amounts as decimal
- * strings. Path parameters are validated before use (400), unknown items are 404.
+ * HTTP API over the node's chain state: JSON responses, amounts as decimal strings. Chain
+ * routes are public and read-only. /wallet routes act for the node's wallet and require the
+ * token from the node's api.cookie as a bearer token; browsers can't send that header
+ * cross-origin (no CORS), so web pages can't use them. Input is validated before use (400),
+ * unknown items are 404, wrong methods 405.
  */
 export class ApiServer {
 	private _server: http.Server | null = null;
+	private readonly _sendLock = new Mutex(); // one payment at a time: coin selection reads the mempool
 	private readonly _routes: Route[] = [
-		{ pattern: /^\/status$/, handle: () => this._status() },
-		{ pattern: /^\/blocks\/([^/]+)$/, handle: ([id]) => this._block(id) },
-		{ pattern: /^\/transactions\/([^/]+)$/, handle: ([txid]) => this._transaction(txid) },
-		{ pattern: /^\/addresses\/([^/]+)$/, handle: ([address]) => this._address(address) },
-		{ pattern: /^\/addresses\/([^/]+)\/utxos$/, handle: ([address]) => this._utxos(address) },
-		{ pattern: /^\/mempool$/, handle: () => this._mempool() },
-		{ pattern: /^\/peers$/, handle: () => this._peers.getPeerInfo() },
+		{ method: 'GET', pattern: /^\/status$/, handle: () => this._status() },
+		{ method: 'GET', pattern: /^\/blocks\/([^/]+)$/, handle: ([id]) => this._block(id) },
+		{ method: 'GET', pattern: /^\/transactions\/([^/]+)$/, handle: ([txid]) => this._transaction(txid) },
+		{ method: 'GET', pattern: /^\/addresses\/([^/]+)$/, handle: ([address]) => this._address(address) },
+		{ method: 'GET', pattern: /^\/addresses\/([^/]+)\/utxos$/, handle: ([address]) => this._utxos(address) },
+		{ method: 'GET', pattern: /^\/mempool$/, handle: () => this._mempool() },
+		{ method: 'GET', pattern: /^\/peers$/, handle: () => this._peers.getPeerInfo() },
+		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._address(this._wallet().address) },
+		{ method: 'POST', pattern: /^\/wallet\/send$/, wallet: true, handle: (_, body) => this._sendPayment(body) },
 	];
 
 	constructor(
 		private readonly _blockchain: Blockchain,
 		private readonly _peers: PeerSource,
 		private readonly _options: ApiOptions,
+		private readonly _walletAccess?: WalletAccess,
 	) {}
 
 	/** Start serving; resolves once listening, rejects if the port can't be bound. */
 	listen(): Promise<void> {
-		const server = http.createServer((req, res) => this._handle(req, res));
+		const server = http.createServer((req, res) => void this._handle(req, res));
 		this._server = server;
 		return new Promise((resolve, reject) => {
 			server.once('error', reject);
@@ -83,30 +105,96 @@ export class ApiServer {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
 
-	private _handle(req: http.IncomingMessage, res: http.ServerResponse): void {
+	private async _handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+		const headers: Record<string, string> = {};
 		try {
-			if (req.method !== 'GET') throw new HttpError(405, 'only GET is supported');
 			const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-			for (const route of this._routes) {
-				const match = pathname.match(route.pattern);
-				if (match) return this._send(res, 200, route.handle(match.slice(1)));
+			const matching = this._routes.filter((r) => r.pattern.test(pathname));
+			if (matching.length === 0) throw new HttpError(404, 'not found');
+			const route = matching.find((r) => r.method === req.method);
+			if (!route) {
+				headers.allow = matching.map((r) => r.method).join(', ');
+				throw new HttpError(405, `use ${headers.allow}`);
 			}
-			throw new HttpError(404, 'not found');
+			if (route.wallet) {
+				if (!this._walletAccess) throw new HttpError(404, 'this node has no wallet API');
+				if (!this._isAuthorized(req, this._walletAccess.token)) {
+					headers['www-authenticate'] = 'Bearer';
+					throw new HttpError(401, 'missing or wrong API token (see api.cookie in the data dir)');
+				}
+			}
+			const body = route.method === 'POST' ? await this._readJson(req) : undefined;
+			const params = pathname.match(route.pattern)!.slice(1);
+			this._send(res, 200, await route.handle(params, body));
 		} catch (error) {
-			if (error instanceof HttpError) return this._send(res, error.status, { error: error.message });
+			if (error instanceof HttpError) return this._send(res, error.status, { error: error.message }, headers);
 			console.error('[API] request failed:', error);
 			this._send(res, 500, { error: 'internal error' });
 		}
 	}
 
-	private _send(res: http.ServerResponse, status: number, body: unknown): void {
+	private _send(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
 		const json = JSON.stringify(body);
 		res.writeHead(status, {
 			'content-type': 'application/json; charset=utf-8',
 			'content-length': Buffer.byteLength(json),
-			...(status === 405 ? { allow: 'GET' } : {}),
+			...headers,
 		});
 		res.end(json);
+	}
+
+	/** Constant-time comparison of the bearer token (hashes make the lengths equal). */
+	private _isAuthorized(req: http.IncomingMessage, token: string): boolean {
+		const match = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '');
+		if (!match) return false;
+		const digest = (value: string) => crypto.createHash('sha256').update(value).digest();
+		return crypto.timingSafeEqual(digest(match[1]), digest(token));
+	}
+
+	private async _readJson(req: http.IncomingMessage): Promise<unknown> {
+		if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) {
+			throw new HttpError(415, 'send a JSON body (content-type: application/json)');
+		}
+		const chunks: Buffer[] = [];
+		let size = 0;
+		for await (const chunk of req as AsyncIterable<Buffer>) {
+			size += chunk.length;
+			if (size > MAX_API_BODY_BYTES) throw new HttpError(413, `body larger than ${MAX_API_BODY_BYTES} bytes`);
+			chunks.push(chunk);
+		}
+		try {
+			return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+		} catch {
+			throw new HttpError(400, 'body is not valid JSON');
+		}
+	}
+
+	private _wallet(): Wallet {
+		return this._walletAccess!.wallet;
+	}
+
+	/**
+	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet, admit to
+	 * the mempool, relay. Returns the txid. Chain-side rejections (funds, mempool rules) are 422.
+	 */
+	private async _sendPayment(body: unknown) {
+		const payTo = parsePayment(body);
+		const release = await this._sendLock.acquire();
+		try {
+			let transaction: Transaction;
+			try {
+				transaction = this._blockchain.createPayment(this._wallet(), payTo);
+				await this._blockchain.addTransaction(transaction);
+			} catch (error) {
+				throw new HttpError(422, (error as Error).message);
+			}
+			this._walletAccess!.broadcast(transaction);
+			const txid = transaction.calculateHash();
+			console.log(`[API] sent ${txid.slice(0, 16)} from the wallet`);
+			return { txid };
+		} finally {
+			release();
+		}
 	}
 
 	private _status() {
@@ -199,6 +287,25 @@ export class ApiServer {
 	private _confirmations(height: number): number {
 		return this._blockchain.getLatestBlock().index - height + 1;
 	}
+}
+
+/** Validate a /wallet/send body (400 on anything malformed). */
+function parsePayment(body: unknown): TxOutput[] {
+	const outputs = (body as { outputs?: unknown } | null)?.outputs;
+	const maxRecipients = MAX_TRANSACTION_OUTPUTS - 1;
+	if (!Array.isArray(outputs) || outputs.length === 0 || outputs.length > maxRecipients) {
+		throw new HttpError(400, `expected { outputs: [{ address, amount }] } with 1 to ${maxRecipients} outputs`);
+	}
+	return outputs.map((output: unknown, i) => {
+		const { address, amount } = (output ?? {}) as { address?: unknown; amount?: unknown };
+		if (typeof address !== 'string' || address.length > MAX_ADDRESS_LENGTH || !isValidAddress(address)) {
+			throw new HttpError(400, `output ${i}: invalid address`);
+		}
+		if (typeof amount !== 'string' || !AMOUNT_PATTERN.test(amount) || BigInt(amount) === 0n) {
+			throw new HttpError(400, `output ${i}: amount must be a positive decimal string of base units`);
+		}
+		return { address, amount: BigInt(amount) };
+	});
 }
 
 function sum(utxos: UTXO[]): bigint {

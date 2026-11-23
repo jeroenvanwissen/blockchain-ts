@@ -64,27 +64,10 @@ message BlockIndex {
 export const WALLET_SCHEMA = `
 syntax = "proto3";
 
-message WalletTransaction {
-  string hash = 1;
-  int64 timestamp = 2;
-  string type = 3;
-  reserved 4; // was double amount
-  string other_party = 5;
-  uint64 amount = 6; // base units
-}
-
-message WalletUtxo {
-  string tx_hash = 1;
-  uint32 output_index = 2;
-  reserved 3; // was double amount
-  uint64 amount = 4; // base units
-}
-
 message WalletData {
   bytes private_key = 1;
   bytes public_key = 2;
   string address = 3;
-  repeated WalletTransaction transactions = 4;
-  repeated WalletUtxo utxos = 5;
+  reserved 4, 5; // were transaction history and UTXOs; balances come from the chain (TASK-0017)
 }
 `;
