@@ -54,6 +54,12 @@ export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS loc
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024; // larger WebSocket messages close the socket
 export const RELAY_SEEN_CACHE_SIZE = 20_000; // recent block hashes / txids remembered for relay
 
+// Regression-test network (--regtest): separate network id, short PoW phase, no stake age,
+// for end-to-end tests with real node processes
+export const REGTEST_NETWORK_MAGIC = 'blockchain-ts/regtest';
+export const REGTEST_POW_CUTOFF_BLOCK = 20;
+export const REGTEST_STAKE_MIN_AGE = 0;
+
 // Peer discovery
 export const PEER_BROADCAST_INTERVAL = 60_000; // ms between peer list broadcasts
 export const MAX_KNOWN_PEERS = 128; // Maximum number of peer addresses to track
@@ -70,6 +76,7 @@ export const STAKE_MIN_AGE = 8 * 60 * 60; // seconds a UTXO must exist before it
 export const STAKE_MIN_CONFIRMATIONS = 10; // blocks a UTXO must be buried before it can stake
 export const STAKE_TIMESTAMP_GRANULARITY = 16_000; // PoS block timestamps are multiples (ms)
 export const STAKE_CHECK_INTERVAL = 1000; // ms between staking attempts (each slot is tried once per tip)
+export const STAKE_CHECK_OFFSET = 20; // ms past each wall-clock interval boundary that a check runs
 
 // Coin configuration (amounts are bigint base units)
 export const COIN = 100_000_000n; // Base units per coin

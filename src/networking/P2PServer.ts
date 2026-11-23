@@ -103,11 +103,15 @@ export class P2PServer {
 	private _isClosing = false;
 	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
 
+	private readonly _networkMagic: string;
+
 	constructor(
 		private blockchain: Blockchain,
 		private p2pPort: number,
-		private peerDataPath: string
+		private peerDataPath: string,
+		options: { networkMagic?: string } = {},
 	) {
+		this._networkMagic = options.networkMagic ?? NETWORK_MAGIC;
 		this.sockets = [];
 		this.connectedPeers = new Set();
 		this._knownPeers = new Set();
@@ -274,7 +278,7 @@ export class P2PServer {
 	private _versionPayload(): VersionPayload {
 		const tip = this.blockchain.getLatestBlock();
 		return {
-			magic: NETWORK_MAGIC,
+			magic: this._networkMagic,
 			version: PROTOCOL_VERSION,
 			genesisHash: this.blockchain.getChain()[0].hash,
 			height: tip.index,
@@ -401,7 +405,7 @@ export class P2PServer {
 			socket.close();
 		};
 		if (!isVersionPayload(data)) return reject('malformed VERSION');
-		if (data.magic !== NETWORK_MAGIC) return reject(`different network (${data.magic})`);
+		if (data.magic !== this._networkMagic) return reject(`different network (${data.magic})`);
 		if (data.version !== PROTOCOL_VERSION) return reject(`protocol version ${data.version}`);
 		if (data.genesisHash !== this.blockchain.getChain()[0].hash) return reject('different genesis block');
 		if (data.nonce === this._nonce) {

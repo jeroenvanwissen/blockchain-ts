@@ -309,6 +309,10 @@ export class Blockchain {
 		if (block.timestamp % STAKE_TIMESTAMP_GRANULARITY !== 0) {
 			throw new Error(`PoS block timestamp must be a multiple of ${STAKE_TIMESTAMP_GRANULARITY} ms`);
 		}
+		// Strictly after the parent: with the grid this allows at most one PoS block per slot
+		if (block.timestamp <= ctx.prevBlocks[height - 1].timestamp) {
+			throw new Error('PoS block timestamp must be later than its parent');
+		}
 		const coinstake = block.transactions[1];
 		if (coinstake.timestamp !== block.timestamp) {
 			throw new Error('coinstake timestamp must equal the block timestamp');
@@ -580,9 +584,19 @@ export class Blockchain {
 		block.cumulativeWeight = entry.work;
 		this._index.set(block.hash, entry);
 		this.blockStore.appendBlock(block);
-		if (entry.work <= this.getChainWeight()) return 'side';
+		if (!Blockchain._isBetter(entry.work, block.hash, this.getChainWeight(), this.getLatestBlock().hash)) {
+			return 'side';
+		}
 		this._activateBranch(entry);
 		return 'reorganized';
+	}
+
+	/**
+	 * Fork choice: more chain work wins; equal work is broken by the lower tip hash, so all
+	 * nodes converge on the same branch (first-seen would leave simultaneous stakers split).
+	 */
+	private static _isBetter(work: bigint, hash: string, otherWork: bigint, otherHash: string): boolean {
+		return work > otherWork || (work === otherWork && hash < otherHash);
 	}
 
 	/** Whether a block with this hash is known (active chain or side branch). */
@@ -774,14 +788,18 @@ export class Blockchain {
 
 	/**
 	 * Try to stake the next block at `timestamp` with the wallet's outputs. The timestamp must
-	 * be on the STAKE_TIMESTAMP_GRANULARITY grid and after the median time past. Returns a
+	 * be on the STAKE_TIMESTAMP_GRANULARITY grid and after the tip's timestamp. Returns a
 	 * signed PoS block (coinbase pays the fixed reward to the staker; the coinstake returns
 	 * the kernel output unchanged), or null if no output's kernel meets the target.
 	 */
 	public createStakeBlock(wallet: Wallet, timestamp: number): Block | null {
 		const height = this.chain.length;
 		if (!this.isProofOfStakePhase()) return null;
-		if (timestamp % STAKE_TIMESTAMP_GRANULARITY !== 0 || timestamp <= this.getMedianTimePast()) {
+		if (
+			timestamp % STAKE_TIMESTAMP_GRANULARITY !== 0 ||
+			timestamp <= this.getMedianTimePast() ||
+			timestamp <= this.getLatestBlock().timestamp
+		) {
 			return null;
 		}
 		const bits = this.getRequiredBits(true);
@@ -938,10 +956,10 @@ export class Blockchain {
 				index.set(block.hash, { block, height: parent.height + 1, work, isInvalid: false });
 			}
 
-			// Activate the valid branch with the most work (ties: stored first). Stored side
+			// Activate the best valid branch (fork choice: work, then lower hash). Stored side
 			// blocks were never fully validated, so fall back when a branch fails.
 			const candidates = [...index.values()].sort((a, b) =>
-				b.work > a.work ? 1 : b.work < a.work ? -1 : 0,
+				Blockchain._isBetter(a.work, a.block.hash, b.work, b.block.hash) ? -1 : 1,
 			);
 			for (const candidate of candidates) {
 				if (this._hasInvalidAncestor(candidate, index)) continue;

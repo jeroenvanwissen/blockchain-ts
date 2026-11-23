@@ -2,7 +2,13 @@
 // (confirmations and maturity still apply), so outputs can restake within a short simulation.
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { StakingService } from '../../blockchain/StakingService.js';
-import { COIN, STAKE_TIMESTAMP_GRANULARITY, TARGET_SPACING } from '../../config.js';
+import {
+	COIN,
+	STAKE_CHECK_INTERVAL,
+	STAKE_CHECK_OFFSET,
+	STAKE_TIMESTAMP_GRANULARITY,
+	TARGET_SPACING,
+} from '../../config.js';
 import {
 	advanceTime,
 	finishPowPhase,
@@ -74,7 +80,7 @@ describe('StakingService', () => {
 		expect(chain.isChainValid()).toBe(true);
 	});
 
-	it('should let two stakers both produce blocks', async () => {
+	it('should let two stakers both produce blocks (same-slot blocks settled by the tie-break)', async () => {
 		const a = openWallet(dir, 'a');
 		const b = openWallet(dir, 'b');
 		const chain = openChain(dir, { powCutoffBlock: 30, minStakeAge: 0 });
@@ -82,14 +88,23 @@ describe('StakingService', () => {
 		await chain.addTransaction(chain.createTransaction(a.address, b.address, 100n * COIN, a));
 		await mineBlocks(chain, a.address, 5);
 		advanceTime(60_000);
-		const services = [new StakingService(chain, a), new StakingService(chain, b)];
 
-		await runSlots(services, 3000, () => posBlocks(chain).length >= 200);
+		// Like a network: both stakers build on the same tip in each slot, both blocks arrive,
+		// and fork choice (equal work → lower hash) keeps one
+		for (let i = 0; i < 3000 && posBlocks(chain).length < 200; i++) {
+			advanceTime(SLOT);
+			const slot = Math.floor(Date.now() / SLOT) * SLOT;
+			const candidates = [a, b]
+				.map((wallet) => chain.createStakeBlock(wallet, slot))
+				.filter((block): block is NonNullable<typeof block> => block !== null);
+			for (const block of candidates) await chain.addMinedBlock(block);
+		}
 
 		const stakedBy = (address: string) =>
 			posBlocks(chain).filter((block) => block.transactions[1].outputs[1].address === address).length;
 		expect(stakedBy(a.address)).toBeGreaterThan(10);
 		expect(stakedBy(b.address)).toBeGreaterThan(10);
+		expect(chain.isChainValid()).toBe(true);
 	});
 
 	it('should try each slot once per tip and retry when the tip changes', async () => {
@@ -108,6 +123,29 @@ describe('StakingService', () => {
 		const block = await service.tryStake();
 		expect(block?.isProofOfStake()).toBe(true);
 		expect(create).toHaveBeenCalledTimes(2);
+	});
+
+	it('should check on wall-clock interval boundaries, whenever it starts', () => {
+		const staker = openWallet(dir, 'staker');
+		const service = new StakingService(openChain(dir), staker);
+		const checks: number[] = [];
+		jest.spyOn(service, 'tryStake').mockImplementation(() => {
+			checks.push(Date.now());
+			return Promise.resolve(null);
+		});
+		const boundary = Math.ceil(Date.now() / STAKE_CHECK_INTERVAL) * STAKE_CHECK_INTERVAL;
+		jest.setSystemTime(boundary + 377); // mid-interval
+
+		service.start();
+		jest.advanceTimersByTime(3 * STAKE_CHECK_INTERVAL);
+		service.stop();
+		jest.advanceTimersByTime(3 * STAKE_CHECK_INTERVAL);
+
+		// Every node ticks at the same moments, so all stakers try a new slot together
+		expect(checks).toEqual([
+			boundary + 377, // immediately on start
+			...[1, 2, 3].map((i) => boundary + i * STAKE_CHECK_INTERVAL + STAKE_CHECK_OFFSET),
+		]);
 	});
 
 	it('should keep staking after a rejected block', async () => {

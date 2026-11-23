@@ -112,6 +112,24 @@ describe('Proof of stake (kernel)', () => {
 		);
 	});
 
+	it('should allow at most one PoS block per 16 s slot', async () => {
+		const { chain, staker } = await readyChain();
+		const [first] = await stakeBlocks(chain, staker, 1);
+		expect(chain.createStakeBlock(staker, first.timestamp)).toBeNull(); // same slot
+
+		// A block forced into the same slot is rejected by validation too
+		const next = findStakeBlock(chain, staker);
+		next.timestamp = first.timestamp;
+		next.transactions[0].timestamp = first.timestamp;
+		next.transactions[1].timestamp = first.timestamp;
+		staker.signTransaction(next.transactions[1]);
+		next.hash = next.calculateHash();
+		next.signature = staker.signDigest(Buffer.from(next.hash, 'hex'));
+		await expect(chain.addMinedBlock(next)).rejects.toThrow(
+			'PoS block timestamp must be later than its parent',
+		);
+	});
+
 	it('should reject a kernel younger than the minimum stake age', async () => {
 		const staker = openWallet(dir, 'staker');
 		const chain = openPosChain(dir);

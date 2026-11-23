@@ -17,7 +17,7 @@
 
 ## Status
 
-**Consensus works end to end; networking is not yet hardened.** Nodes start, restart, mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set. `npm run smoke` covers two real nodes; the PoW→PoS transition is covered by integration tests with a shortened PoW phase. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
+**Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`). Still open:
 
 - no API or CLI yet to send coins or inspect the chain (TASK-0016, TASK-0017).
 
@@ -34,6 +34,7 @@ The feature list below describes the intended design. See the [assessment](tasks
 4. Start a mining node:      npm run dev -- --mine
 5. Run tests:                npm test
 6. Run the smoke check:      npm run smoke
+   End-to-end scenario:      npm run e2e
 7. Build for production:     npm run build
 ```
 
@@ -84,21 +85,31 @@ git --version          # Should be 2.30+
 ```
 src/
 ├── blockchain/
-│   ├── Block.ts              # Block structure, hashing, PoW/PoS detection
-│   ├── Blockchain.ts         # Chain management, UTXO set, validation, staking
-│   ├── BlockStore.ts         # Chunked block storage with protobuf index
-│   ├── Transaction.ts        # Transaction model, signing, verification
-│   ├── Wallet.ts             # Key management, address encoding, persistence
-│   ├── Miner.ts              # PoW mining via worker threads
-│   ├── StakingService.ts     # PoS staking loop (--stake)
-│   ├── miningWorker.cjs      # Worker thread for CPU-intensive hashing
+│   ├── Block.ts              # Block header (merkle root, bits), hashing, JSON wire form
+│   ├── Blockchain.ts         # Block tree, fork choice, reorgs, validation (_connectBlock), mempool
+│   ├── BlockStore.ts         # Append-only chunked block storage with protobuf index
+│   ├── Transaction.ts        # Transaction format, txid/witness hash, signing, verification
+│   ├── UtxoSet.ts            # Unspent outputs by outpoint, per-address index
+│   ├── Wallet.ts             # Key management, persistence
+│   ├── address.ts            # Base58Check addresses
+│   ├── kernel.ts             # PoS kernel hash, kernel target, stake modifier
+│   ├── retarget.ts           # Per-block retarget (PoW and PoS)
+│   ├── target.ts             # Compact targets (bits), block work
+│   ├── protoSchemas.ts       # Protobuf schemas for blocks, index, wallet
+│   ├── secp256k1.ts          # ESM/CommonJS-safe secp256k1 import
+│   ├── Miner.ts              # In-node PoW miner (--mine)
+│   ├── StakingService.ts     # In-node staking loop (--stake)
+│   ├── miningWorker.cjs      # Worker thread for PoW hashing
 │   └── __tests__/            # Unit tests
 ├── networking/
-│   ├── P2PServer.ts          # WebSocket P2P server and message routing
+│   ├── P2PServer.ts          # Handshake, block sync, relay, peer discovery
 │   └── __tests__/            # Unit tests
+├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
-├── index.ts                  # Main entry point
-└── test-consensus.ts         # Consensus transition demo
+├── index.ts                  # Node entry point
+├── smoke.ts                  # npm run smoke: two real nodes
+├── e2e.ts                    # npm run e2e: three regtest nodes, partition, reorg
+└── nodeHarness.ts            # Helpers for driving node processes
 ```
 
 ### Components
@@ -112,7 +123,6 @@ src/
 | **Wallet**         | `Wallet.ts`           | Key management, address encoding, protobuf storage   |
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
 | **StakingService** | `StakingService.ts`   | In-node PoS staking, one attempt per 16 s slot (`--stake`) |
-| **StakingService** | `StakingService.ts`   | Periodic PoS block generation                        |
 | **P2P Server**     | `P2PServer.ts`        | WebSocket networking, message routing, sync          |
 
 ---
@@ -196,6 +206,7 @@ npm run dev -- --stake
 ```bash
 npm test                # Run test suite
 npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
+npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~4 min)
 npm run build           # Compile TypeScript
 ```
 
@@ -266,6 +277,8 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | Staking node      | `npm start -- --stake`                                        |
 | Run tests         | `npm test`                                                    |
 | Smoke check       | `npm run smoke`                                               |
+| End-to-end        | `npm run e2e`                                                 |
+| Regtest node      | `npm start -- --regtest --data-dir <dir> --mine --stake`      |
 | Build             | `npm run build`                                               |
 | Lint              | `npm run lint`                                                |
 | Lint + fix        | `npm run lint:fix`                                            |

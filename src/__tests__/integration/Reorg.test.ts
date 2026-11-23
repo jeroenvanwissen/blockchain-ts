@@ -57,6 +57,12 @@ function expectConsistent(chain: Blockchain): void {
 
 describe('Block tree and reorganizations', () => {
 	let dir: string;
+	const extraDirs: string[] = [];
+	const makeTempDirTracked = (): string => {
+		const extra = makeTempDir();
+		extraDirs.push(extra);
+		return extra;
+	};
 	let a: Wallet;
 	let b: Wallet;
 	let chain: Blockchain;
@@ -76,6 +82,7 @@ describe('Block tree and reorganizations', () => {
 		jest.useRealTimers();
 		jest.restoreAllMocks();
 		removeTempDir(dir);
+		extraDirs.splice(0).forEach(removeTempDir);
 	});
 
 	/** Branch A (active): prefix + A1 (with a payment) + A2. Returns the payment and the prefix. */
@@ -91,7 +98,7 @@ describe('Block tree and reorganizations', () => {
 	it('should store a lighter side branch without switching to it', async () => {
 		await mineBlocks(chain, a.address, 2);
 		const tip = chain.getLatestBlock().hash;
-		const side = blockOn(chain.getChain().slice(0, -1), b); // competes with the tip's parent
+		const side = blockOn(chain.getChain().slice(0, -2), b); // competes with the tip's parent
 
 		await expect(chain.addMinedBlock(side)).resolves.toBe('side');
 		expect(chain.getLatestBlock().hash).toBe(tip);
@@ -103,9 +110,14 @@ describe('Block tree and reorganizations', () => {
 		const branchB = extend(prefix, b, 3);
 		advanceTime(SPACING * 2);
 
-		await expect(chain.addMinedBlock(branchB[prefix.length])).resolves.toBe('side');
-		await expect(chain.addMinedBlock(branchB[prefix.length + 1])).resolves.toBe('side'); // equal work
-		await expect(chain.addMinedBlock(branchB[prefix.length + 2])).resolves.toBe('reorganized');
+		const tipA = chain.getLatestBlock();
+		const [b1, b2, b3] = branchB.slice(prefix.length);
+
+		await expect(chain.addMinedBlock(b1)).resolves.toBe('side');
+		// Equal work with the tip: the lower tip hash wins the tie
+		const tie = await chain.addMinedBlock(b2);
+		expect(tie).toBe(b2.hash < tipA.hash ? 'reorganized' : 'side');
+		await expect(chain.addMinedBlock(b3)).resolves.toBe(tie === 'reorganized' ? 'connected' : 'reorganized');
 
 		expect(chain.getLatestBlock().hash).toBe(branchB[branchB.length - 1].hash);
 		// The payment was only in branch A: it is back in the mempool
@@ -164,17 +176,41 @@ describe('Block tree and reorganizations', () => {
 		const b3 = blockOn([...fork, b1, b2], b);
 		advanceTime(SPACING * 2);
 
-		await chain.addMinedBlock(b1);
-		await chain.addMinedBlock(b2);
-		await expect(chain.addMinedBlock(b3)).rejects.toThrow(
-			`block ${b2.index}: transaction 1: input references a missing or spent output`,
-		);
+		// b2 ties the tip and b3 beats it, so the reorg attempt (and its failure) can come from
+		// either call depending on the tie-break; the outcome is the same
+		const errors: string[] = [];
+		for (const block of [b1, b2, b3]) {
+			try {
+				await chain.addMinedBlock(block);
+			} catch (error) {
+				errors.push((error as Error).message);
+			}
+		}
 
+		expect(errors.some((e) => e.includes('transaction 1: input references a missing or spent output'))).toBe(true);
 		expect(chain.getLatestBlock().hash).toBe(tip);
 		expect(utxoSnapshot(chain)).toEqual(before);
-		await expect(chain.addMinedBlock(blockOn([...fork, b1, b2, b3], b))).rejects.toThrow(
+		expect(chain['_index'].get(b2.hash)?.isInvalid).toBe(true);
+		await expect(chain.addMinedBlock(blockOn([...fork, b1, b2], a))).rejects.toThrow(
 			'parent block is invalid',
 		);
+	});
+
+	it('should break equal-work ties by the lower block hash, whatever the arrival order', async () => {
+		const parent = [...chain.getChain()];
+		const x = blockOn(parent, a);
+		const y = blockOn(parent, b);
+		const [low, high] = x.hash < y.hash ? [x, y] : [y, x];
+
+		await chain.addMinedBlock(high);
+		await expect(chain.addMinedBlock(low)).resolves.toBe('reorganized');
+		expect(chain.getLatestBlock().hash).toBe(low.hash);
+
+		const other = openChain(makeTempDirTracked());
+		for (const block of parent.slice(1)) await other.addMinedBlock(block);
+		await other.addMinedBlock(low);
+		await expect(other.addMinedBlock(high)).resolves.toBe('side');
+		expect(other.getLatestBlock().hash).toBe(low.hash);
 	});
 
 	it('should keep pending transactions that a new block does not include', async () => {

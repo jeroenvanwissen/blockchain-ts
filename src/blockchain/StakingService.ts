@@ -1,12 +1,17 @@
 import type { Block } from './Block.js';
 import type { Blockchain } from './Blockchain.js';
 import type { Wallet } from './Wallet.js';
-import { STAKE_CHECK_INTERVAL, STAKE_TIMESTAMP_GRANULARITY } from '../config.js';
+import { STAKE_CHECK_INTERVAL, STAKE_CHECK_OFFSET, STAKE_TIMESTAMP_GRANULARITY } from '../config.js';
 
 /**
  * Stakes PoS blocks with the node's wallet. For each 16 s timestamp slot (and again when the
  * tip changes, which changes the stake modifier) it asks the chain whether one of the wallet's
  * mature outputs has a kernel that meets the target, and submits the resulting block.
+ *
+ * Checks run on wall-clock interval boundaries (plus a small offset), so every staker tries a
+ * new slot at the same moment. With free-running timers the node whose timer fires first after
+ * a slot starts always wins it: the others see its block before they try, so same-slot
+ * candidates never meet and the lower-hash tie-break never gets a choice.
  */
 export class StakingService {
 	private _timer: NodeJS.Timeout | null = null;
@@ -25,13 +30,22 @@ export class StakingService {
 
 	start(): void {
 		if (this._timer) return;
-		this._timer = setInterval(() => void this.tryStake(), STAKE_CHECK_INTERVAL);
+		this._scheduleCheck();
 		void this.tryStake();
 	}
 
 	stop(): void {
-		if (this._timer) clearInterval(this._timer);
+		if (this._timer) clearTimeout(this._timer);
 		this._timer = null;
+	}
+
+	/** Next check just after the next multiple of STAKE_CHECK_INTERVAL on the wall clock. */
+	private _scheduleCheck(): void {
+		const delay = STAKE_CHECK_INTERVAL - (Date.now() % STAKE_CHECK_INTERVAL) + STAKE_CHECK_OFFSET;
+		this._timer = setTimeout(() => {
+			void this.tryStake();
+			this._scheduleCheck();
+		}, delay);
 	}
 
 	/** One staking attempt for the slot containing `now`; returns the staked block, if any. */

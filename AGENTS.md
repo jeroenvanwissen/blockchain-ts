@@ -25,8 +25,9 @@ Run npm scripts from the repository root.
 - Build: `npm run build` (tsc)
 - Test: `npm test` (Jest + ts-jest; about 1 minute)
 - Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 10 s; `-- --keep` keeps the temp dir)
+- End-to-end: `npm run e2e` (three `--regtest` node processes plus an in-process harness peer: payment, PoW→PoS, both A and C staking, partition and reorg, restart, convergence; about 2 minutes; prints each node's tip and last log lines on failure). Run it for changes to consensus, P2P or staking
 - Lint: `npm run lint` (currently fails on pre-existing errors, see TASK-0021); lint touched files with `npx eslint <files>`
-- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
+- Run a node: `npm start -- --data-dir <dir>`; add `--peers ws://host:port` to connect to another node, `--mine` to mine PoW blocks and `--stake` to stake PoS blocks. `--regtest` selects the regression-test network (own network id, 20 PoW blocks, no minimum stake age). Port comes from the `P2P_PORT` env var (default 5001). There is no `PEERS` env var. The wallet lives at `<data dir>/wallet.dat`.
 
 ## Conventions
 
@@ -47,8 +48,9 @@ Run npm scripts from the repository root.
 ## Architecture and constraints
 
 - Consensus code must be deterministic from chain data. No wall-clock reads except the future-timestamp limit, and no node-local state that peers can't rebuild from blocks.
+- Fork choice: more chain work wins; equal work goes to the lower tip hash (deterministic, so simultaneous stakers converge).
 - Blocks enter through `Blockchain.addMinedBlock` (or `replaceChain`, which feeds the same `_acceptBlock`). Every known block is in a block index; a block extending the tip connects, others are stored as side branches and activated by a reorg when their branch has more work. Every block that becomes active, whether new, reorged-in, or loaded from disk, goes through `Blockchain._connectBlock` (via `_connectTip` or `_replayChain`). It validates against a block-local UTXO view and changes state only if every check passes. Add consensus rules there, not in callers; mempool admission shares `_checkInputs`.
-- The PoS model is Peercoin-style UTXO kernel staking: any UTXO with `STAKE_MIN_CONFIRMATIONS` and `minStakeAge` can stake when sha256d(modifier ‖ prevTxTime ‖ outpoint ‖ blockTime) ≤ target × value. A PoS block has the coinstake at tx[1] (marker output, then the kernel value back to its owner), a timestamp on the 16 s grid, and a signature over its hash by the kernel input's key. The stake modifier is derived per block during validation. Don't reintroduce node-local stake state (registries, unstake queues, slashing lists).
+- The PoS model is Peercoin-style UTXO kernel staking: any UTXO with `STAKE_MIN_CONFIRMATIONS` and `minStakeAge` can stake when sha256d(modifier ‖ prevTxTime ‖ outpoint ‖ blockTime) ≤ target × value. A PoS block has the coinstake at tx[1] (marker output, then the kernel value back to its owner), a timestamp on the 16 s grid and later than its parent's (one PoS block per slot), and a signature over its hash by the kernel input's key. The stake modifier is derived per block during validation. Don't reintroduce node-local stake state (registries, unstake queues, slashing lists).
 - Tests can shorten the PoW phase with `BlockchainOptions.powCutoffBlock` (see `openPosChain` in the integration helpers).
 - Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists; tell users to delete old data dirs (README troubleshooting).
 

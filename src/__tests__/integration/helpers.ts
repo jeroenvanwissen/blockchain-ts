@@ -66,9 +66,9 @@ export async function finishPowPhase(chain: Blockchain, address: string): Promis
 	advanceTime((STAKE_MIN_AGE + 60) * 1000);
 }
 
-/** First PoS grid slot after both the clock and the median time past. */
+/** First PoS grid slot after both the clock and the tip's timestamp. */
 export function nextStakeTime(chain: Blockchain): number {
-	const after = Math.max(Date.now(), chain.getMedianTimePast() + 1);
+	const after = Math.max(Date.now(), chain.getLatestBlock().timestamp + 1);
 	return Math.ceil(after / STAKE_TIMESTAMP_GRANULARITY) * STAKE_TIMESTAMP_GRANULARITY;
 }
 

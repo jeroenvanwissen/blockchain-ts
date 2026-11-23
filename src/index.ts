@@ -5,7 +5,15 @@ import { Miner } from './blockchain/Miner.js';
 import { P2PServer } from './networking/P2PServer.js';
 import { StakingService } from './blockchain/StakingService.js';
 import { Wallet } from './blockchain/Wallet.js';
-import { DATA_DIR, P2P_PORT, PEER_DATA_PATH, SEED_NODES } from './config.js';
+import {
+	DATA_DIR,
+	P2P_PORT,
+	PEER_DATA_PATH,
+	REGTEST_NETWORK_MAGIC,
+	REGTEST_POW_CUTOFF_BLOCK,
+	REGTEST_STAKE_MIN_AGE,
+	SEED_NODES,
+} from './config.js';
 
 // miningWorker.cjs sits next to Miner (copied to dist/ by tsc via allowJs)
 const MINING_WORKER_PATH = fileURLToPath(
@@ -27,11 +35,16 @@ args.forEach((arg, index) => {
 });
 const isMining = args.includes('--mine');
 const isStaking = args.includes('--stake');
+// Regression-test network: own network id, short PoW phase, no minimum stake age
+const isRegtest = args.includes('--regtest');
+const chainOptions = isRegtest
+	? { powCutoffBlock: REGTEST_POW_CUTOFF_BLOCK, minStakeAge: REGTEST_STAKE_MIN_AGE }
+	: {};
 
 let blockchain: Blockchain;
 try {
 	// Create blockchain instance
-	blockchain = new Blockchain();
+	blockchain = new Blockchain(chainOptions);
 } catch (error) {
 	console.error('Failed to load blockchain:', error);
 	process.exit(1);
@@ -46,7 +59,13 @@ const wallet = new Wallet();
 console.log('Wallet initialized with address:', wallet.address);
 
 // Create P2P server
-const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH);
+const p2pServer = new P2PServer(
+	blockchain,
+	P2P_PORT,
+	PEER_DATA_PATH,
+	isRegtest ? { networkMagic: REGTEST_NETWORK_MAGIC } : {},
+);
+if (isRegtest) console.log('Regtest network');
 
 
 // Start P2P server
