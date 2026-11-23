@@ -142,7 +142,7 @@ Key constants in `src/config.ts`:
 | `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
 | `LOG_LEVEL`                     | info    | Node log level: debug, info, warn or error (env: `LOG_LEVEL`) |
 | `POW_CUTOFF_BLOCK`              | 100     | Last PoW height; PoS from the next block       |
-| `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake           |
+| `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake, counted from the block that created it |
 | `STAKE_MIN_CONFIRMATIONS`       | 10      | Confirmations a UTXO needs before it can stake |
 | `STAKE_TIMESTAMP_GRANULARITY`   | 16 s    | PoS block timestamps are multiples of this     |
 | `COIN`                          | 10^8    | Base units per coin (amounts are `bigint`)     |
@@ -366,6 +366,10 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 ### `invalid stored chain: genesis block hash mismatch` on Start
 
 Block and transaction formats change while the project is pre-release, and each change creates a new genesis block. Data written by an older version won't load. Delete the data directory (or point `--data-dir` somewhere new) and start again.
+
+### `Disconnecting peer: protocol version ...` or `invalid stored block` after an upgrade
+
+Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
 
 ### Port Already in Use
 

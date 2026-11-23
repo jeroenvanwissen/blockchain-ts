@@ -101,9 +101,12 @@ export class Mempool {
 		this._bytes = 0;
 	}
 
-	/** For a block: highest fee rate first (ties: earlier arrival), within count and size limits. */
-	select(maxCount: number, maxBytes: number): MempoolEntry[] {
-		const byRate = [...this._entries.values()].sort((a, b) => compareFeeRate(b, a)); // stable
+	/**
+	 * For a block: highest fee rate first (ties: earlier arrival), within count and size limits,
+	 * among the entries `eligible` accepts (e.g. not dated after the block).
+	 */
+	select(maxCount: number, maxBytes: number, eligible: (entry: MempoolEntry) => boolean = () => true): MempoolEntry[] {
+		const byRate = [...this._entries.values()].filter(eligible).sort((a, b) => compareFeeRate(b, a)); // stable
 		const chosen: MempoolEntry[] = [];
 		let bytes = 0;
 		for (const entry of byRate) {

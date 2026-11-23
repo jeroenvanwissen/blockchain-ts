@@ -66,7 +66,7 @@ describe('Relay across a line of nodes (real WebSockets)', () => {
 		const c = await startNode();
 		const miner = openWallet(dirs[0], 'miner');
 		for (let i = 0; i < COIN_MATURITY + 1; i++) {
-			const block = a.chain.createBlockTemplate(miner.address, a.chain.getLatestBlock().timestamp + 30_000);
+			const block = a.chain.createBlockTemplate(miner.address, Math.max(a.chain.getLatestBlock().timestamp + 30_000, Date.now()));
 			block.solve();
 			await a.chain.addMinedBlock(block);
 		}
@@ -86,7 +86,7 @@ describe('Relay across a line of nodes (real WebSockets)', () => {
 		await waitUntil(() => c.chain.getPendingTransactions().length === 1);
 		expect(c.chain.getPendingTransactions()[0].calculateHash()).toBe(tx.calculateHash());
 
-		const block = a.chain.createBlockTemplate(miner.address, a.chain.getLatestBlock().timestamp + 30_000);
+		const block = a.chain.createBlockTemplate(miner.address, Math.max(a.chain.getLatestBlock().timestamp + 30_000, Date.now()));
 		block.solve();
 		await a.chain.addMinedBlock(block);
 		a.node.broadcastBlock(block);

@@ -159,4 +159,28 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 
 		await expect(chain.addMinedBlock(block)).rejects.toThrow('output amounts exceed input amounts');
 	});
+
+	// F-021 — fixed by TASK-0025: stake age was measured from the timestamp of the transaction that
+	// created the output, which its creator chooses. A miner backdated its coinbase and staked it
+	// long before STAKE_MIN_AGE had passed. Age now counts from the creating block's time.
+	test('should measure stake age from block time, not a timestamp the creator chose', async () => {
+		const attacker = openWallet(dir, 'attacker');
+		const honest = openWallet(dir, 'honest');
+		const options = { powCutoffBlock: 30 }; // default minStakeAge: STAKE_MIN_AGE (8 h)
+		const chain = openChain(dir, options);
+
+		// Block 1: the attacker's coinbase claims timestamp 0
+		advanceTime(BLOCK_TIME * 1000);
+		const template = chain.createBlockTemplate(attacker.address, Date.now());
+		const backdated = Transaction.coinbase(attacker.address, POW_BLOCK_REWARD, 1, 0);
+		await chain.addMinedBlock(
+			solve(new Block(template.timestamp, [backdated], template.previousHash, 0, template.bits, 1)),
+		);
+		await mineBlocks(chain, honest.address, 29); // about 15 minutes, far below 8 hours
+
+		// A producer that ignores stake age builds the block; the chain must refuse it
+		const producer = openChain(dir, { ...options, minStakeAge: 0 });
+		const block = findStakeBlock(producer, attacker);
+		await expect(chain.addMinedBlock(block)).rejects.toThrow('too young to stake');
+	});
 });

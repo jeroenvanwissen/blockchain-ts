@@ -13,10 +13,10 @@ import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js'
 const OPTIONS = { validateDifficulty: false, powCutoffBlock: 1000 };
 const SPACING = 30_000;
 
-/** Append `count` blocks (with the mempool) 30 s apart. */
+/** Append `count` blocks (with the mempool) 30 s apart, never dated before now (transactions are). */
 async function buildBlocks(chain: Blockchain, miner: string, count: number): Promise<void> {
 	for (let i = 0; i < count; i++) {
-		const block = chain.createBlockTemplate(miner, chain.getLatestBlock().timestamp + SPACING);
+		const block = chain.createBlockTemplate(miner, Math.max(chain.getLatestBlock().timestamp + SPACING, Date.now()));
 		block.solve();
 		await chain.addMinedBlock(block);
 	}

@@ -57,7 +57,7 @@ export const MAX_API_BODY_BYTES = 64 * 1024; // larger request bodies get 413
 
 // Peer protocol (TASK-0013)
 export const NETWORK_MAGIC = 'blockchain-ts/devnet'; // peers on another network are dropped
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2; // 2: transaction timestamp rules (TASK-0025)
 export const HANDSHAKE_TIMEOUT = 10_000; // ms to complete VERSION/VERACK before disconnecting
 export const SYNC_BATCH_SIZE = 200; // max blocks per BLOCKS reply
 export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS locator

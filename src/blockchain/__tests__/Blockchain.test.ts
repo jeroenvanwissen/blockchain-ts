@@ -363,7 +363,7 @@ describe('Blockchain', () => {
 			const blockTime = Number(lastBlock.timestamp) + blockchain.BLOCK_TIME * 1000 + 1;
 
 			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, blockTime);
 			const block = new Block(
 				blockTime,
 				[coinbase1, coinbase2],
@@ -743,7 +743,7 @@ describe('Blockchain', () => {
 			const genesisBlock = blockchain.getChain()[0];
 			const highDiffBlock1Timestamp =
 				genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, highDiffBlock1Timestamp);
 			const block1 = new Block(
 				highDiffBlock1Timestamp,
 				[coinbase1],
@@ -760,7 +760,7 @@ describe('Blockchain', () => {
 
 			const highDiffBlock2Timestamp =
 				highDiffBlock1Timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, highDiffBlock2Timestamp);
 			const block2 = new Block(
 				highDiffBlock2Timestamp,
 				[coinbase2],
@@ -803,7 +803,7 @@ describe('Blockchain', () => {
 			const genesis = blockchain.getChain()[0];
 			const singleBlockTimestamp =
 				genesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, singleBlockTimestamp);
 			const block = new Block(
 				singleBlockTimestamp,
 				[coinbase],
@@ -906,7 +906,7 @@ describe('Blockchain', () => {
 			// Build a heavier chain with a tampered hash
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, timestamp1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -921,7 +921,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, timestamp2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -948,7 +948,7 @@ describe('Blockchain', () => {
 
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, timestamp1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -963,7 +963,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, timestamp2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -996,7 +996,7 @@ describe('Blockchain', () => {
 			);
 
 			const timestamp1 = fakeGenesis.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, timestamp1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1011,7 +1011,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, timestamp2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1106,7 +1106,7 @@ describe('Blockchain', () => {
 
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, timestamp1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1121,7 +1121,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, timestamp2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],
@@ -1146,7 +1146,7 @@ describe('Blockchain', () => {
 			// Build a valid heavier chain
 			const genesisBlock = blockchain.getChain()[0];
 			const timestamp1 = genesisBlock.timestamp + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1);
+			const coinbase1 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 1, timestamp1);
 			const block1 = new Block(
 				timestamp1,
 				[coinbase1],
@@ -1161,7 +1161,7 @@ describe('Blockchain', () => {
 			}
 
 			const timestamp2 = timestamp1 + blockchain.BLOCK_TIME * 1000 + 1;
-			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2);
+			const coinbase2 = Transaction.coinbase(minerAddr, POW_BLOCK_REWARD, 2, timestamp2);
 			const block2 = new Block(
 				timestamp2,
 				[coinbase2],

@@ -1,7 +1,7 @@
 # Backlog
 
 Status values: `pending`, `in-progress`, `done`, `blocked`. Priority: P0 now, P1 next, P2 planned, P3 later.
-Task IDs are permanent. Don't renumber when priorities change. Findings (`F-0xx`) refer to [assessment-2026-11-23.md](assessment-2026-11-23.md).
+Task IDs are permanent. Don't renumber when priorities change. Findings F-001 to F-020 refer to [assessment-2026-11-23.md](assessment-2026-11-23.md), F-021 and later to [reassessment-2026-11-23.md](reassessment-2026-11-23.md).
 
 The goal of the ordering is a node that actually works end to end: it starts, mines, restarts, enforces consensus, moves to PoS, and syncs with peers. Each milestone ends in something you can run.
 
@@ -58,6 +58,29 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0022](TASK-0022-dead-code.md) | Remove dead code and stale files | done | P2 | small | none | F-018, old F1 |
 | [TASK-0023](TASK-0023-logging.md) | Leveled logging | done | P3 | small | TASK-0002 | old F2 |
 | [TASK-0024](TASK-0024-wallet-encryption.md) | Encrypt wallet keys at rest | done | P3 | medium | TASK-0005 | — |
+
+## Milestone 6: hardening (from the reassessment)
+
+| ID | Task | Status | Priority | Size | Depends on | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| [TASK-0025](TASK-0025-stake-age.md) | Bound transaction timestamps; measure stake age from block time | done | P1 | medium | TASK-0009 | F-021 |
+| TASK-0026 | Equal-work tie-break that block contents can't influence | pending | P2 | small | TASK-0012 | F-022 |
+| TASK-0027 | Keep wallet routes on loopback | pending | P2 | small | TASK-0017 | F-023 |
+| TASK-0028 | Mempool revalidation without re-verifying signatures | pending | P3 | small | TASK-0019 | F-024 |
+| TASK-0029 | Chainstate snapshot for fast startup | pending | P3 | medium | TASK-0012 | F-025 |
+| TASK-0030 | Throttle block requests; persist bans | pending | P3 | small | TASK-0020 | F-026, F-027 |
+| TASK-0031 | Transaction index | pending | P3 | small | TASK-0016 | F-028 |
+| TASK-0032 | Change the wallet passphrase | pending | P3 | small | TASK-0024 | F-029 |
+
+Scope notes (expand into task files when picked up):
+
+- **TASK-0026:** for PoS blocks, break ties on a value fixed by the stake rather than the block contents, such as sha256d(parent hash ‖ kernel outpoint); for PoW blocks the block hash is the proof itself.
+- **TASK-0027:** wallet routes answer only loopback clients, whatever `API_HOST` is; document that exposing the API exposes only chain routes.
+- **TASK-0028:** cache signature validity per txid (witness included) so revalidation only rechecks inputs, maturity and fees.
+- **TASK-0029:** persist the UTXO set, stake modifiers and undo data with the tip hash; load it when the tip matches, replay otherwise.
+- **TASK-0030:** per-peer budget for `GET_BLOCKS` (and cached block JSON); store bans in the data dir with their expiry.
+- **TASK-0031:** txid → block index maintained on connect and disconnect.
+- **TASK-0032:** `POST /wallet/passphrase { old, new }` and `cli change-passphrase`.
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

@@ -106,7 +106,7 @@ export class Blockchain {
 		this._mempool = new Mempool(this._options.maxMempoolBytes);
 
 		// Initialize UTXO set and block index with the genesis block
-		this._utxos.addOutputs(genesisBlock.transactions[0], 0);
+		this._utxos.addOutputs(genesisBlock.transactions[0], 0, genesisBlock.timestamp);
 		this._index.set(genesisBlock.hash, {
 			block: genesisBlock,
 			height: 0,
@@ -205,6 +205,9 @@ export class Blockchain {
 			if (utxo.isCoinstake && height - utxo.blockIndex < COIN_MATURITY) {
 				throw new Error('coinstake output has not reached maturity');
 			}
+			if (tx.timestamp < utxo.txTimestamp) {
+				throw new Error('transaction timestamp is earlier than an output it spends');
+			}
 			inputSum += utxo.output.amount;
 		}
 		const outputSum = tx.outputs.reduce((sum, out) => sum + out.amount, 0n);
@@ -292,6 +295,9 @@ export class Blockchain {
 				if (t >= 2 && tx.isCoinStake()) {
 					throw new Error('coinstake is only valid as the second transaction of a PoS block');
 				}
+				if (tx.timestamp > block.timestamp) {
+					throw new Error('transaction timestamp is later than its block');
+				}
 				if (!tx.isCoinbase()) {
 					tx.validate(); // structure and signatures
 					fees += this._checkInputs(tx, lookup, height);
@@ -317,6 +323,7 @@ export class Blockchain {
 					isCoinbase: tx.isCoinbase(),
 					isCoinstake,
 					txTimestamp: tx.timestamp,
+					blockTimestamp: block.timestamp,
 				});
 			});
 		});
@@ -366,11 +373,13 @@ export class Blockchain {
 		if (height - kernel.blockIndex < STAKE_MIN_CONFIRMATIONS) {
 			throw new Error('kernel input does not have enough confirmations');
 		}
-		if (
-			block.timestamp < kernel.txTimestamp ||
-			block.timestamp - kernel.txTimestamp < this._options.minStakeAge * 1000
-		) {
+		// Age counts from the block that created the output: block times are bounded by consensus,
+		// transaction times only by their creator (Peercoin/BlackCoin measure age the same way)
+		if (block.timestamp - kernel.blockTimestamp < this._options.minStakeAge * 1000) {
 			throw new Error('kernel input is too young to stake');
+		}
+		if (block.timestamp < kernel.txTimestamp) {
+			throw new Error('coinstake timestamp is earlier than the kernel input');
 		}
 
 		const hash = kernelHash(
@@ -429,7 +438,7 @@ export class Blockchain {
 			modifiers: [GENESIS_STAKE_MODIFIER],
 		};
 		const undo: UTXO[][] = [[]];
-		ctx.utxos.addOutputs(blocks[0].transactions[0], 0);
+		ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
 		for (let i = 1; i < blocks.length; i++) {
 			try {
 				const result = this._connectBlock(blocks[i], ctx);
@@ -770,10 +779,12 @@ export class Blockchain {
 			a.output.amount === b.output.amount ? 0 : a.output.amount > b.output.amount ? -1 : 1,
 		);
 		let inputSum = 0n;
+		let timestamp = Date.now(); // never earlier than an output it spends (consensus)
 		const inputs: TxInput[] = [];
 		for (const utxo of candidates) {
 			if (inputs.length === MAX_TRANSACTION_INPUTS) break;
 			inputSum += utxo.output.amount;
+			timestamp = Math.max(timestamp, utxo.txTimestamp);
 			inputs.push({ previousTx: utxo.txHash, outputIndex: utxo.outputIndex, publicKey: '', signature: '' });
 
 			const changeOutput = { address: from, amount: 1n }; // amount doesn't affect the size
@@ -786,7 +797,7 @@ export class Blockchain {
 				outputs = recipients; // what's left over is too little for a change output: it's fee
 			}
 			if (outputs) {
-				const transaction = new Transaction(inputs, outputs);
+				const transaction = new Transaction(inputs, outputs, timestamp);
 				wallet.signTransaction(transaction);
 				const outputSum = outputs.reduce((sum, output) => sum + output.amount, 0n);
 				return { transaction, fee: inputSum - outputSum };
@@ -824,11 +835,16 @@ export class Blockchain {
 	}
 
 	/**
-	 * Pending transactions for a new block, highest fee rate first, within the block limits
-	 * (`slots` transactions are taken by the coinbase and, for PoS, the coinstake).
+	 * Pending transactions for a block at `timestamp`, highest fee rate first, within the block
+	 * limits (`slots` transactions are taken by the coinbase and, for PoS, the coinstake). A
+	 * transaction dated after the block waits for a later one.
 	 */
-	private _selectForBlock(slots: number): { transactions: Transaction[]; fees: bigint } {
-		const chosen = this._mempool.select(MAX_BLOCK_TRANSACTIONS - slots, MAX_BLOCK_SIZE - BLOCK_RESERVED_BYTES);
+	private _selectForBlock(slots: number, timestamp: number): { transactions: Transaction[]; fees: bigint } {
+		const chosen = this._mempool.select(
+			MAX_BLOCK_TRANSACTIONS - slots,
+			MAX_BLOCK_SIZE - BLOCK_RESERVED_BYTES,
+			(entry) => entry.transaction.timestamp <= timestamp,
+		);
 		return {
 			transactions: chosen.map((entry) => entry.transaction),
 			fees: chosen.reduce((total, entry) => total + entry.fee, 0n),
@@ -840,7 +856,7 @@ export class Blockchain {
 	 * plus a coinbase to `rewardAddress` for the reward and their fees.
 	 */
 	public createBlockTemplate(rewardAddress: string, timestamp: number = Date.now()): Block {
-		const { transactions, fees } = this._selectForBlock(1);
+		const { transactions, fees } = this._selectForBlock(1, timestamp);
 		const coinbase = Transaction.coinbase(rewardAddress, POW_BLOCK_REWARD + fees, this.chain.length, timestamp);
 		return new Block(
 			timestamp,
@@ -885,7 +901,8 @@ export class Blockchain {
 			if (this._mempool.isSpent(utxo.txHash, utxo.outputIndex)) continue;
 			if (!this._isMature(utxo, height)) continue;
 			if (height - utxo.blockIndex < STAKE_MIN_CONFIRMATIONS) continue;
-			if (timestamp - utxo.txTimestamp < this._options.minStakeAge * 1000) continue;
+			if (timestamp - utxo.blockTimestamp < this._options.minStakeAge * 1000) continue;
+			if (timestamp < utxo.txTimestamp) continue;
 			const hash = kernelHash(modifier, utxo.txTimestamp, utxo.txHash, utxo.outputIndex, timestamp);
 			if (!meetsKernelTarget(hash, bits, utxo.output.amount)) continue;
 
@@ -898,7 +915,7 @@ export class Blockchain {
 				timestamp,
 			);
 			wallet.signTransaction(coinstake, 'stake');
-			const { transactions, fees } = this._selectForBlock(2);
+			const { transactions, fees } = this._selectForBlock(2, timestamp);
 			const block = new Block(
 				timestamp,
 				[Transaction.coinbase(wallet.address, POS_BLOCK_REWARD + fees, height, timestamp), coinstake, ...transactions],
@@ -954,6 +971,10 @@ export class Blockchain {
 			(txHash, outputIndex) => this._utxos.get(txHash, outputIndex),
 			this.chain.length,
 		);
+		// A transaction can't be in a block dated before it, so far-future ones would never confirm
+		if (transaction.timestamp > Date.now() + MAX_FUTURE_BLOCK_TIME) {
+			throw new Error('transaction timestamp too far in the future');
+		}
 		const minimum = minRelayFee(transaction.size(), this._options.minRelayFeePerKb);
 		if (fee < minimum) {
 			throw new Error(`fee ${fee} is below the minimum relay fee ${minimum} for ${transaction.size()} bytes`);

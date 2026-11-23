@@ -177,7 +177,9 @@ describe('Block validation (single path)', () => {
 		await mineBlocks(chain, miner.address, COIN_MATURITY + 1);
 		const balanceBefore = chain.getBalance(miner.address);
 		const tx = spendFirstUtxo(chain, miner, openWallet(dir, 'a').address);
-		await expect(chain.addMinedBlock(nextBlock(chain, miner, [tx, tx]))).rejects.toThrow();
+		await expect(chain.addMinedBlock(nextBlock(chain, miner, [tx, tx]))).rejects.toThrow(
+			'transaction 2: input references a missing or spent output',
+		);
 
 		expect(chain.getBalance(miner.address)).toBe(balanceBefore);
 		await chain.addMinedBlock(nextBlock(chain, miner, [tx]));
