@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Block } from '../../blockchain/Block.js';
-import { Blockchain } from '../../blockchain/Blockchain.js';
+import { Blockchain, type BlockchainOptions } from '../../blockchain/Blockchain.js';
 import { Wallet } from '../../blockchain/Wallet.js';
 import { BLOCK_TIME } from '../../config.js';
 
@@ -31,8 +31,8 @@ export function removeTempDir(dir: string): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
-export function openChain(dir: string): Blockchain {
-	return new Blockchain({ blocksDir: path.join(dir, 'blocks') });
+export function openChain(dir: string, options: BlockchainOptions = {}): Blockchain {
+	return new Blockchain({ ...options, blocksDir: path.join(dir, 'blocks') });
 }
 
 export function openWallet(dir: string, name: string): Wallet {

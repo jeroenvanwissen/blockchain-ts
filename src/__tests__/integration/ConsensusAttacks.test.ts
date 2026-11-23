@@ -5,7 +5,13 @@ import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
-import { BLOCK_TIME, COIN_MATURITY, MIN_STAKE_AMOUNT, POW_BLOCK_REWARD } from '../../config.js';
+import {
+	BLOCK_TIME,
+	COIN_MATURITY,
+	MIN_STAKE_AMOUNT,
+	POS_BLOCK_REWARD,
+	POW_BLOCK_REWARD,
+} from '../../config.js';
 import {
 	advanceTime,
 	makeTempDir,
@@ -76,7 +82,7 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 	});
 
 	// F-005 — fixed by TASK-0006
-	test.failing('should reject a block that spends a non-existent output', async () => {
+	test('should reject a block that spends a non-existent output', async () => {
 		const attacker = openWallet(dir, 'attacker');
 		const chain = openChain(dir);
 		await mineBlocks(chain, attacker.address, 1);
@@ -99,11 +105,15 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 			),
 		);
 
-		await expect(chain.addMinedBlock(block)).rejects.toThrow();
+		await expect(chain.addMinedBlock(block)).rejects.toThrow(
+			'transaction 1: input references a missing or spent output',
+		);
+		expect(chain.getBalance(attacker.address)).toBe(POW_BLOCK_REWARD);
 	});
 
-	// F-006 — fixed by TASK-0009 / TASK-0011
-	test.failing('should rebuild stake state from the chain after a restart', async () => {
+	// F-006 — restart now rebuilds stake state from the chain (TASK-0006). Node-local stake
+	// changes (stake() without a transaction, unstake, slashing) remain until TASK-0011.
+	test('should rebuild stake state from the chain after a restart', async () => {
 		const staker = openWallet(dir, 'staker');
 		const chain = openChain(dir);
 		await stakeDuringPowPhase(chain, staker);
@@ -113,6 +123,30 @@ describe('Consensus attacks (assessment 2026-11-23)', () => {
 		const restarted = openChain(dir);
 		expect(restarted.getChain()).toHaveLength(chain.getChain().length);
 		expect(restarted.getStake(staker.address)).toBe(STAKE_AMOUNT);
+	});
+
+	// F-009 — closed by TASK-0006: coinstakes go through the same input checks as other txs
+	test('should reject a coinstake that pays out more than its inputs', async () => {
+		const staker = openWallet(dir, 'staker');
+		const chain = openChain(dir);
+		await stakeDuringPowPhase(chain, staker);
+		const stakeTx = chain.getPendingTransactions()[0];
+		stakeTx.outputs.push({ address: staker.address, amount: 1_000n * POW_BLOCK_REWARD });
+		staker.signTransaction(stakeTx); // validly signed, but outputs exceed inputs
+
+		advanceTime(BLOCK_TIME * 1000);
+		const height = chain.getChain().length;
+		const block = new Block(
+			Date.now(),
+			[Transaction.coinbase(staker.address, POS_BLOCK_REWARD, height), stakeTx],
+			chain.getLatestBlock().hash,
+			0,
+			chain.calculateNewDifficulty(),
+			height,
+		);
+		expect(block.isProofOfStake()).toBe(true);
+
+		await expect(chain.addMinedBlock(block)).rejects.toThrow('output amounts exceed input amounts');
 	});
 
 	// F-007 — fixed by TASK-0009

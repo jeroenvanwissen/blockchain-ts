@@ -17,10 +17,11 @@
 
 ## Status
 
-**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`) and pass them to connected peers (`npm run smoke`), but:
+**Not functional end to end yet (assessed 2026-11-23).** Nodes start, restart, mine PoW blocks (`--mine`), verify signatures, and validate every block (new, synced, or loaded from disk) against the UTXO set (`npm run smoke`). Still open:
 
-- transactions inside blocks are not yet checked against the UTXO set, so a block can spend outputs that don't exist (TASK-0006);
-- stake state is node-local, so nodes disagree after restarts (TASK-0009, TASK-0011).
+- stake changes made locally (`stake()` without a transaction, unstake, slashing) never reach the chain, so nodes can disagree about stake (TASK-0009, TASK-0011);
+- a pending stake transaction can turn a PoW-phase block into an unchecked PoS block (TASK-0009);
+- difficulty can't rise, and a node that misses a block only resyncs when it reconnects (TASK-0008, TASK-0013).
 
 The feature list below describes the intended design. See the [assessment](tasks/assessment-2026-11-23.md) for what is actually enforced today, and the [backlog](tasks/BACKLOG.md) for the order of fixes.
 
@@ -267,7 +268,7 @@ await blockchain.stake(wallet.address, 100n * COIN, wallet);
 
 ## Troubleshooting
 
-### `Invalid genesis block` on Start
+### `invalid stored chain: genesis block hash mismatch` on Start
 
 Block and transaction formats change while the project is pre-release, and each change creates a new genesis block. Data written by an older version won't load. Delete the data directory (or point `--data-dir` somewhere new) and start again.
 

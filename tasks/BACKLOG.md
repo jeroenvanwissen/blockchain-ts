@@ -19,7 +19,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | ID | Task | Status | Priority | Size | Depends on | Source |
 | --- | --- | --- | --- | --- | --- | --- |
 | [TASK-0005](TASK-0005-transaction-format.md) | Canonical transaction format with verified signatures | done | P0 | large | TASK-0003 | F-004, F-011, F-012, F-020 |
-| [TASK-0006](TASK-0006-block-validation.md) | One block-validation path against a UTXO view | pending | P0 | large | TASK-0005 | F-005, F-010 |
+| [TASK-0006](TASK-0006-block-validation.md) | One block-validation path against a UTXO view | done | P0 | large | TASK-0005 | F-005, F-010 |
 
 ## Milestone 3: PoW header and difficulty
 

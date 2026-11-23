@@ -190,6 +190,10 @@ describe('Blockchain', () => {
 			const time3 = Number(time2) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(time3)));
 			await blockchain.stake(stakeholderWallet.getAddress(), coins(100), stakeholderWallet);
+			// Confirm the stake transaction first: the stakeholder's only coins are claimed by it,
+			// and a coinstake may not spend them again in the same block
+			jest.setSystemTime(new Date(Number(time3) + 5 * 60 * 1000));
+			await blockchain.minePendingTransactions(minerWallet.getAddress());
 			const time4 = Number(time3) + 11 * 60 * 1000;
 			jest.setSystemTime(new Date(Number(time4)));
 			await blockchain.minePendingTransactions(stakeholderWallet.getAddress(), stakeholderWallet);
@@ -257,7 +261,9 @@ describe('Blockchain', () => {
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
 			const balance = blockchain.getTotalBalance(minerAddr);
-			const stakeAmount = balance / 2n;
+			// A quarter: the stake tx claims some coins, and the PoS block's coinstake needs as
+			// many again from coins that aren't already claimed by pending transactions
+			const stakeAmount = balance / 4n;
 			await blockchain.stake(minerAddr, stakeAmount, minerWallet);
 			let lastTimestamp = Number(blockchain.getLatestBlock().timestamp);
 			for (let i = 0; i < 10; i++) {
@@ -651,7 +657,7 @@ describe('Blockchain', () => {
 			badBlock.hash = badBlock.calculateHash();
 
 			await expect(blockchain.addMinedBlock(badBlock))
-				.rejects.toThrow('Invalid previous hash');
+				.rejects.toThrow('broken link');
 		});
 
 		it('should serialize concurrent addTransaction calls', async () => {
@@ -731,7 +737,7 @@ describe('Blockchain', () => {
 			senderWallet.signTransaction(tx);
 
 			await expect(blockchain.addTransaction(tx))
-				.rejects.toThrow('input references non-existent transaction');
+				.rejects.toThrow('input references a missing or spent output');
 		});
 
 		it('should reject transaction with outputs exceeding inputs', async () => {

@@ -11,6 +11,7 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/blockchain/protoSchemas.ts`: protobuf schemas for blocks, the block index and the wallet (embedded strings, no `.proto` files)
 - `src/blockchain/secp256k1.ts`: ESM/CommonJS-safe `secp256k1` import; import the library through this module
 - `src/blockchain/address.ts`: Base58Check addresses (`addressFromPublicKey`, `isValidAddress`)
+- `src/blockchain/UtxoSet.ts`: unspent outputs by outpoint, with a per-address index
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
 - `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
 
@@ -43,7 +44,7 @@ Run npm scripts from the repository root.
 ## Architecture and constraints
 
 - Consensus code must be deterministic from chain data. No wall-clock reads except the future-timestamp limit, and no node-local state that peers can't rebuild from blocks.
-- Every block, whether new, synced or loaded from disk, must pass the same validation path (TASK-0006).
+- Every block, whether new, synced or loaded from disk, goes through `Blockchain._connectBlock` (via `_addMinedBlockInternal` or `_replayChain`). It validates against a block-local UTXO view and changes state only if every check passes. Add consensus rules there, not in callers; mempool admission shares `_checkInputs`.
 - The target PoS model is Peercoin-style UTXO kernel staking (TASK-0009 to TASK-0011). Don't extend the current stake-registry code (`_stakes`, `stake()`, `unstake()`, slashing). It is scheduled for removal.
 - Format changes (transactions, headers) need a new genesis. That is acceptable while no persistent network exists; tell users to delete old data dirs (README troubleshooting).
 

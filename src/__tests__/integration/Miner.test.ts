@@ -1,5 +1,6 @@
 // Real worker thread, real filesystem, real timers. minBlockInterval is 0 so blocks don't
-// wait 30 s; stay below DIFFICULTY_ADJUSTMENT_INTERVAL blocks so difficulty stays at 4.
+// wait 30 s (reopen with the same options: stored chains are revalidated); stay below
+// DIFFICULTY_ADJUSTMENT_INTERVAL blocks so difficulty stays at 4.
 import * as path from 'path';
 import type { Block } from '../../blockchain/Block.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
@@ -8,6 +9,7 @@ import { POW_BLOCK_REWARD } from '../../config.js';
 import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js';
 
 const WORKER_PATH = path.join(process.cwd(), 'src', 'blockchain', 'miningWorker.cjs');
+const FAST = { minBlockInterval: 0 };
 
 async function waitUntil(condition: () => boolean, timeoutMs = 20_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
@@ -26,7 +28,7 @@ describe('Miner (real worker thread)', () => {
 		process.env.NODE_ENV = 'test';
 		jest.spyOn(console, 'log').mockImplementation(() => {});
 		dir = makeTempDir();
-		chain = new Blockchain({ blocksDir: path.join(dir, 'blocks'), minBlockInterval: 0 });
+		chain = openChain(dir, FAST);
 		miner = null;
 	});
 
@@ -53,7 +55,7 @@ describe('Miner (real worker thread)', () => {
 				{ address: wallet.address, amount: POW_BLOCK_REWARD },
 			]);
 		}
-		const reopened = new Blockchain({ blocksDir: path.join(dir, 'blocks') });
+		const reopened = openChain(dir, FAST);
 		expect(reopened.getChain().map((b) => b.hash)).toEqual(chain.getChain().map((b) => b.hash));
 	});
 
@@ -101,6 +103,6 @@ describe('Miner (real worker thread)', () => {
 
 		expect(chain.getChain()[1].transactions[0].outputs[0].address).toBe(other.address);
 		expect(chain.getChain()[2].transactions[0].outputs[0].address).toBe(wallet.address);
-		expect(openChain(dir).getChain().length).toBeGreaterThanOrEqual(3);
+		expect(openChain(dir, FAST).getChain().length).toBeGreaterThanOrEqual(3);
 	});
 });
