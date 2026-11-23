@@ -11,6 +11,8 @@
 	--pos: #0b7a53;
 	--pos-bg: #ddf5ea;
 	--warn-bg: #fff4d6;
+	--in: #0b7a53;
+	--out: #b42318;
 	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	color-scheme: light dark;
 }
@@ -29,6 +31,8 @@
 		--pos: #5fd3a4;
 		--pos-bg: #113528;
 		--warn-bg: #3a3215;
+		--in: #5fd3a4;
+		--out: #ff8a7a;
 	}
 }
 
@@ -189,6 +193,14 @@ th.num {
 
 .muted {
 	color: var(--muted);
+}
+
+.in {
+	color: var(--in);
+}
+
+.out {
+	color: var(--out);
 }
 
 .badge {

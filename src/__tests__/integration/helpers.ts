@@ -5,8 +5,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { Block } from '../../blockchain/Block.js';
 import { Blockchain, type BlockchainOptions } from '../../blockchain/Blockchain.js';
+import { Transaction } from '../../blockchain/Transaction.js';
 import { Wallet } from '../../blockchain/Wallet.js';
-import { BLOCK_TIME, STAKE_MIN_AGE, STAKE_TIMESTAMP_GRANULARITY } from '../../config.js';
+import { requiredBits } from '../../blockchain/retarget.js';
+import { BLOCK_TIME, POW_BLOCK_REWARD, STAKE_MIN_AGE, STAKE_TIMESTAMP_GRANULARITY } from '../../config.js';
 
 const START_TIME = Date.UTC(2027, 0, 1);
 
@@ -45,6 +47,30 @@ export async function mineBlocks(chain: Blockchain, address: string, count: numb
 		advanceTime(BLOCK_TIME * 1000);
 		await chain.minePendingTransactions(address);
 	}
+}
+
+/** A solved PoW block on top of `branch` paying `address` (not added to any chain). */
+export function powBlockOn(branch: Block[], address: string): Block {
+	const parent = branch[branch.length - 1];
+	const height = branch.length;
+	const timestamp = parent.timestamp + BLOCK_TIME * 1000;
+	const block = new Block(
+		timestamp,
+		[Transaction.coinbase(address, POW_BLOCK_REWARD, height, timestamp)],
+		parent.hash,
+		0,
+		requiredBits(branch, height, false),
+		height,
+	);
+	block.solve();
+	return block;
+}
+
+/** `branch` plus `count` PoW blocks paying `address`, for building competing branches. */
+export function extendBranch(branch: Block[], address: string, count: number): Block[] {
+	const result = [...branch];
+	for (let i = 0; i < count; i++) result.push(powBlockOn(result, address));
+	return result;
 }
 
 /** Find a nonce that satisfies the block's own PoW check. */

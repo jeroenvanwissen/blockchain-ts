@@ -1,9 +1,10 @@
 // Block explorer (TASK-0042): one page over this node's public, read-only chain routes.
 // Routes: #/ (latest blocks, mempool, peers), #/blocks/<before>, #/block/<height or hash>,
-// #/tx/<txid>, #/address/<address>. Data from the API is only ever inserted as text.
+// #/tx/<txid>, #/address/<address>[/<before>]. Data from the API is only ever inserted as text.
 
 const COIN = 100_000_000n;
 const PAGE_SIZE = 20;
+const HISTORY_PAGE_SIZE = 25;
 const MEMPOOL_SHOWN = 50;
 const REFRESH_MS = 10_000;
 const NULL_HASH = '0'.repeat(64);
@@ -228,19 +229,57 @@ async function txView(txid) {
 	];
 }
 
-async function addressView(address) {
+/** A signed amount: "+1.5" received, "−2" sent, "0" for a stake that returned its kernel. */
+function change(received, sent) {
+	const net = BigInt(received) - BigInt(sent);
+	if (net === 0n) return muted('0');
+	return h('span', { class: net > 0n ? 'in' : 'out' }, `${net > 0n ? '+' : '−'}${coins(net > 0n ? net : -net)}`);
+}
+
+async function addressView(address, before) {
 	const path = `/addresses/${encodeURIComponent(address)}`;
-	const [info, utxos] = await Promise.all([api(path), api(`${path}/utxos`)]);
+	const page = `${path}/transactions?limit=${HISTORY_PAGE_SIZE}${before === undefined ? '' : `&before=${before}`}`;
+	const [info, history, utxos] = await Promise.all([api(path), api(page), api(`${path}/utxos`)]);
 	const kind = (utxo) => (utxo.coinbase ? 'coinbase' : utxo.coinstake ? 'stake' : 'payment');
+	const addressLinkTo = (position) => `#/address/${encodeURIComponent(address)}${position === undefined ? '' : `/${position}`}`;
+	const rows = [
+		...(before === undefined ? history.pending : []).map((tx) => [
+			cell(txLink(tx.txid, short(tx.txid))),
+			cell(badge('pending')),
+			cell(change(tx.received, tx.sent), 'num'),
+			cell('', 'num hide-narrow'),
+		]),
+		...history.transactions.map((tx) => [
+			cell(txLink(tx.txid, short(tx.txid))),
+			cell(h('span', { title: time(tx.timestamp) }, blockLink(String(tx.height), tx.height), muted(` · ${ago(tx.timestamp)}`))),
+			cell(change(tx.received, tx.sent), 'num'),
+			cell(coins(tx.balance), 'num hide-narrow'),
+		]),
+	];
+	const newest = history.transactions[0]?.position;
+	const oldest = history.transactions[history.transactions.length - 1]?.position;
+	const pager = h(
+		'div',
+		{ class: 'pager' },
+		before === undefined
+			? h('span')
+			: link(newest === undefined || newest + HISTORY_PAGE_SIZE + 1 >= history.total ? addressLinkTo() : addressLinkTo(newest + HISTORY_PAGE_SIZE + 1), '← Newer'),
+		oldest > 0 ? link(addressLinkTo(oldest), 'Older →') : h('span'),
+	);
 	return [
 		h('h1', {}, 'Address'),
 		facts([
 			['Address', mono(info.address)],
 			['Balance', `${coins(info.balance)} coins`],
 			['Spendable now', `${coins(info.spendable)} coins`],
-			['Unspent outputs', info.utxos],
+			['Transactions', info.transactions],
+			['Total received', `${coins(info.totalReceived)} coins`],
+			['Total sent', `${coins(info.totalSent)} coins`],
 		]),
-		h('h2', {}, 'Unspent outputs'),
+		h('h2', {}, `Transactions (${history.total}${history.pending.length ? ` + ${history.pending.length} pending` : ''})`),
+		table([['Transaction'], ['Block'], ['Change', 'num'], ['Balance after', 'num hide-narrow']], rows, 'No transactions yet.'),
+		pager,
+		h('h2', {}, `Unspent outputs (${info.utxos})`),
 		table(
 			[['Output'], ['Coins', 'num'], ['Block'], ['Confirmations', 'num hide-narrow'], ['Kind', 'hide-narrow'], ['Spendable']],
 			utxos.map((utxo) => [
@@ -253,7 +292,6 @@ async function addressView(address) {
 			]),
 			'No unspent outputs.',
 		),
-		h('p', { class: 'muted' }, 'The node indexes unspent outputs only, so spent history is not shown.'),
 	];
 }
 
@@ -284,7 +322,10 @@ async function render() {
 		else if (route === 'blocks' && /^\d+$/.test(value)) content = await blocksView(Number(value));
 		else if (route === 'block' && value) content = await blockView(value);
 		else if (route === 'tx' && value) content = await txView(value);
-		else if (route === 'address' && value) content = await addressView(value);
+		else if (route === 'address' && /^[^/]+(\/\d+)?$/.test(value)) {
+			const [address, before] = value.split('/');
+			content = await addressView(address, before === undefined ? undefined : Number(before));
+		}
 		else content = message('There is no such page.', true);
 	} catch (error) {
 		content = error instanceof NotFound ? message(`Nothing found: ${error.message}.`) : message(`Could not load this page: ${error.message}`, true);

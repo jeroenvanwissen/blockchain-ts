@@ -2,38 +2,15 @@
 // only the blocks after it. Whatever the path, the live state must equal a full replay.
 import * as fs from 'fs';
 import * as path from 'path';
-import { Block } from '../../blockchain/Block.js';
+import type { Block } from '../../blockchain/Block.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
-import { requiredBits } from '../../blockchain/retarget.js';
-import { Transaction } from '../../blockchain/Transaction.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
-import { BLOCK_TIME, COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
-import { advanceTime, makeTempDir, mineBlocks, openChain, openWallet, removeTempDir, useTestClock } from './helpers.js';
+import { BLOCK_TIME, COIN, COIN_MATURITY } from '../../config.js';
+import { advanceTime, extendBranch, makeTempDir, mineBlocks, openChain, openWallet, removeTempDir, useTestClock } from './helpers.js';
 
 const SPACING = BLOCK_TIME * 1000;
 
-/** A solved PoW block on top of `branch` (not added to any chain). */
-function blockOn(branch: Block[], miner: Wallet): Block {
-	const parent = branch[branch.length - 1];
-	const height = branch.length;
-	const timestamp = parent.timestamp + SPACING;
-	const block = new Block(
-		timestamp,
-		[Transaction.coinbase(miner.address, POW_BLOCK_REWARD, height, timestamp)],
-		parent.hash,
-		0,
-		requiredBits(branch, height, false),
-		height,
-	);
-	block.solve();
-	return block;
-}
-
-function extend(branch: Block[], miner: Wallet, count: number): Block[] {
-	const result = [...branch];
-	for (let i = 0; i < count; i++) result.push(blockOn(result, miner));
-	return result;
-}
+const extend = (branch: Block[], miner: Wallet, count: number) => extendBranch(branch, miner.address, count);
 
 /** Live state equals a fresh full replay of the active chain. */
 function expectConsistent(chain: Blockchain): void {

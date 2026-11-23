@@ -211,6 +211,37 @@ describe('HTTP API', () => {
 		}
 	});
 
+	it('should page an address\'s transactions newest first, with pending ones and totals', async () => {
+		const recipient = openWallet(dir, 'recipient');
+		for (let i = 0; i < 3; i++) {
+			await chain.addTransaction(chain.createTransaction(miner.address, recipient.address, COIN, miner));
+			await buildBlocks(chain, miner.address, 1);
+		}
+		const pending = chain.createTransaction(miner.address, recipient.address, 2n * COIN, miner);
+		await chain.addTransaction(pending);
+		type Page = { total: number; transactions: { position: number; received: string; balance: string; height: number }[]; pending: unknown[] };
+
+		const first = (await get(`/addresses/${recipient.address}/transactions?limit=2`)).body as unknown as Page;
+		expect(first.total).toBe(3);
+		expect(first.transactions.map((t) => [t.position, t.received, t.balance])).toEqual([
+			[2, COIN.toString(), (3n * COIN).toString()],
+			[1, COIN.toString(), (2n * COIN).toString()],
+		]);
+		expect(first.transactions[0].height).toBe(chain.getLatestBlock().index);
+		expect(first.pending).toEqual([{ txid: pending.calculateHash(), received: (2n * COIN).toString(), sent: '0' }]);
+		const older = (await get(`/addresses/${recipient.address}/transactions?before=1`)).body as unknown as Page;
+		expect(older.transactions.map((t) => t.position)).toEqual([0]);
+
+		const summary = (await get(`/addresses/${recipient.address}`)).body;
+		expect(summary).toMatchObject({ transactions: 3, totalReceived: (3n * COIN).toString(), totalSent: '0' });
+		const unused = (await get(`/addresses/${openWallet(dir, 'unused').address}/transactions`)).body as unknown as Page;
+		expect(unused).toMatchObject({ total: 0, transactions: [], pending: [] });
+		for (const query of ['before=-1', 'before=x', 'limit=0', 'limit=101']) {
+			expect((await get(`/addresses/${recipient.address}/transactions?${query}`)).status).toBe(400);
+		}
+		expect((await get('/addresses/nope/transactions')).status).toBe(400);
+	});
+
 	it('should report balances and outputs, separating immature coinbases', async () => {
 		const recipient = openWallet(dir, 'recipient');
 		await chain.addTransaction(chain.createTransaction(miner.address, recipient.address, COIN, miner));
@@ -221,6 +252,9 @@ describe('HTTP API', () => {
 			balance: COIN.toString(),
 			spendable: COIN.toString(),
 			utxos: 1,
+			transactions: 1,
+			totalReceived: COIN.toString(),
+			totalSent: '0',
 		});
 
 		const summary = (await get(`/addresses/${miner.address}`)).body;
@@ -283,8 +317,12 @@ describe('HTTP API', () => {
 
 			const wallet = await get('/wallet', { headers: { authorization: `Bearer ${TOKEN}` } });
 			expect(wallet.status).toBe(200);
+			const { address, balance, spendable, utxos } = (await get(`/addresses/${miner.address}`)).body;
 			expect(wallet.body).toEqual({
-				...(await get(`/addresses/${miner.address}`)).body, // all coins are on the primary address
+				address, // all coins are on the primary address
+				balance,
+				spendable,
+				utxos,
 				addresses: 1,
 				encrypted: false,
 				locked: false,

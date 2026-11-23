@@ -5,6 +5,7 @@ import { Wallet } from './Wallet.js';
 import { BlockStore } from './BlockStore.js';
 import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
+import { AddressIndex, type AddressActivity } from './AddressIndex.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
 import { readChainstate, writeChainstate, type Chainstate } from './chainstate.js';
@@ -93,6 +94,7 @@ export class Blockchain {
 	private _index = new Map<string, IndexEntry>(); // every known block, by hash
 	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
 	private _txIndex = new Map<string, string>(); // txid → hash of the active block that contains it
+	private _addressIndex = new AddressIndex(); // address → its transactions on the active chain
 	private _mempool!: Mempool;
 	// Witness hashes (data, keys and signatures) already verified, oldest first: signatures never
 	// change, so revalidating the mempool on each new tip and connecting blocks of transactions
@@ -155,6 +157,27 @@ export class Blockchain {
 
 	public getUTXOs(address: string): UTXO[] {
 		return this._utxos.forAddress(address);
+	}
+
+	/** The address's transactions on the active chain, oldest first, with its balance after each. */
+	public getAddressHistory(address: string): readonly AddressActivity[] {
+		return this._addressIndex.history(address);
+	}
+
+	/** Pending transactions that pay `address` or spend its outputs, with what each moves. */
+	public getPendingActivity(address: string): { txid: string; received: bigint; sent: bigint }[] {
+		const activity: { txid: string; received: bigint; sent: bigint }[] = [];
+		for (const tx of this.getPendingTransactions()) {
+			let received = 0n;
+			let sent = 0n;
+			for (const output of tx.outputs) if (output.address === address) received += output.amount;
+			for (const input of tx.inputs) {
+				const utxo = this._utxos.get(input.previousTx, input.outputIndex); // pending inputs are confirmed outputs
+				if (utxo?.output.address === address) sent += utxo.output.amount;
+			}
+			if (received > 0n || sent > 0n) activity.push({ txid: tx.calculateHash(), received, sent });
+		}
+		return activity;
 	}
 
 	/** The unspent output at an outpoint, if it is unspent on the active chain. */
@@ -550,13 +573,19 @@ export class Blockchain {
 		}
 	}
 
-	/** Add a newly active block's transactions to the txid index, or remove a disconnected one's. */
+	/**
+	 * Add a newly active block's transactions to the txid and address indexes, or remove a
+	 * disconnected one's. Needs the block's undo data in `_undo`.
+	 */
 	private _indexTransactions(block: Block, add: boolean): void {
-		for (const tx of block.transactions) {
-			const txid = tx.calculateHash();
+		const txids = block.transactions.map((tx) => tx.calculateHash());
+		for (const txid of txids) {
 			if (add) this._txIndex.set(txid, block.hash);
 			else if (this._txIndex.get(txid) === block.hash) this._txIndex.delete(txid);
 		}
+		const spent = this._undo.get(block.hash) ?? [];
+		if (add) this._addressIndex.connect(block, spent, txids);
+		else this._addressIndex.disconnect(block, spent, txids);
 	}
 
 	/** Undo the active tip: remove the outputs it created and restore the ones it spent. */
@@ -1230,11 +1259,12 @@ export class Blockchain {
 						log.info(`chainstate at height ${start.height}; validated ${branch.length - 1 - start.height} newer block(s)`);
 					}
 					this.chain = branch;
-					this._txIndex = new Map();
-					for (const block of branch) this._indexTransactions(block, true);
 					this._utxos = state.utxos;
 					this._modifiers = state.modifiers;
 					this._undo = new Map(branch.map((block, i) => [block.hash, state.undo[i]]));
+					this._txIndex = new Map();
+					this._addressIndex = new AddressIndex();
+					for (const block of branch) this._indexTransactions(block, true); // after _undo: it reads it
 					this._index = index;
 					return;
 				} catch (error) {

@@ -74,6 +74,8 @@ const MAX_ADDRESS_LENGTH = 64; // real addresses are 25 bytes in Base58, about 3
 const AMOUNT_PATTERN = /^\d{1,20}$/; // base units as a decimal string
 const DEFAULT_BLOCK_LIST = 20;
 const MAX_BLOCK_LIST = 100;
+const DEFAULT_HISTORY_LIST = 25;
+const MAX_HISTORY_LIST = 100;
 
 interface Route {
 	method: 'GET' | 'POST';
@@ -100,6 +102,11 @@ export class ApiServer {
 		{ method: 'GET', pattern: /^\/transactions\/([^/]+)$/, handle: ([txid]) => this._transaction(txid) },
 		{ method: 'GET', pattern: /^\/addresses\/([^/]+)$/, handle: ([address]) => this._address(address) },
 		{ method: 'GET', pattern: /^\/addresses\/([^/]+)\/utxos$/, handle: ([address]) => this._utxos(address) },
+		{
+			method: 'GET',
+			pattern: /^\/addresses\/([^/]+)\/transactions$/,
+			handle: ([address], _, query) => this._addressTransactions(address, query),
+		},
 		{ method: 'GET', pattern: /^\/mempool$/, handle: () => this._mempool() },
 		{ method: 'GET', pattern: /^\/peers$/, handle: () => this._peers.getPeerInfo() },
 		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._walletInfo() },
@@ -502,12 +509,54 @@ export class ApiServer {
 	private _address(address: string) {
 		this._checkAddress(address);
 		const utxos = this._blockchain.getUTXOs(address);
+		const history = this._blockchain.getAddressHistory(address);
 		return {
 			address,
 			balance: sum(utxos).toString(),
 			spendable: sum(this._blockchain.getSpendableUTXOs(address)).toString(),
 			utxos: utxos.length,
+			transactions: history.length,
+			totalReceived: history.reduce((total, entry) => total + entry.received, 0n).toString(),
+			totalSent: history.reduce((total, entry) => total + entry.sent, 0n).toString(),
 		};
+	}
+
+	/**
+	 * GET /addresses/:address/transactions?before=<n>&limit=<n>: the address's transactions on
+	 * the active chain, newest first, from position `before` down (positions count from 0, oldest
+	 * first, and never shift: a page link stays valid as blocks arrive). Each shows what it
+	 * received and sent and the balance after it. `pending` lists mempool transactions.
+	 */
+	private _addressTransactions(address: string, query: URLSearchParams) {
+		this._checkAddress(address);
+		const history = this._blockchain.getAddressHistory(address);
+		const before = query.get('before') ?? String(history.length);
+		const limit = query.get('limit') ?? String(DEFAULT_HISTORY_LIST);
+		if (!HEIGHT_PATTERN.test(before)) throw new HttpError(400, 'before must be a position (0 or more)');
+		if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_HISTORY_LIST) {
+			throw new HttpError(400, `limit must be 1 to ${MAX_HISTORY_LIST}`);
+		}
+		const chain = this._blockchain.getChain();
+		const transactions = [];
+		for (let i = Math.min(Number(before), history.length) - 1; i >= 0 && transactions.length < Number(limit); i--) {
+			const entry = history[i];
+			transactions.push({
+				position: i,
+				txid: entry.txid,
+				height: entry.height,
+				timestamp: chain[entry.height].timestamp,
+				confirmations: this._confirmations(entry.height),
+				received: entry.received.toString(),
+				sent: entry.sent.toString(),
+				balance: entry.balance.toString(),
+			});
+		}
+		const pending = this._blockchain.getPendingActivity(address).map((entry) => ({
+			txid: entry.txid,
+			received: entry.received.toString(),
+			sent: entry.sent.toString(),
+		}));
+		return { address, total: history.length, transactions, pending };
 	}
 
 	private _utxos(address: string) {

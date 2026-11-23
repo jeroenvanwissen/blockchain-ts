@@ -93,6 +93,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0042](TASK-0042-block-explorer.md) | Block explorer page served by the node | done | P2 | medium | TASK-0016 | owner request |
 | [TASK-0043](TASK-0043-docker.md) | Docker image and compose file | done | P2 | medium | TASK-0037 | owner request |
 | [TASK-0044](TASK-0044-one-connection-per-node.md) | One connection per peer node, whatever address reaches it | done | P2 | small | TASK-0039 | found in TASK-0043 |
+| [TASK-0045](TASK-0045-address-history.md) | Address history index: every transaction per address, in the API and explorer | done | P2 | medium | TASK-0042 | owner request |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

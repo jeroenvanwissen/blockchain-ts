@@ -352,7 +352,8 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /blocks?before=<height>&limit=<n>` | Summaries of active-chain blocks below `before` (default: from the tip), newest first, `limit` 1 to 100 (default 20): height, hash, time, PoS or not, transaction count, size, producer (the staker, or the PoW coinbase's payee) |
 | `GET /blocks/:heightOrHash` | The block (header, signature, transactions with their txids), merkle root, size, producer, whether it is on the active chain, confirmations, and the next block's hash. Side-branch blocks are found by hash |
 | `GET /transactions/:txid` | The transaction plus its block hash, height and confirmations (`block: null` while in the mempool; indexed lookup on the active chain). Each input carries the output it spends (`spent: {address, amount}`), each confirmed output whether it is still `unspent`, plus `fee`, `size`, `coinbase` and `coinstake` |
-| `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs |
+| `GET /addresses/:address` | Balance, spendable balance (mature and not claimed by the mempool), number of outputs, number of transactions, total received and total sent |
+| `GET /addresses/:address/transactions?before=<n>&limit=<n>` | The address's transactions on the active chain, newest first, `limit` 1 to 100 (default 25): position, txid, height, time, confirmations, what it received and sent, and the balance after it. Positions count from 0, oldest first, and don't shift, so `before=<position>` pages stay valid as blocks arrive. `pending` lists mempool transactions that pay or spend the address |
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Number and total size of pending transactions, and their txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
@@ -371,7 +372,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 Open the API's root in a browser, `http://127.0.0.1:6001/` by default, to browse the node's chain:
 - the latest blocks, the mempool and the connected peers
 - each block with its transactions, each transaction with what its inputs spend and its fee
-- each address with its balance and unspent outputs (spent history isn't indexed)
+- each address with its balance, totals, every transaction that touched it (with the balance after each, pending ones first) and its unspent outputs
 
 The search box takes a height, a block hash, a txid or an address. The page refreshes when a new block arrives.
 

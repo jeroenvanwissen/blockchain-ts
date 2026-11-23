@@ -176,8 +176,14 @@ async function main(): Promise<void> {
 		await waitFor(nodeA, /chainstate at height \d+; validated 0 newer block\(s\)/, 'starting from the saved chainstate');
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
 
-		step('the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
+		step('the address history matches after the restart; the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
 		await waitFor(nodeA, API_READY, 'API');
+		// The address history is rebuilt from the chain at startup: it must end at the balance
+		const history = await apiGet<{ total: number; transactions: { balance: string }[] }>(nodeA, `/addresses/${address}/transactions?limit=1`);
+		const restartedBalance = (await apiGet<{ balance: string }>(nodeA, `/addresses/${address}`)).balance;
+		if (history.total === 0 || history.transactions[0].balance !== restartedBalance) {
+			throw new Error(`A's address history doesn't match its balance after the restart (${history.total} entries)`);
+		}
 		const cli = (args: string[], input?: string) => runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), ...args], input);
 		if (!(await cli(['balance'])).stdout.includes('wallet: encrypted, locked')) throw new Error('wallet not locked after restart');
 		if (!(await cli(['addresses'])).stdout.includes(created)) throw new Error('the new address is gone after restart');
