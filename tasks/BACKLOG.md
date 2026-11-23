@@ -81,15 +81,15 @@ The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/
 | C3 Stake security | done | Superseded by TASK-0011 (unstake delay and slashing removed with the stake registry). |
 | C4 Remove test bypasses | done | Kept. |
 | D1 Peer discovery | done | Kept. |
-| D2 Message relaying | pending | TASK-0014 |
+| D2 Message relaying | done | TASK-0014 |
 | D3 REST API for blockchain | done | TASK-0016 |
 | D4 REST API for transactions | done | TASK-0017 |
 | E1 Transaction fees | done | TASK-0018 |
 | E2 Mempool | done | TASK-0019 |
-| E3 Miner integration | pending | TASK-0004 |
+| E3 Miner integration | done | TASK-0004 |
 | E4 Reconnect limiting | done | TASK-0020 |
-| E5 Self-connection | pending | TASK-0013 |
-| E6 Test coverage | pending | Replaced by TASK-0003 and TASK-0015 (targeted runtime tests rather than a coverage number). |
+| E5 Self-connection | done | TASK-0013 |
+| E6 Test coverage | done | Replaced by TASK-0003 and TASK-0015 (targeted runtime tests rather than a coverage number). |
 | F1 Dead code and config | done | TASK-0022 |
 | F2 Logging cleanup | done | TASK-0023 |
-| F3 Merkle tree | pending | TASK-0007 |
+| F3 Merkle tree | done | TASK-0007 |
