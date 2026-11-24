@@ -75,17 +75,55 @@ class StorageError extends Error {}
 /** What happened to a block passed to addMinedBlock. */
 export type BlockOutcome = 'connected' | 'reorganized' | 'side';
 
-/** A known block (active chain or side branch). */
-interface IndexEntry {
-	block: Block;
-	height: number;
-	work: bigint; // cumulative chain work up to and including this block
-	isInvalid: boolean; // failed full validation; descendants are rejected
+/** The header data validation and fork choice read from earlier blocks (a Block or a ChainEntry). */
+export type BlockHeader = Pick<Block, 'hash' | 'timestamp' | 'bits' | 'isProofOfStake'>;
+
+/**
+ * A known block (active chain or side branch) in the in-memory block tree: its header data and
+ * place in the tree, not its transactions, which stay in the block files (TASK-0053).
+ */
+export class ChainEntry {
+	isInvalid = false; // failed full validation; descendants are rejected
+
+	constructor(
+		readonly hash: string,
+		readonly previousHash: string,
+		readonly height: number,
+		readonly timestamp: number,
+		readonly bits: number,
+		private readonly _proofOfStake: boolean,
+		readonly work: bigint, // cumulative chain work up to and including this block
+		readonly tieBreak: string, // fork choice between equal work (Blockchain._tieBreak)
+	) {}
+
+	isProofOfStake(): boolean {
+		return this._proofOfStake;
+	}
+
+	isProofOfWork(): boolean {
+		return !this._proofOfStake;
+	}
+
+	/** The entry for `block`, whose parent's entry is `parent` (none for genesis). */
+	static of(block: Block, parent: ChainEntry | undefined): ChainEntry {
+		const work = (parent?.work ?? 0n) + block.work();
+		const tieBreak = Blockchain.tieBreak(block);
+		return new ChainEntry(
+			block.hash,
+			parent?.hash ?? block.previousHash, // the parent's string: one copy per hash in memory
+			block.index,
+			block.timestamp,
+			block.bits,
+			block.isProofOfStake(),
+			work,
+			tieBreak === block.hash ? block.hash : tieBreak,
+		);
+	}
 }
 
 /** Chain state a block is validated against; `utxos` advances as blocks connect. */
 interface ConnectContext {
-	prevBlocks: Block[]; // chain up to and including the parent block
+	prevBlocks: readonly BlockHeader[]; // chain up to and including the parent block
 	utxos: UtxoSet;
 	modifiers: string[]; // stake modifier after each block in prevBlocks
 }
@@ -93,10 +131,11 @@ interface ConnectContext {
 export class Blockchain {
 	private _lock: Mutex = new Mutex();
 
-	private chain: Block[];
+	private chain: ChainEntry[]; // the active chain, genesis first
+	private _tipBlock: Block; // the active tip with its transactions (the others are read from disk)
 	private _utxos = new UtxoSet();
 	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
-	private _index = new Map<string, IndexEntry>(); // every known block, by hash
+	private _index = new Map<string, ChainEntry>(); // every known block, by hash
 	// The state of the active chain on disk (TASK-0053): the UTXO set, undo data, stake modifiers,
 	// the txid index and address histories, written as each block connects or disconnects
 	private _db: ChainDb;
@@ -127,18 +166,15 @@ export class Blockchain {
 		this.blockStore = new BlockStore(this._options.blocksDir);
 		this._db = this._openDb();
 		const genesisBlock = this.createGenesisBlock();
-		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
-		this.chain = [genesisBlock];
+		const genesis = ChainEntry.of(genesisBlock, undefined);
+		genesisBlock.cumulativeWeight = genesis.work;
+		this.chain = [genesis];
+		this._tipBlock = genesisBlock;
 		this._mempool = new Mempool(this._options.maxMempoolBytes);
 
 		// Initialize UTXO set and block index with the genesis block
 		this._utxos.addOutputs(genesisBlock.transactions[0], 0, genesisBlock.timestamp);
-		this._index.set(genesisBlock.hash, {
-			block: genesisBlock,
-			height: 0,
-			work: genesisBlock.cumulativeWeight,
-			isInvalid: false,
-		});
+		this._index.set(genesis.hash, genesis);
 
 		// Load the rest of the blockchain, then the transactions that were pending at shutdown
 		this.loadBlockchain();
@@ -159,7 +195,36 @@ export class Blockchain {
 	}
 
 	getChainWeight(): bigint {
-		return this.getLatestBlock().cumulativeWeight;
+		return this._tip.work;
+	}
+
+	private get _tip(): ChainEntry {
+		return this.chain[this.chain.length - 1];
+	}
+
+	/** Height of the active tip. */
+	public getHeight(): number {
+		return this.chain.length - 1;
+	}
+
+	/** Header data of the active block at `height`. */
+	public getHeader(height: number): ChainEntry | undefined {
+		return this.chain[height];
+	}
+
+	/** The active block at `height`, read from the block files. */
+	public getBlockAt(height: number): Block | undefined {
+		const entry = this.chain[height];
+		return entry && this._readBlock(entry);
+	}
+
+	/** A stored block with its transactions; its cumulative work comes from its entry. */
+	private _readBlock(entry: ChainEntry): Block {
+		if (entry.hash === this._tipBlock.hash) return this._tipBlock;
+		const block = this.blockStore.getBlock(entry.hash);
+		if (!block) throw new StorageError(`block ${entry.height} (${entry.hash.slice(0, 16)}) is missing from the block files`);
+		block.cumulativeWeight = entry.work;
+		return block;
 	}
 
 	public getUTXOs(address: string): UTXO[] {
@@ -521,7 +586,8 @@ export class Blockchain {
 		) {
 			throw new Error('genesis block hash mismatch');
 		}
-		const ctx: ConnectContext = { prevBlocks: blocks.slice(0, 1), utxos: new UtxoSet(), modifiers: [GENESIS_STAKE_MODIFIER] };
+		const prevBlocks = blocks.slice(0, 1);
+		const ctx: ConnectContext = { prevBlocks, utxos: new UtxoSet(), modifiers: [GENESIS_STAKE_MODIFIER] };
 		const undo: UTXO[][] = [[]];
 		ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
 		for (let i = 1; i < blocks.length; i++) {
@@ -532,7 +598,7 @@ export class Blockchain {
 			} catch (error) {
 				throw Object.assign(new Error(`block ${i}: ${(error as Error).message}`), { height: i });
 			}
-			ctx.prevBlocks.push(blocks[i]);
+			prevBlocks.push(blocks[i]);
 		}
 		return { utxos: ctx.utxos, modifiers: ctx.modifiers, undo };
 	}
@@ -543,18 +609,17 @@ export class Blockchain {
 	 * block files (blocks of a branch being activated were stored when they arrived). If storing
 	 * or writing fails, the in-memory state is put back and a StorageError is thrown.
 	 */
-	private _connectTip(block: Block, store = false): void {
+	private _connectTip(block: Block, entry: ChainEntry, store = false): void {
 		const height = this.chain.length;
 		const { modifier, undo, created } = this._connectBlock(block, {
 			prevBlocks: this.chain,
 			utxos: this._utxos,
 			modifiers: this._modifiers,
 		});
-		const work = this.getLatestBlock().cumulativeWeight + Blockchain.blockWeight(block);
 		try {
 			if (store) {
 				this.blockStore.appendBlock(block);
-				this._db.addBlock(this._record(block, work));
+				this._db.addBlock(this._record(block, entry.work));
 			}
 			const txids = block.transactions.map((tx) => tx.calculateHash());
 			this._db.connect({ hash: block.hash, height, modifier, spent: undo, created, txids, flows: addressFlows(block, undo, txids) });
@@ -563,9 +628,10 @@ export class Blockchain {
 			for (const utxo of undo) this._utxos.add(utxo);
 			throw new StorageError(`could not store block ${block.index}: ${(error as Error).message}`, { cause: error });
 		}
-		block.cumulativeWeight = work;
+		block.cumulativeWeight = entry.work;
 		this._modifiers.push(modifier);
-		this.chain.push(block);
+		this.chain.push(entry);
+		this._tipBlock = block;
 		this.lastBlockTime = block.timestamp;
 		this._connectedAtStartup++;
 	}
@@ -581,7 +647,7 @@ export class Blockchain {
 			bits: block.bits,
 			isProofOfStake: block.isProofOfStake(),
 			work,
-			tieBreak: Blockchain._tieBreak(block),
+			tieBreak: Blockchain.tieBreak(block),
 			producer: producer?.address ?? '',
 			txCount: block.transactions.length,
 			size: block.size(),
@@ -674,40 +740,34 @@ export class Blockchain {
 				if (output.amount > 0n) created.push({ txHash, outputIndex });
 			});
 		}
+		const parent = this._readBlock(this.chain[this.chain.length - 2]);
 		const spent = this._db.disconnect(block.hash, this.chain.length - 1, created);
 		this.chain.pop();
 		this._modifiers.pop();
+		this._tipBlock = parent;
 		for (const { txHash, outputIndex } of created) this._utxos.remove(txHash, outputIndex);
 		for (const utxo of spent) this._utxos.add(utxo);
 		return block;
 	}
 
-	private _isActive(entry: IndexEntry): boolean {
-		return this.chain[entry.height]?.hash === entry.block.hash;
+	private _isActive(entry: ChainEntry): boolean {
+		return this.chain[entry.height] === entry;
 	}
 
-	/** Blocks from genesis up to and including `entry`, following parent links. */
-	private _branchTo(entry: IndexEntry, index: Map<string, IndexEntry> = this._index): Block[] {
-		const branch: Block[] = [];
-		for (let e: IndexEntry | undefined = entry; e; e = index.get(e.block.previousHash)) {
-			branch.unshift(e.block);
+	/** Entries from genesis up to and including `entry`, following parent links. */
+	private _branchTo(entry: ChainEntry, index: Map<string, ChainEntry> = this._index): ChainEntry[] {
+		const branch: ChainEntry[] = [];
+		for (let e: ChainEntry | undefined = entry; e; e = index.get(e.previousHash)) {
+			branch.push(e);
 			if (e.height === 0) break;
 		}
-		return branch;
+		return branch.reverse();
 	}
 
 	/** Whether `entry` or an ancestor below the fork with the active chain is invalid. */
-	private _branchIsInvalid(entry: IndexEntry): boolean {
-		for (let e: IndexEntry | undefined = entry; e && !this._isActive(e); e = this._index.get(e.block.previousHash)) {
+	private _branchIsInvalid(entry: ChainEntry): boolean {
+		for (let e: ChainEntry | undefined = entry; e && !this._isActive(e); e = this._index.get(e.previousHash)) {
 			if (e.isInvalid) return true;
-		}
-		return false;
-	}
-
-	private _hasInvalidAncestor(entry: IndexEntry, index: Map<string, IndexEntry>): boolean {
-		for (let e: IndexEntry | undefined = entry; e; e = index.get(e.block.previousHash)) {
-			if (e.isInvalid) return true;
-			if (e.height === 0) break;
 		}
 		return false;
 	}
@@ -732,50 +792,50 @@ export class Blockchain {
 	 * branch block is invalid it is marked so (in the database too), and the valid part before
 	 * it stays active if it beats the chain it replaced; otherwise the previous chain is restored.
 	 */
-	private _activateBranch(target: IndexEntry): void {
-		const branch: Block[] = [];
-		let fork: IndexEntry = target;
+	private _activateBranch(target: ChainEntry): void {
+		const branch: ChainEntry[] = [];
+		let fork: ChainEntry = target;
 		while (!this._isActive(fork)) {
-			branch.unshift(fork.block);
-			fork = this._index.get(fork.block.previousHash)!;
+			branch.push(fork);
+			fork = this._index.get(fork.previousHash)!;
 		}
+		branch.reverse();
 
 		const disconnected: Block[] = [];
 		while (this.chain.length - 1 > fork.height) disconnected.unshift(this._disconnectTip());
 
 		let connected = 0;
 		try {
-			for (const block of branch) {
-				this._connectTip(block);
+			for (const entry of branch) {
+				this._connectTip(this._readBlock(entry), entry);
 				connected++;
 			}
 		} catch (error) {
 			const failed = branch[connected];
 			const isInvalid = !(error instanceof StorageError);
 			if (isInvalid) {
-				this._index.get(failed.hash)!.isInvalid = true;
+				failed.isInvalid = true;
 				this._db.markInvalid(failed.hash);
 			}
 			// The valid part of the branch stays if it beats the chain it replaced (fork choice)
 			const replaced = disconnected.length > 0 ? this._index.get(disconnected[disconnected.length - 1].hash)! : fork;
-			const reached = this._index.get(this.getLatestBlock().hash)!;
-			if (isInvalid && connected > 0 && Blockchain._isBetter(reached, replaced)) {
-				this._reorganized(fork, disconnected, connected, reached.block);
+			if (isInvalid && connected > 0 && Blockchain._isBetter(this._tip, replaced)) {
+				this._reorganized(fork, disconnected, connected, this._tip);
 			} else {
 				for (let i = 0; i < connected; i++) this._disconnectTip();
-				for (const block of disconnected) this._connectTip(block); // known valid
+				for (const block of disconnected) this._connectTip(block, this._index.get(block.hash)!); // known valid
 			}
 			const reason = (error as Error).message;
-			throw Object.assign(new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`, { cause: error }), {
-				height: failed.index,
+			throw Object.assign(new Error(failed === target ? reason : `block ${failed.height}: ${reason}`, { cause: error }), {
+				height: failed.height,
 				reason,
 			});
 		}
-		this._reorganized(fork, disconnected, branch.length, target.block);
+		this._reorganized(fork, disconnected, branch.length, target);
 	}
 
 	/** After a branch became active: log a reorganization, re-admit the disconnected transactions. */
-	private _reorganized(fork: IndexEntry, disconnected: Block[], connected: number, tip: Block): void {
+	private _reorganized(fork: ChainEntry, disconnected: Block[], connected: number, tip: ChainEntry): void {
 		if (disconnected.length > 0) {
 			log.info(
 				`reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
@@ -786,7 +846,7 @@ export class Blockchain {
 	}
 
 	/** Checks for a block stored on a side branch; full validation happens if it becomes active. */
-	private _checkSideBlock(block: Block, parent: IndexEntry): void {
+	private _checkSideBlock(block: Block, parent: ChainEntry): void {
 		const height = parent.height + 1;
 		if (block.transactions.length > MAX_BLOCK_TRANSACTIONS) {
 			throw new Error('block exceeds maximum transaction count');
@@ -830,31 +890,20 @@ export class Blockchain {
 			throw new Error(`incorrect block index: expected ${parent.height + 1}, got ${block.index}`);
 		}
 
-		if (block.previousHash === this.getLatestBlock().hash) {
-			this._connectTip(block, true);
-			this._index.set(block.hash, {
-				block,
-				height: block.index,
-				work: block.cumulativeWeight,
-				isInvalid: false,
-			});
+		const entry = ChainEntry.of(block, parent);
+		if (parent === this._tip) {
+			this._connectTip(block, entry, true);
+			this._index.set(block.hash, entry);
 			this._readmitTransactions();
 			return 'connected';
 		}
 
 		this._checkSideBlock(block, parent);
-		const entry: IndexEntry = {
-			block,
-			height: block.index,
-			work: parent.work + Blockchain.blockWeight(block),
-			isInvalid: false,
-		};
 		block.cumulativeWeight = entry.work;
 		this.blockStore.appendBlock(block);
 		this._db.addBlock(this._record(block, entry.work));
 		this._index.set(block.hash, entry);
-		const tip = this._index.get(this.getLatestBlock().hash)!;
-		if (!Blockchain._isBetter(entry, tip)) {
+		if (!Blockchain._isBetter(entry, this._tip)) {
 			return 'side';
 		}
 		this._activateBranch(entry);
@@ -866,11 +915,10 @@ export class Blockchain {
 	 * so all nodes converge on the same branch (first-seen would leave simultaneous stakers
 	 * split), and the block hash decides only between blocks with the same value.
 	 */
-	private static _isBetter(a: { work: bigint; block: Block }, b: { work: bigint; block: Block }): boolean {
+	private static _isBetter(a: ChainEntry, b: ChainEntry): boolean {
 		if (a.work !== b.work) return a.work > b.work;
-		const [tieA, tieB] = [Blockchain._tieBreak(a.block), Blockchain._tieBreak(b.block)];
-		if (tieA !== tieB) return tieA < tieB;
-		return a.block.hash < b.block.hash;
+		if (a.tieBreak !== b.tieBreak) return a.tieBreak < b.tieBreak;
+		return a.hash < b.hash;
 	}
 
 	/**
@@ -878,7 +926,7 @@ export class Blockchain {
 	 * (the proof itself: a lower one costs more work). PoS: derived from the parent and the
 	 * kernel outpoint only (stakeTieBreak); its hash could be ground by varying transactions.
 	 */
-	private static _tieBreak(block: Block): string {
+	static tieBreak(block: Block): string {
 		if (!block.isProofOfStake()) return block.hash;
 		const kernel = block.transactions[1].inputs[0];
 		return stakeTieBreak(block.previousHash, kernel.previousTx, kernel.outputIndex);
@@ -892,7 +940,17 @@ export class Blockchain {
 	/** A known block by hash, with its height and whether it is on the active chain. */
 	public getBlockByHash(hash: string): { block: Block; height: number; isActive: boolean } | undefined {
 		const entry = this._index.get(hash);
-		return entry && { block: entry.block, height: entry.height, isActive: this._isActive(entry) };
+		return entry && { block: this._readBlock(entry), height: entry.height, isActive: this._isActive(entry) };
+	}
+
+	/** A pending transaction by txid. */
+	public getPendingTransaction(txid: string): Transaction | undefined {
+		return this._mempool.get(txid)?.transaction;
+	}
+
+	/** Whether a transaction is in the mempool or on the active chain (no block is read). */
+	public hasTransaction(txid: string): boolean {
+		return this._mempool.get(txid) !== undefined || this._db.findTransaction(txid) !== undefined;
 	}
 
 	/** A transaction on the active chain (with its block) or in the mempool (block null). */
@@ -901,7 +959,7 @@ export class Blockchain {
 		if (pending) return { transaction: pending.transaction, block: null };
 		const location = this._db.findTransaction(txid);
 		if (!location) return undefined;
-		const block = this.chain[location.height];
+		const block = this.getBlockAt(location.height);
 		const transaction = block?.transactions[location.position];
 		return block && transaction ? { transaction, block } : undefined;
 	}
@@ -934,7 +992,7 @@ export class Blockchain {
 				break;
 			}
 		}
-		return this.chain.slice(start, start + max);
+		return this.chain.slice(start, start + max).map((entry) => this._readBlock(entry));
 	}
 
 	/** Add a block (mined, staked or received): extends the tip, a side branch, or reorganizes. */
@@ -965,8 +1023,9 @@ export class Blockchain {
 		return new Block(GENESIS_TIMESTAMP, [coinbase], NULL_HASH, 0, POW_LIMIT_BITS, 0);
 	}
 
+	/** The active tip, with its transactions. */
 	getLatestBlock(): Block {
-		return this.chain[this.chain.length - 1];
+		return this._tipBlock;
 	}
 
 	public getBalance(address: string): bigint {
@@ -1214,12 +1273,9 @@ export class Blockchain {
 
 	/** The newest block on the active chain staked by one of `addresses`, looking back at most `depth` blocks. */
 	public findLastStakedBlock(addresses: readonly string[], depth = 10_000): Block | undefined {
-		const stakers = new Set(addresses);
-		for (let height = this.chain.length - 1; height > 0 && height >= this.chain.length - depth; height--) {
-			const block = this.chain[height];
-			if (block.isProofOfStake() && stakers.has(block.transactions[1].outputs[1]?.address)) return block;
-		}
-		return undefined;
+		const hash = this._db.lastStakedBy(addresses, Math.max(1, this.chain.length - depth));
+		const entry = hash === undefined ? undefined : this._index.get(hash);
+		return entry && this._readBlock(entry);
 	}
 
 	/** Current stake modifier (after the tip); exposed for tests and tooling. */
@@ -1288,7 +1344,7 @@ export class Blockchain {
 
 	isChainValid(): boolean {
 		try {
-			this._replayChain(this.chain);
+			this._replayChain(this.getChain());
 			return true;
 		} catch (error) {
 			log.warn(`chain invalid: ${(error as Error).message}`);
@@ -1296,8 +1352,9 @@ export class Blockchain {
 		}
 	}
 
+	/** Every active block, read from the block files: for tests and tools, not the node (it is O(chain)). */
 	getChain(): Block[] {
-		return this.chain;
+		return this.chain.map((entry) => this._readBlock(entry));
 	}
 
 	/** Serialized size of all pending transactions (bounded by maxMempoolBytes). */
@@ -1315,37 +1372,22 @@ export class Blockchain {
 	}
 
 	/**
-	 * Load the block tree from the block files and the active chain's state from the chain
-	 * database, then activate the best valid branch the way blocks from peers are: blocks stored
-	 * after the database's tip (a stop between the two writes) are validated and connected. A
-	 * database built by another version or under other rules, or out of line with the block
-	 * files, is rebuilt from genesis, as with --reindex: every stored block is validated again.
+	 * Load the block tree and the active chain's state from the chain database, then activate the
+	 * best valid branch the way blocks from peers are: blocks stored after the database's tip (a
+	 * stop between the two writes) are validated and connected. A database built by another
+	 * version or under other rules, or out of line with the block files, is rebuilt from them, as
+	 * with --reindex: every stored block is read and validated again. Otherwise no block is read
+	 * but the tip (TASK-0053).
 	 */
 	private loadBlockchain(): void {
 		try {
 			const genesis = this.chain[0];
-			let stored = this.blockStore.loadAllBlocks();
+			const stored = this.blockStore.hashes();
 			if (stored.length === 0) {
-				this.blockStore.appendBlock(genesis);
-				stored = [genesis];
-			}
-			if (stored[0].hash !== genesis.hash || stored[0].calculateHash() !== genesis.hash) {
+				this.blockStore.appendBlock(this._tipBlock);
+			} else if (stored[0] !== genesis.hash || this.blockStore.getBlock(stored[0])?.calculateHash() !== genesis.hash) {
 				throw new Error('invalid stored chain: genesis block hash mismatch');
 			}
-
-			// The block tree; parents are always stored before their children
-			const index = new Map<string, IndexEntry>([[genesis.hash, this._index.get(genesis.hash)!]]);
-			for (const block of stored.slice(1)) {
-				const parent = index.get(block.previousHash);
-				if (!parent || index.has(block.hash) || block.hash !== block.calculateHash()) {
-					log.warn(`skipping unusable stored block ${block.hash.slice(0, 16)}`);
-					continue;
-				}
-				const work = parent.work + Blockchain.blockWeight(block);
-				block.cumulativeWeight = work;
-				index.set(block.hash, { block, height: parent.height + 1, work, isInvalid: false });
-			}
-			this._index = index;
 
 			const dbHeight = this._loadState();
 			this._connectedAtStartup = 0;
@@ -1363,70 +1405,117 @@ export class Blockchain {
 	}
 
 	/**
-	 * Take the active chain's state from the chain database if it holds for the stored blocks and
-	 * this node's rules, else empty the database and start from genesis. Every stored block gets
-	 * a record in the database; blocks it knows to be invalid are marked so. Returns the height
-	 * the database was at, or null when it starts over.
+	 * Take the block tree and the active chain's state from the chain database if it holds for
+	 * the stored blocks and this node's rules; else empty the database, record every stored block
+	 * again and start from genesis. Returns the height the database was at, or null when it
+	 * starts over.
 	 */
 	private _loadState(): number | null {
+		const genesisBlock = this._tipBlock;
 		const genesis = this.chain[0];
 		const described = this._db.describe();
 		const { powCutoffBlock, minStakeAge } = this._rules;
-		const tip = described ? this._db.tip() : null;
-		const tipEntry = tip ? this._index.get(tip.hash) : undefined;
 		let reason: string | undefined;
 		if (this._options.reindex) reason = '--reindex';
 		else if (!described) reason = 'new';
 		else if (described.version !== CHAIN_DB_VERSION) reason = `it is from another version (${described.version})`;
 		else if (described.rules.powCutoffBlock !== powCutoffBlock || described.rules.minStakeAge !== minStakeAge) {
 			reason = `it was built under other consensus rules (PoW until block ${described.rules.powCutoffBlock}, stake age ${described.rules.minStakeAge} s)`;
-		} else if (!tipEntry) reason = 'its tip is not among the stored blocks';
+		} else {
+			reason = this._loadTree();
+		}
 
-		let dbHeight: number | null = null;
 		if (!reason) {
-			const branch = this._branchTo(tipEntry!);
+			const tip = this._db.tip();
+			const tipEntry = tip ? this._index.get(tip.hash) : undefined;
+			const branch = tipEntry ? this._branchTo(tipEntry) : [];
 			const modifiers = this._db.activeModifiers();
-			if (modifiers.length === branch.length) {
+			if (!tipEntry) reason = 'its tip is not among the stored blocks';
+			else if (modifiers.length !== branch.length) reason = 'its active chain is incomplete';
+			else {
 				this.chain = branch;
 				this._modifiers = modifiers;
 				this._utxos = new UtxoSet();
 				for (const utxo of this._db.loadUtxos()) this._utxos.add(utxo);
-				dbHeight = branch.length - 1;
-			} else {
-				reason = 'its active chain is incomplete';
+				this._tipBlock = this._readBlock(tipEntry);
+				return branch.length - 1;
 			}
 		}
-		if (dbHeight === null) {
-			if (reason === 'new') log.info('building the chain database from the stored blocks');
-			else if (reason === '--reindex') log.info('rebuilding the chain database from the stored blocks (--reindex)');
-			else log.warn(`rebuilding the chain database: ${reason}`);
-			this._db.reset(this._rules);
-			this._removeOldChainstate();
-			this._db.addBlock(this._record(genesis, genesis.cumulativeWeight));
-			this._utxos = new UtxoSet();
-			this._utxos.addOutputs(genesis.transactions[0], 0, genesis.timestamp);
-			const txids = genesis.transactions.map((tx) => tx.calculateHash());
-			this._db.connect({
-				hash: genesis.hash,
-				height: 0,
-				modifier: GENESIS_STAKE_MODIFIER,
-				spent: [],
-				created: this._utxos.all(),
-				txids,
-				flows: addressFlows(genesis, [], txids),
-			});
-			this.chain = [genesis];
-			this._modifiers = [GENESIS_STAKE_MODIFIER];
-		}
 
-		// Every stored block is in the database's block tree; invalid marks come back from it
-		const known = new Map(this._db.loadBlocks().map((record) => [record.hash, record.status]));
-		for (const entry of [...this._index.values()].sort((a, b) => a.height - b.height)) {
-			const status = known.get(entry.block.hash);
-			if (status === undefined) this._db.addBlock(this._record(entry.block, entry.work));
-			else if (status === BlockStatus.Invalid) entry.isInvalid = true;
+		if (reason === 'new') log.info('building the chain database from the stored blocks');
+		else if (reason === '--reindex') log.info('rebuilding the chain database from the stored blocks (--reindex)');
+		else log.warn(`rebuilding the chain database: ${reason}`);
+		this._db.reset(this._rules);
+		this._removeOldChainstate();
+		this._index = new Map([[genesis.hash, genesis]]);
+		this._db.addBlock(this._record(genesisBlock, genesis.work));
+		for (const hash of this.blockStore.hashes().slice(1)) this._addStoredBlock(hash);
+		this._utxos = new UtxoSet();
+		this._utxos.addOutputs(genesisBlock.transactions[0], 0, genesisBlock.timestamp);
+		const txids = genesisBlock.transactions.map((tx) => tx.calculateHash());
+		this._db.connect({
+			hash: genesis.hash,
+			height: 0,
+			modifier: GENESIS_STAKE_MODIFIER,
+			spent: [],
+			created: this._utxos.all(),
+			txids,
+			flows: addressFlows(genesisBlock, [], txids),
+		});
+		this.chain = [genesis];
+		this._tipBlock = genesisBlock;
+		this._modifiers = [GENESIS_STAKE_MODIFIER];
+		return null;
+	}
+
+	/**
+	 * The block tree from the database's records (parents first), with the invalid marks, plus
+	 * stored blocks it has no record of yet (a stop between the two writes of a new block).
+	 * Returns why the database can't be used, if it is out of line with the block files.
+	 */
+	private _loadTree(): string | undefined {
+		const genesis = this.chain[0];
+		const stored = new Set(this.blockStore.hashes());
+		this._index = new Map([[genesis.hash, genesis]]);
+		for (const record of this._db.loadBlocks()) {
+			if (record.height === 0) {
+				if (record.hash !== genesis.hash) return 'its genesis block is another';
+				continue;
+			}
+			const parent = this._index.get(record.previousHash);
+			if (!parent || !stored.has(record.hash)) {
+				if (record.status === BlockStatus.Active) return `active block ${record.height} is missing from the block files`;
+				continue; // a side block whose data is gone: forget it
+			}
+			const entry = new ChainEntry(
+				record.hash,
+				parent.hash,
+				record.height,
+				record.timestamp,
+				record.bits,
+				record.isProofOfStake,
+				record.work,
+				record.tieBreak === record.hash ? record.hash : record.tieBreak,
+			);
+			entry.isInvalid = record.status === BlockStatus.Invalid;
+			this._index.set(entry.hash, entry);
 		}
-		return dbHeight;
+		for (const hash of stored) this._addStoredBlock(hash);
+		return undefined;
+	}
+
+	/** Add a stored block the tree doesn't have yet (read from the block files) and record it. */
+	private _addStoredBlock(hash: string): void {
+		if (this._index.has(hash)) return; // known, or stored twice
+		const block = this.blockStore.getBlock(hash);
+		const parent = block && this._index.get(block.previousHash);
+		if (!block || !parent || block.hash !== block.calculateHash() || block.index !== parent.height + 1) {
+			log.warn(`skipping unusable stored block ${hash.slice(0, 16)}`);
+			return;
+		}
+		const entry = ChainEntry.of(block, parent);
+		this._db.addBlock(this._record(block, entry.work));
+		this._index.set(hash, entry);
 	}
 
 	/** chainstate.json (before TASK-0053) is replaced by the chain database. */
@@ -1445,15 +1534,15 @@ export class Blockchain {
 		for (;;) {
 			// One pass in height order: a block is out if it or an ancestor is invalid
 			const out = new Set<string>();
-			let best = this._index.get(this.getLatestBlock().hash)!;
+			let best = this._tip;
 			for (const entry of [...this._index.values()].sort((a, b) => a.height - b.height)) {
-				if (entry.isInvalid || out.has(entry.block.previousHash)) {
-					out.add(entry.block.hash);
+				if (entry.isInvalid || out.has(entry.previousHash)) {
+					out.add(entry.hash);
 					continue;
 				}
 				if (Blockchain._isBetter(entry, best)) best = entry;
 			}
-			if (best.block.hash === this.getLatestBlock().hash) return;
+			if (best === this._tip) return;
 			try {
 				this._activateBranch(best);
 			} catch (error) {
@@ -1468,7 +1557,7 @@ export class Blockchain {
 		return this.getMedianTimePastForChain(this.chain, this.chain.length - 1);
 	}
 
-	private getMedianTimePastForChain(chain: Block[], upToIndex: number): number {
+	private getMedianTimePastForChain(chain: readonly { timestamp: number }[], upToIndex: number): number {
 		const count = Math.min(upToIndex + 1, MEDIAN_TIME_SPAN);
 		const startIndex = upToIndex + 1 - count;
 		const timestamps: number[] = [];

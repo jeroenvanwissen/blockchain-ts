@@ -96,6 +96,20 @@ describe('Chain database', () => {
 		expectConsistent(reopened);
 	});
 
+	it('should start without reading the stored blocks: only genesis (to check it) and the tip', async () => {
+		const chain = await chainWithPayments();
+		chain.close();
+		const reads = jest.spyOn(BlockStore.prototype, 'getBlock');
+		const loads = jest.spyOn(BlockStore.prototype, 'loadAllBlocks');
+
+		const { chain: reopened } = reopen();
+
+		const read = reads.mock.calls.map(([hash]) => hash);
+		expect(loads).not.toHaveBeenCalled();
+		expect(read).toEqual([reopened.getHeader(0)!.hash, reopened.getLatestBlock().hash]);
+		expect(reopened.getHeight()).toBe(chain.getHeight());
+	});
+
 	it('should validate and connect a block stored after the database\'s tip (a stop between the two writes)', async () => {
 		const chain = await chainWithPayments();
 		advanceTime(SPACING);

@@ -320,10 +320,15 @@ export class ApiServer {
 	private _walletTransactions(query: URLSearchParams) {
 		const addresses = this._wallet().addresses();
 		const history = this._blockchain.getWalletHistory(addresses);
-		const chain = this._blockchain.getChain();
+		const blocks = new Map<number, Block>(); // read from the block files, once per page
+		const blockAt = (height: number) => {
+			let block = blocks.get(height);
+			if (!block) blocks.set(height, (block = this._blockchain.getBlockAt(height)!));
+			return block;
+		};
 		const transactions = historyPage(query, history.length).map((i) => {
 			const entry = history[i];
-			const block = chain[entry.height];
+			const block = blockAt(entry.height);
 			const tx = block.transactions[entry.indexInBlock];
 			const confirmations = this._confirmations(entry.height);
 			return {
@@ -499,10 +504,9 @@ export class ApiServer {
 		if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_BLOCK_LIST) {
 			throw new HttpError(400, `limit must be 1 to ${MAX_BLOCK_LIST}`);
 		}
-		const chain = this._blockchain.getChain();
 		const blocks = [];
 		for (let height = Math.min(Number(before), tip + 1) - 1; height >= 0 && blocks.length < Number(limit); height--) {
-			const block = chain[height];
+			const block = this._blockchain.getBlockAt(height)!;
 			blocks.push({
 				height,
 				hash: block.hash,
@@ -519,7 +523,7 @@ export class ApiServer {
 	private _block(id: string) {
 		let found: { block: Block; height: number; isActive: boolean } | undefined;
 		if (HEIGHT_PATTERN.test(id)) {
-			const block = this._blockchain.getChain()[Number(id)];
+			const block = this._blockchain.getBlockAt(Number(id));
 			found = block && { block, height: Number(id), isActive: true };
 		} else if (HASH_PATTERN.test(id)) {
 			found = this._blockchain.getBlockByHash(id);
@@ -528,7 +532,7 @@ export class ApiServer {
 		}
 		if (!found) throw new HttpError(404, 'block not found');
 		const { block } = found;
-		const next = found.isActive ? this._blockchain.getChain()[found.height + 1] : undefined;
+		const next = found.isActive ? this._blockchain.getHeader(found.height + 1) : undefined;
 		return {
 			...block.toJSON(),
 			transactions: block.transactions.map((tx) => ({ txid: tx.calculateHash(), ...tx.toJSON() })),
@@ -605,14 +609,13 @@ export class ApiServer {
 	private _addressTransactions(address: string, query: URLSearchParams) {
 		this._checkAddress(address);
 		const history = this._blockchain.getAddressHistory(address);
-		const chain = this._blockchain.getChain();
 		const transactions = historyPage(query, history.length).map((i) => {
 			const entry = history[i];
 			return {
 				position: i,
 				txid: entry.txid,
 				height: entry.height,
-				timestamp: chain[entry.height].timestamp,
+				timestamp: this._blockchain.getHeader(entry.height)!.timestamp,
 				confirmations: this._confirmations(entry.height),
 				received: entry.received.toString(),
 				sent: entry.sent.toString(),

@@ -9,7 +9,10 @@ import {
 import { bitsToTarget, targetToBits } from './target.js';
 
 /** Index of the last block at or below `from` of the given type; 0 (genesis) if none. */
-function lastOfType(chain: readonly Block[], from: number, proofOfStake: boolean): number {
+/** What the retarget reads of a block: a Block or an in-memory header entry. */
+type RetargetHeader = Pick<Block, 'timestamp' | 'bits' | 'isProofOfStake'>;
+
+function lastOfType(chain: readonly RetargetHeader[], from: number, proofOfStake: boolean): number {
 	for (let i = from; i > 0; i--) {
 		if (chain[i].isProofOfStake() === proofOfStake) return i;
 	}
@@ -24,7 +27,7 @@ function lastOfType(chain: readonly Block[], from: number, proofOfStake: boolean
  * capped at MAX_RETARGET_SPACING). PoW and PoS retarget independently, each capped at its
  * limit. Reads only header data (timestamps, bits, type) of chain[0..height-1].
  */
-export function requiredBits(chain: readonly Block[], height: number, proofOfStake: boolean): number {
+export function requiredBits(chain: readonly RetargetHeader[], height: number, proofOfStake: boolean): number {
 	const limit = proofOfStake ? POS_LIMIT : POW_LIMIT;
 	const prev = lastOfType(chain, height - 1, proofOfStake);
 	if (prev === 0) return targetToBits(limit); // no earlier block of this type

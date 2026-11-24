@@ -14,6 +14,8 @@ import {
 	MAX_BLOCK_TRANSACTIONS,
 } from '../../config.js';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const coins = (n: number): bigint => BigInt(n) * COIN;
 // What the setups send from one mature 10-coin coinbase, leaving room for the fee
@@ -29,63 +31,33 @@ const testOptions: BlockchainOptions = {
 	minStakeAge: 0,
 	validateDifficulty: false,
 	validateTimestamps: false,
-	dbPath: ':memory:', // fs is mocked; SQLite isn't
 };
 
 // Mock the fs module
-jest.mock('fs');
-
-// Mock protobufjs to prevent real .proto file reads (fs is mocked)
-jest.mock('protobufjs', () => {
-	const mockType = {
-		create: (obj: unknown) => obj,
-		fromObject: (obj: unknown) => obj,
-		encode: (obj: unknown) => ({
-			finish: () => Buffer.from(JSON.stringify(obj)),
-		}),
-		decode: (buf: Buffer) => JSON.parse(buf.toString()) as unknown,
-		verify: () => null,
-		toObject: (obj: unknown) => obj,
-	};
-	return {
-		__esModule: true,
-		default: {
-			parse: () => ({ root: { lookupType: () => mockType } }),
-		},
-	};
-});
-
+// Real files in a temp dir per test: blocks other than the tip are read back from the block
+// files (TASK-0053), so mocking fs would hide them
 describe('Blockchain', () => {
 	let blockchain: Blockchain;
 	let minerWallet: Wallet;
+	let dir: string;
+	let wallets = 0;
+	const options = (extra: BlockchainOptions = {}): BlockchainOptions => ({ ...testOptions, blocksDir: path.join(dir, 'blocks'), ...extra });
+	const newWallet = () => new Wallet(path.join(dir, `wallet-${++wallets}.dat`));
 
 	beforeEach(() => {
-		// Mock fs functions for BlockStore's chunked storage
-		(fs.existsSync as jest.Mock).mockReturnValue(false);
-		(fs.readFileSync as jest.Mock).mockImplementation(() => {
-			const error = new Error('File not found') as NodeJS.ErrnoException;
-			error.code = 'ENOENT';
-			throw error;
-		});
-		(fs.writeFileSync as jest.Mock).mockImplementation(() => {});
-		(fs.mkdirSync as jest.Mock).mockImplementation(() => {});
-		(fs.appendFileSync as jest.Mock).mockImplementation(() => {});
-		(fs.readdirSync as jest.Mock).mockReturnValue([]);
-		(fs.openSync as jest.Mock).mockReturnValue(10);
-		(fs.readSync as jest.Mock).mockReturnValue(0);
-		(fs.closeSync as jest.Mock).mockImplementation(() => {});
-
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blockchain-ts-unit-'));
 		// Set initial time to match genesis block timestamp + 1 day to ensure enough spacing
 		const genesisTime = 1609459200000; // Jan 1, 2021
 		const initialTestTime = genesisTime + 24 * 60 * 60 * 1000; // Start 1 day after genesis
 		jest.useFakeTimers();
 		jest.setSystemTime(new Date(initialTestTime));
-		blockchain = new Blockchain(testOptions);
-		minerWallet = new Wallet();
+		blockchain = new Blockchain(options());
+		minerWallet = newWallet();
 	});
 
 	afterEach(() => {
 		jest.useRealTimers();
+		fs.rmSync(dir, { recursive: true, force: true });
 	});
 
 	// Async helper to mine PoW blocks
@@ -117,7 +89,7 @@ describe('Blockchain', () => {
 
 		it('should take PoW blocks up to the cutoff height and refuse them after it', async () => {
 			const cutoff = 12;
-			blockchain = new Blockchain({ ...testOptions, powCutoffBlock: cutoff });
+			blockchain = new Blockchain(options({ powCutoffBlock: cutoff }));
 			const minerAddr = minerWallet.getAddress();
 			await minePowBlocks(cutoff, minerAddr);
 			expect(blockchain.getChain().slice(1).every((block) => block.isProofOfWork())).toBe(true);
@@ -133,9 +105,9 @@ describe('Blockchain', () => {
 		let receiverWallet2: Wallet;
 
 		beforeEach(async () => {
-			senderWallet = new Wallet();
-			receiverWallet = new Wallet();
-			receiverWallet2 = new Wallet();
+			senderWallet = newWallet();
+			receiverWallet = newWallet();
+			receiverWallet2 = newWallet();
 
 			// Mine enough blocks for coinbase maturity
 			const minerAddr = minerWallet.getAddress();
@@ -434,7 +406,7 @@ describe('Blockchain', () => {
 			// Mine 1 block — coinbase not yet mature
 			await minePowBlocks(1, minerAddr);
 
-			const receiverWallet = new Wallet();
+			const receiverWallet = newWallet();
 
 			// Try to spend — createTransaction should skip immature coinbase UTXOs
 			expect(() => {
@@ -455,7 +427,7 @@ describe('Blockchain', () => {
 			const block1 = blockchain.getChain()[1];
 			const coinbaseTxHash = block1.transactions[0].calculateHash();
 
-			const receiverWallet = new Wallet();
+			const receiverWallet = newWallet();
 			// Manually create a transaction spending the immature coinbase
 			const tx = new Transaction(
 				[{ previousTx: coinbaseTxHash, outputIndex: 0, publicKey: '', signature: '' }],
@@ -472,7 +444,7 @@ describe('Blockchain', () => {
 			// Mine COIN_MATURITY blocks so the first coinbase is mature
 			await minePowBlocks(COIN_MATURITY, minerAddr);
 
-			const receiverWallet = new Wallet();
+			const receiverWallet = newWallet();
 
 			// Should now succeed — coinbase from block 1 is mature
 			const tx = blockchain.createTransaction(
@@ -517,7 +489,7 @@ describe('Blockchain', () => {
 			// Create a transaction
 			const tx1 = blockchain.createTransaction(
 				minerAddr,
-				new Wallet().getAddress(),
+				newWallet().getAddress(),
 				coins(5),
 				minerWallet
 			);
@@ -533,8 +505,8 @@ describe('Blockchain', () => {
 		let receiverWallet: Wallet;
 
 		beforeEach(async () => {
-			senderWallet = new Wallet();
-			receiverWallet = new Wallet();
+			senderWallet = newWallet();
+			receiverWallet = newWallet();
 
 			const minerAddr = minerWallet.getAddress();
 			// Mine enough blocks for coinbase maturity
@@ -834,7 +806,7 @@ describe('Blockchain', () => {
 			await minePowBlocks(COIN_MATURITY, minerAddr);
 
 			// Create a transaction
-			const receiverWallet = new Wallet();
+			const receiverWallet = newWallet();
 			const tx = blockchain.createTransaction(
 				minerAddr,
 				receiverWallet.getAddress(),

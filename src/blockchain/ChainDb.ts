@@ -281,6 +281,15 @@ export class ChainDb {
 		return row ? { hash: hex(row.hash), height: row.height } : null;
 	}
 
+	/** The newest active PoS block at `minHeight` or above that one of `addresses` staked. */
+	lastStakedBy(addresses: readonly string[], minHeight: number): string | undefined {
+		const row = this._statement(
+			`SELECT hash FROM blocks WHERE status = 1 AND pos = 1 AND height >= ? AND producer IN (SELECT value FROM json_each(?))
+			ORDER BY height DESC LIMIT 1`,
+		).get(minHeight, JSON.stringify(addresses)) as { hash: Uint8Array } | undefined;
+		return row && hex(row.hash);
+	}
+
 	/** Stake modifiers after each active block, from genesis on. */
 	activeModifiers(): string[] {
 		const rows = this._statement('SELECT modifier FROM blocks WHERE status = 1 ORDER BY height').all() as { modifier: Uint8Array }[];

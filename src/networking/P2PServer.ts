@@ -482,7 +482,7 @@ export class P2PServer {
 		return {
 			magic: this._networkMagic,
 			version: PROTOCOL_VERSION,
-			genesisHash: this.blockchain.getChain()[0].hash,
+			genesisHash: this.blockchain.getHeader(0)!.hash,
 			height: tip.index,
 			tip: tip.hash,
 			nonce: this._nonce,
@@ -619,7 +619,7 @@ export class P2PServer {
 			if (address) this._addresses.markFailure(address, Date.now());
 			return reject(`protocol version ${data.version}`);
 		}
-		if (data.genesisHash !== this.blockchain.getChain()[0].hash) {
+		if (data.genesisHash !== this.blockchain.getHeader(0)!.hash) {
 			forget();
 			return reject('different genesis block');
 		}
@@ -710,7 +710,7 @@ export class P2PServer {
 	private _requestMissing(socket: WebSocket, txids: string[]): void {
 		const state = this._peerState.get(socket);
 		if (!state) return;
-		const missing = txids.filter((txid) => !this.blockchain.findTransaction(txid));
+		const missing = txids.filter((txid) => !this.blockchain.hasTransaction(txid));
 		if (missing.length === 0) return;
 		state.requested = new Set(missing);
 		this._send(socket, { type: MessageType.GET_TRANSACTIONS, data: { txids: missing } });
@@ -727,8 +727,8 @@ export class P2PServer {
 		if (!state) return;
 		for (const txid of txids) {
 			if (!state.announced.delete(txid)) continue; // never announced, or already sent
-			const found = this.blockchain.findTransaction(txid);
-			if (found && !found.block) this._send(socket, { type: MessageType.TRANSACTION, data: found.transaction });
+			const pending = this.blockchain.getPendingTransaction(txid);
+			if (pending) this._send(socket, { type: MessageType.TRANSACTION, data: pending });
 		}
 	}
 

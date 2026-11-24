@@ -1,6 +1,6 @@
 # TASK-0053: Blocks and undo data on disk, not in memory: memory and chainstate don't grow with the chain
 
-Status: in-progress
+Status: done
 Priority: P1
 Size: large
 Depends on: TASK-0052
@@ -30,14 +30,14 @@ Storage: Node's built-in SQLite (`node:sqlite`), owner's choice (2026-11-24). Th
 ## Steps
 
 1. **`ChainDb`** (done, c66cd51): `blocks/chain.db`, the block tree and, for the active chain, the UTXO set, undo data, stake modifiers, the txid index and address histories; one transaction per connected or disconnected block.
-2. **The database is the chain state** (done): it replaces `chainstate.json` and the in-memory undo data, txid index and address index.
-3. **Headers in memory, blocks on disk**: the block tree from the database, block contents read from the block files when needed; startup reads no blocks.
+2. **The database is the chain state** (done, bff2ca9): it replaces `chainstate.json` and the in-memory undo data, txid index and address index.
+3. **Headers in memory, blocks on disk** (done): the block tree from the database, block contents read from the block files when needed; startup reads no blocks.
 
 ## Acceptance criteria
 
-- [ ] Heap after startup grows with the UTXO set and the block index, not with the size of all blocks: measured at two chain lengths.
-- [ ] The chainstate no longer holds undo data; reorgs read it from disk.
-- [ ] Startup doesn't read every block when a chainstate is present.
+- [x] Heap after startup grows with the UTXO set and the block index, not with the size of all blocks: measured at two chain lengths.
+- [x] The chainstate no longer holds undo data; reorgs read it from disk.
+- [x] Startup doesn't read every block when a chainstate is present.
 
 ## Validation
 
@@ -69,4 +69,43 @@ Storage: Node's built-in SQLite (`node:sqlite`), owner's choice (2026-11-24). Th
   - `npm run smoke` on Node 26 and on Node 22.
   - `npm run e2e` (height 26, 6 PoS blocks), `npm run docker:check`, `npm run network:check`.
   - A regtest data dir written by `main` (07a2e26, with `chainstate.json`) opened by this version: the database was built from its 20 blocks, `chainstate.json` was removed, and the next start began from the database with nothing to validate, at the same height and tip, without warnings.
+
+**Step 3: headers in memory, blocks on disk**
+- **The block tree:** it holds `ChainEntry` objects: hash, parent hash (the parent's string, so each hash is in memory once), height, timestamp, `bits`, type, cumulative work, tie-break and invalid flag. Startup builds it from the database's block records. Blocks in the block files without a record, from a stop between the two writes of a new block, are read and recorded.
+- **Reading blocks:** only the tip block keeps its transactions in memory. Disconnecting reads the new tip from the block files. Activating a branch reads each block as it connects. `getBlockAt`, `getBlockByHash`, `findTransaction` and `getBlocksAfter` read from the files, and `getChain()` reads every active block, for tests and tools only.
+- **New methods:** `getHeight`, `getHeader`, `hasTransaction` and `getPendingTransaction`. `findLastStakedBlock` is a query on the database's producer column instead of a walk through 10,000 blocks' transactions.
+- **Retarget and validation:** `requiredBits`, the median time and validation read only header fields (`BlockHeader`: hash, timestamp, `bits`, type), so entries and blocks both work.
+- **Callers:**
+  - The API reads the blocks of one page: the block list, the block page, and the wallet history, which reads each block once per request. The address page uses header times.
+  - P2P takes the genesis hash from the header, checks announced txids with `hasTransaction`, and serves requested transactions from the mempool.
+- **Tests:**
+  - `Blockchain.test.ts` runs on real files in a temp dir per test instead of mocking `fs` and `protobufjs`.
+  - A new `ChainDatabase.test.ts` test counts block reads during a start: genesis, to check it, and the tip. With startup reading all blocks again, it fails.
+
+## Outcome
+
+Measured at 16,000 blocks, one signed payment per block (`npm run scale`, plus a script that drops one structure at a time from a started node's heap):
+
+| | Before (TASK-0052) | After |
+| --- | --- | --- |
+| Started node's heap | 56 MB | 20.4 MB (9.9 MB at 8,000 blocks) |
+| Heap per block, besides unspent outputs | about 2.9 KB: block contents 1,178 B, block objects, undo data 372 B, address index 412 B, txid index 217 B, stake modifier 88 B | about 475 B: tree entry 176 B, `BlockStore` index 211 B, stake modifier 88 B |
+| Start | 1,155 ms (reads and indexes every block) | 222 ms (reads 2 blocks) |
+| Accepting a block | 0.26 to 0.39 ms | 0.57 to 0.89 ms (one database transaction each) |
+| `--reindex` | about 0.6 s | 11.5 s (one database transaction per block) |
+| On disk | `chainstate.json` | `chain.db`, 22 MB |
+
+At a year of 30-second blocks (about 1,000,000), the per-block part comes to about 475 MB instead of about 2.9 GB, plus the unspent outputs, and the database holds the rest on disk.
+
+**Runs (step 3)**
+- `npm run check`: 38 suites, 395 tests, lint clean.
+- `npm run smoke` on Node 26 and on Node 22.
+- `npm run e2e` (height 27, 7 PoS blocks), `npm run docker:check`, `npm run network:check`.
+- A regtest data dir written by step 2 (`main` at bff2ca9, 20 PoW blocks and 1 staked) opened by this version: `chain database at height 21; validated 0 newer block(s)`, without warnings. The database format is unchanged, so step 2's databases load as they are.
+- Removing the change that keeps startup from reading every block makes the read-count test fail.
+
+- **Rebuilds and sync:** `--reindex`, the first start after this upgrade and syncing a new node pay about 0.7 ms per block for the database, so about 12 minutes at 1,000,000 blocks. Writing many blocks per transaction would cut that.
+- **`BlockStore` index:** its in-memory index (entries plus hash and height maps, 211 B per block) duplicates the tree's hashes. The file positions could live in the tree entries or the database.
+- **Stake modifiers:** they stay in memory as an array (88 B per block), and could come from the database for the few blocks a reorg needs.
+- **Node 22:** it prints one `ExperimentalWarning` for `node:sqlite` at startup; Node 24+ doesn't.
 

@@ -132,6 +132,15 @@ export class BlockStore {
 		return this._entries.length;
 	}
 
+	/** Hashes of the stored blocks, in the order they were stored (parents before children). */
+	hashes(): string[] {
+		return this._entries.map((entry) => entry.hash);
+	}
+
+	has(hash: string): boolean {
+		return this._hashMap.has(hash);
+	}
+
 	/** Rebuild index.dat from the blk*.dat files (a damaged or missing index, an older format). */
 	rebuildIndex(): void {
 		const entries: IndexEntry[] = [];

@@ -77,10 +77,10 @@ async function main(): Promise<void> {
 		console.log(`[scale] ${BLOCKS} blocks, one payment each${gc ? '' : ' (heap without GC: run through npm run scale)'}`);
 		await build(dir, options); // the chain it built is garbage now: the next heap figures are a started node's
 		const [fromState, stateMs] = timed(() => new Blockchain(options));
-		console.log(`[scale] start from the chain database: ${stateMs} ms (height ${fromState.getChain().length - 1}), heap ${heapMb()} MB`);
+		console.log(`[scale] start from the chain database: ${stateMs} ms (height ${fromState.getHeight()}), heap ${heapMb()} MB`);
 		fromState.close();
 		const [reindexed, reindexMs] = timed(() => new Blockchain({ ...options, reindex: true }));
-		console.log(`[scale] start with --reindex: ${reindexMs} ms (height ${reindexed.getChain().length - 1})`);
+		console.log(`[scale] start with --reindex: ${reindexMs} ms (height ${reindexed.getHeight()})`);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
