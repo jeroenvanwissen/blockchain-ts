@@ -16,11 +16,11 @@ import {
 	freePort,
 	lastLines,
 	noLoadErrors,
-	READY,
 	runCli,
 	startNode,
 	stopNode,
 	waitFor,
+	waitListening,
 	walletAddress,
 	type NodeProcess,
 } from './nodeHarness.js';
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 		step(`start mining node A on port ${portA} (data dir ${dataA}, cwd ${cwd})`);
 		let nodeA = startNode('node A', cwd, dataA, portA, ['--mine']);
 		running.push(nodeA);
-		await waitFor(nodeA, READY, 'listening');
+		await waitListening(nodeA, 'listening');
 		noLoadErrors(nodeA);
 		const address = walletAddress(nodeA);
 		await waitFor(nodeA, /mined block 1 \(/, 'mining block 1');
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 		step(`start node B on port ${portB} with --peers ws://127.0.0.1:${portA}; expect sync`);
 		const nodeB = startNode('node B', cwd, dataB, portB, ['--peers', `ws://127.0.0.1:${portA}`]);
 		running.push(nodeB);
-		await waitFor(nodeB, READY, 'listening');
+		await waitListening(nodeB, 'listening');
 		await waitFor(nodeB, /Successfully connected to peer/, 'connecting to node A');
 		const [, syncedHeight, syncedTip] = await waitFor(
 			nodeB,
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
 		const [, lastHeight, lastHash] = minedHeights[minedHeights.length - 1];
 		nodeA = startNode('node A (restart)', cwd, dataA, portA);
 		running.push(nodeA);
-		await waitFor(nodeA, READY, 'listening');
+		await waitListening(nodeA, 'listening');
 		noLoadErrors(nodeA);
 		await waitFor(
 			nodeA,

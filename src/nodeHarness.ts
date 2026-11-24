@@ -74,6 +74,15 @@ export async function waitFor(
 	throw new Error(`${node.name}: timed out waiting for ${what}`);
 }
 
+/**
+ * Wait until the node accepts peers and its API listens. The node starts both at once and logs
+ * each when ready, in either order, so waiting for one line doesn't mean the other is there yet.
+ */
+export async function waitListening(node: NodeProcess, what = `${node.name} listening`): Promise<void> {
+	await waitFor(node, READY, what);
+	await waitFor(node, API_READY, `${what} (API)`);
+}
+
 /** Poll an arbitrary condition. */
 export async function waitUntil(
 	condition: () => boolean | Promise<boolean>,

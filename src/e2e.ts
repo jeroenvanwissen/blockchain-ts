@@ -35,11 +35,11 @@ import {
 	freePort,
 	lastLines,
 	noLoadErrors,
-	READY,
 	runCli,
 	startNode,
 	stopNode,
 	waitFor,
+	waitListening,
 	waitUntil,
 	walletAddress,
 	type NodeProcess,
@@ -96,11 +96,11 @@ async function main(): Promise<void> {
 		const [portA, portB] = [await freePort(), await freePort()];
 		step(`start A (mine + stake) on ${portA}, B and C (stake) through A`);
 		let nodeA = start('A', dirs.a, portA, ['--mine', '--stake']);
-		await waitFor(nodeA, READY, 'A listening');
+		await waitListening(nodeA, 'A listening');
 		const nodeB = start('B', dirs.b, portB, ['--stake', '--peers', `ws://127.0.0.1:${portA}`]);
 		let nodeC = start('C', dirs.c, await freePort(), ['--stake', '--peers', `ws://127.0.0.1:${portA}`]);
-		await waitFor(nodeB, READY, 'B listening');
-		await waitFor(nodeC, READY, 'C listening');
+		await waitListening(nodeB, 'B listening');
+		await waitListening(nodeC, 'C listening');
 		await harness.listen();
 		harness.connectToPeers([`ws://127.0.0.1:${portA}`]);
 
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
 		await stopNode(nodeC);
 		fs.rmSync(path.join(dirs.c, 'peers.json'), { force: true });
 		nodeC = start('C (partitioned)', dirs.c, await freePort(), ['--stake']);
-		await waitFor(nodeC, READY, 'C listening');
+		await waitListening(nodeC, 'C listening');
 		await waitUntil(() => countMatches(nodeC, /\[Staking\] staked block/) >= 2, 'C staking 2 blocks alone', PHASE_TIMEOUT_MS);
 		const forkedTips = await tipsOf([nodeA, nodeC]);
 		if (forkedTips[0] === forkedTips[1]) throw new Error('A and C did not diverge while partitioned');
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
 		step('reconnect C through A; expect a reorg and converging tips');
 		await stopNode(nodeC);
 		nodeC = start('C (reconnected)', dirs.c, await freePort(), ['--stake', '--peers', `ws://127.0.0.1:${portA}`]);
-		await waitFor(nodeC, READY, 'C listening');
+		await waitListening(nodeC, 'C listening');
 		await waitUntil(() => agree([nodeA, nodeB, nodeC]), 'A, B and C to agree', PHASE_TIMEOUT_MS);
 		if (!running.some((node) => /\[Blockchain\] reorganized/.test(node.output()))) {
 			throw new Error('no node reorganized after the partition');
@@ -151,7 +151,7 @@ async function main(): Promise<void> {
 		step('restart A; expect it to load its chain and converge again');
 		await stopNode(nodeA);
 		nodeA = start('A (restarted)', dirs.a, portA, ['--mine', '--stake']);
-		await waitFor(nodeA, READY, 'A listening');
+		await waitListening(nodeA, 'A listening');
 		await waitFor(nodeA, /Chain loaded: height \d+/, 'A loading its chain');
 		await waitUntil(() => agree([nodeA, nodeB, nodeC]), 'convergence after restart', PHASE_TIMEOUT_MS);
 
