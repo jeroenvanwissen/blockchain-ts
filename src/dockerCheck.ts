@@ -3,7 +3,7 @@
 // - the explorer and chain routes answer the host; wallet routes refuse it
 // - the CLI inside the container reaches the wallet routes
 // - native secp256k1 and a non-root user; the health check turns healthy
-// - docker stop shuts down cleanly and saves the chainstate; the chain survives a restart
+// - docker stop shuts down cleanly; the chain survives a restart, from the chain database
 // Uses plain console output (a script, like smoke and e2e).
 import { apiUrl as containerApiUrl, build, docker, IMAGE, waitUntil } from './dockerHarness.js';
 
@@ -55,20 +55,20 @@ async function main(): Promise<void> {
 	if (uid === '0') throw new Error('the node runs as root');
 	await waitUntil(async () => (await docker('inspect', '-f', '{{.State.Health.Status}}', NAME)) === 'healthy', 'healthy');
 
-	step('docker stop: a clean shutdown that saves the chainstate');
+	step('docker stop: a clean shutdown');
 	const stoppedAt = await height(api);
 	await docker('stop', '-t', '30', NAME);
 	const exitCode = await docker('inspect', '-f', '{{.State.ExitCode}}', NAME);
 	const logs = await docker('logs', NAME);
 	if (exitCode !== '0' || !logs.includes('Stopping blockchain node')) throw new Error(`unclean stop (exit ${exitCode})`);
 
-	step('docker start: the same chain from the volume, starting from the saved chainstate');
+	step('docker start: the same chain from the volume, starting from the chain database');
 	await docker('start', NAME);
 	api = await apiUrl();
 	await waitUntil(async () => (await height(api)) >= stoppedAt, `height ${stoppedAt} after the restart`);
 	const restarted = (await docker('logs', NAME)).slice(logs.length);
-	if (!new RegExp(`chainstate at height ${stoppedAt}; validated 0 newer block`).test(restarted)) {
-		throw new Error(`the restart didn't start from the chainstate saved at height ${stoppedAt}`);
+	if (!new RegExp(`chain database at height ${stoppedAt}; validated 0 newer block`).test(restarted)) {
+		throw new Error(`the restart didn't start from the chain database at height ${stoppedAt}`);
 	}
 	if (!(await docker('exec', NAME, 'cli', 'addresses')).includes(address)) throw new Error('the new address is gone');
 	const problems = (await docker('logs', NAME)).split('\n').filter((line) => / (ERROR|WARN) /.test(line));

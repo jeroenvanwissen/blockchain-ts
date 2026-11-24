@@ -64,7 +64,7 @@ describe('Pending transactions across restarts', () => {
 		block.solve();
 		await chain.addMinedBlock(block);
 
-		for (const options of [{}, { useChainstate: false }]) {
+		for (const options of [{}, { reindex: true }]) {
 			logs.mockClear();
 			const restarted = openChain(dir, options);
 			expect(pendingTxids(restarted)).toEqual([keep.calculateHash()]);

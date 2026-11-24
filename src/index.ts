@@ -51,11 +51,11 @@ const isMining = args.includes('--mine');
 const isStaking = args.includes('--stake');
 // Regression-test network: own network id, short PoW phase, no minimum stake age
 const isRegtest = args.includes('--regtest');
-// --reindex: ignore the saved chainstate and validate every stored block (a fresh one is saved later)
+// --reindex: rebuild the chain database from the stored blocks, validating every block
 const isReindex = args.includes('--reindex');
 const chainOptions = {
 	...(isRegtest ? { powCutoffBlock: REGTEST_POW_CUTOFF_BLOCK, minStakeAge: REGTEST_STAKE_MIN_AGE } : {}),
-	...(isReindex ? { useChainstate: false } : {}),
+	...(isReindex ? { reindex: true } : {}),
 };
 
 let blockchain: Blockchain;
@@ -80,7 +80,7 @@ log.info(
 // Watch every address the wallet has used, also past the lookahead: a wallet restored from its
 // seed phrase finds them as the chain arrives
 const discoverAddresses = () => {
-	const found = wallet.discoverUsedAddresses((address) => blockchain.getAddressHistory(address).length > 0);
+	const found = wallet.discoverUsedAddresses((address) => blockchain.hasAddressHistory(address));
 	if (found > 0) log.info(`wallet: found ${found} more address(es) in use; ${wallet.issuedCount()} handed out`);
 };
 discoverAddresses();
@@ -161,8 +161,8 @@ if (isStaking) {
 }
 
 // Stop cleanly on SIGINT (Ctrl+C) and SIGTERM (systemd, Docker, kill): stop producing blocks,
-// save the chainstate (the next start validates only newer blocks) and the pending transactions
-// (re-admitted at the next start), close peers and the API.
+// save the pending transactions (re-admitted at the next start), close peers and the API, then
+// the chain database (each block was already written to it as it connected).
 // A second signal exits at once.
 let stopping = false;
 async function shutdown(code = 0): Promise<void> {
@@ -171,10 +171,10 @@ async function shutdown(code = 0): Promise<void> {
 	log.info('Stopping blockchain node...');
 	staking.stop();
 	await miner.stop().catch(() => {});
-	blockchain.saveChainstate();
 	const saved = blockchain.saveMempool();
 	if (saved !== null) log.info(`saved ${saved} pending transaction(s)`);
 	await Promise.allSettled([p2pServer.close(), api.close()]);
+	blockchain.close();
 	process.exit(code);
 }
 process.on('SIGINT', () => void shutdown());

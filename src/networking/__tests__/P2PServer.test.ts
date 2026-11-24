@@ -91,7 +91,7 @@ describe('P2PServer', () => {
 
 	beforeEach(() => {
 		(fs.existsSync as jest.Mock).mockReturnValue(false); // the chain starts from an empty data dir
-		blockchain = new Blockchain();
+		blockchain = new Blockchain({ dbPath: ':memory:' }); // fs is mocked; SQLite isn't
 		p2pServer = new P2PServer(blockchain, 5001, peerDataPath);
 		mockSocket = new MockWebSocket('ws://test');
 		jest.clearAllMocks();

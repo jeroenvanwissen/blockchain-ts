@@ -47,7 +47,7 @@ Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API]
 
 | Tool         | Version | Purpose              | Install              |
 | ------------ | ------- | -------------------- | -------------------- |
-| **Node.js**  | 22.13+ or 24+ | Runtime environment (CI tests 22 and 26) | `brew install node`  |
+| **Node.js**  | 22.13+ or 24+ | Runtime environment (CI tests 22 and 26); the chain database uses its built-in SQLite (`node:sqlite`), which Node 22 calls experimental and announces with one `ExperimentalWarning` at startup | `brew install node`  |
 | **npm**      | 10+     | Package manager      | Included with Node   |
 | **Git**      | 2.30+   | Version control      | `brew install git`   |
 
@@ -186,7 +186,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset): one record appended per stored block; rebuilt from the `blk*.dat` files if it's missing or damaged |
-| `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks, if the consensus rules are the same |
+| `blocks/chain.db`       | Chain database (SQLite, with `chain.db-wal` and `chain.db-shm` next to it): the block tree, and for the active chain the unspent outputs, undo data, stake modifiers, the transaction index and every address's history. Written as each block connects, so a start validates only blocks stored after it; rebuilt from the block files with `--reindex`, or when it was built under other consensus rules or by another version |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
@@ -203,7 +203,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 npm run dev
 ```
 
-Stop it with Ctrl+C or SIGTERM (what systemd and Docker send). Either way it stops producing blocks, saves its chainstate and closes its connections before exiting; a second signal exits at once.
+Stop it with Ctrl+C or SIGTERM (what systemd and Docker send). Either way it stops producing blocks, saves its pending transactions, closes its connections and then the chain database before exiting; a second signal exits at once.
 
 ### Step 2: Start Additional Nodes (P2P)
 
@@ -356,7 +356,7 @@ docker compose up -d                       # one node: compose.yaml
 docker compose exec node cli balance       # the CLI runs inside the container
 docker compose exec node cli new-address
 docker compose logs -f node
-docker compose down                        # docker stop: the node saves its chainstate first
+docker compose down                        # docker stop: the node stops cleanly first
 ```
 
 Add `--mine`, `--stake` or `--peers ws://host:5001` to `command` in `compose.yaml`. Without compose:
@@ -573,7 +573,7 @@ Block and transaction formats change while the project is pre-release, and each 
 
 ### `Disconnecting peer: protocol version ...` or `invalid stored block` after an upgrade
 
-Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block: the saved chainstate records the rules it was validated under, so after a rule change the node validates every stored block again. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
+Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block: the chain database records the rules it was built under, so after a rule change the node rebuilds it and validates every stored block again. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
 
 ### Port Already in Use
 
@@ -589,7 +589,7 @@ If only the API port (P2P port + 1000) is taken, the node keeps running without 
 
 ### Suspect chain state
 
-Start once with `--reindex`: the node ignores `blocks/chainstate.json`, validates every stored block from genesis, and saves a fresh chainstate at the next shutdown.
+Start once with `--reindex`: the node rebuilds `blocks/chain.db` from the block files, validating every stored block from genesis. It does the same by itself when the database is missing or unreadable. On a long chain this takes a while (about 0.7 ms per block).
 
 ### Node Can't Connect to Peers
 

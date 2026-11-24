@@ -1,7 +1,7 @@
 // Scale measurement (TASK-0052): `npm run scale [-- --blocks <n>] [--batch <n>]`. Builds a chain
 // in-process in a temp dir, one signed payment per block, on a simulated clock (30 s per block)
 // with difficulty validation off, and reports per batch how long accepting a block takes
-// (`addMinedBlock`), the heap and the size of index.dat; then the chainstate's size and how long
+// (`addMinedBlock`), the heap and the size of index.dat; then the chain database's size and how long
 // a start takes from it and with --reindex. Run it before and after a change to storage or chain
 // state to see how costs grow with the chain. Uses plain console output (a script, like smoke).
 import * as fs from 'fs';
@@ -40,7 +40,7 @@ function timed<T>(action: () => T): [T, string] {
 	return [result, (performance.now() - start).toFixed(0)];
 }
 
-/** Build the chain, report per batch, and save its chainstate. */
+/** Build the chain and report per batch. */
 async function build(dir: string, options: BlockchainOptions & { blocksDir: string }): Promise<void> {
 	const miner = new Wallet(path.join(dir, 'miner.dat'));
 	const receiver = new Wallet(path.join(dir, 'receiver.dat'));
@@ -66,19 +66,20 @@ async function build(dir: string, options: BlockchainOptions & { blocksDir: stri
 		}
 	}
 	if (chain.getPendingTransactions().length > 1) throw new Error('payments are not being mined');
-	chain.saveChainstate();
-	console.log(`[scale] chainstate ${kb(path.join(options.blocksDir, 'chainstate.json'))} KB`);
+	chain.close();
+	console.log(`[scale] chain.db ${kb(path.join(options.blocksDir, 'chain.db'))} KB`);
 }
 
 async function main(): Promise<void> {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blockchain-ts-scale-'));
-	const options = { validateDifficulty: false, powCutoffBlock: Number.MAX_SAFE_INTEGER, blocksDir: path.join(dir, 'blocks'), chainstateInterval: Number.MAX_SAFE_INTEGER };
+	const options = { validateDifficulty: false, powCutoffBlock: Number.MAX_SAFE_INTEGER, blocksDir: path.join(dir, 'blocks') };
 	try {
 		console.log(`[scale] ${BLOCKS} blocks, one payment each${gc ? '' : ' (heap without GC: run through npm run scale)'}`);
 		await build(dir, options); // the chain it built is garbage now: the next heap figures are a started node's
 		const [fromState, stateMs] = timed(() => new Blockchain(options));
-		console.log(`[scale] start from the chainstate: ${stateMs} ms (height ${fromState.getChain().length - 1}), heap ${heapMb()} MB`);
-		const [reindexed, reindexMs] = timed(() => new Blockchain({ ...options, useChainstate: false }));
+		console.log(`[scale] start from the chain database: ${stateMs} ms (height ${fromState.getChain().length - 1}), heap ${heapMb()} MB`);
+		fromState.close();
+		const [reindexed, reindexMs] = timed(() => new Blockchain({ ...options, reindex: true }));
 		console.log(`[scale] start with --reindex: ${reindexMs} ms (height ${reindexed.getChain().length - 1})`);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 // Address history index (TASK-0045): every active-chain transaction per address with what it
-// received and sent and the balance after it. Whatever the path (connect, reorg, restart from a
-// chainstate or a full replay), the live index must equal one rebuilt from the active chain.
-import { AddressIndex } from '../../blockchain/AddressIndex.js';
+// received and sent and the balance after it, kept in the chain database (TASK-0053). Whatever the
+// path (connect, reorg, restart, --reindex), it must equal one computed from a full replay.
+import { addressFlows, type AddressActivity } from '../../blockchain/AddressIndex.js';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
@@ -21,15 +21,31 @@ import {
 	useTestClock,
 } from './helpers.js';
 
-/** The live index equals a rebuild from the active chain, and each history ends at the balance. */
+/** Every address's history from a full replay of the active chain. */
+function replayedHistories(chain: Blockchain): Map<string, AddressActivity[]> {
+	const blocks = chain.getChain();
+	const { undo } = chain['_replayChain'](blocks);
+	const histories = new Map<string, AddressActivity[]>();
+	blocks.forEach((block, i) => {
+		const txids = block.transactions.map((tx) => tx.calculateHash());
+		for (const { txid, indexInBlock, address, received, sent } of addressFlows(block, undo[i], txids)) {
+			let history = histories.get(address);
+			if (!history) histories.set(address, (history = []));
+			const before = history[history.length - 1]?.balance ?? 0n;
+			history.push({ txid, height: block.index, indexInBlock, received, sent, balance: before + received - sent });
+		}
+	});
+	return histories;
+}
+
+/** The database holds exactly the replayed histories, and each ends at the address's balance. */
 function expectConsistent(chain: Blockchain): void {
-	const rebuilt = new AddressIndex();
-	for (const block of chain.getChain()) rebuilt.connect(block, chain['_undo'].get(block.hash) ?? []);
-	const live = chain['_addressIndex']['_byAddress'];
-	expect(live).toEqual(rebuilt['_byAddress']);
-	for (const [address, history] of live) {
+	const expected = replayedHistories(chain);
+	const stored = chain['_db']['_db'].prepare('SELECT DISTINCT address FROM activity').all() as { address: string }[];
+	expect(stored.map((row) => row.address).sort()).toEqual([...expected.keys()].sort());
+	for (const [address, history] of expected) {
+		expect(chain.getAddressHistory(address)).toEqual(history);
 		expect(history[history.length - 1].balance).toBe(chain.getBalance(address));
-		expect(history.map((entry) => entry.height)).toEqual([...history.map((entry) => entry.height)].sort((a, b) => a - b));
 	}
 }
 
@@ -139,11 +155,10 @@ describe('Address history', () => {
 		expectConsistent(chain);
 
 		await mineBlocks(chain, miner.address, 1); // confirms the payment again
-		const before = chain['_addressIndex']['_byAddress'];
-		chain.saveChainstate();
-		for (const options of [{}, { useChainstate: false }]) {
+		const before = replayedHistories(chain);
+		for (const options of [{}, { reindex: true }]) {
 			const reopened = openChain(dir, options);
-			expect(reopened['_addressIndex']['_byAddress']).toEqual(before);
+			expect(replayedHistories(reopened)).toEqual(before);
 			expectConsistent(reopened);
 		}
 	});

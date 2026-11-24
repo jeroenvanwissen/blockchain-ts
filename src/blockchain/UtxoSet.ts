@@ -24,7 +24,7 @@ export class UtxoSet {
 		return this._byOutpoint.size;
 	}
 
-	/** Every unspent output (for saving the chainstate). */
+	/** Every unspent output. */
 	all(): UTXO[] {
 		return [...this._byOutpoint.values()];
 	}
@@ -74,9 +74,15 @@ export class UtxoSet {
 		return utxo;
 	}
 
-	/** Unspent outputs paying `address`, oldest first. */
+	/**
+	 * Unspent outputs paying `address`, oldest first: by height, then txid and output index, so
+	 * the order is the same however the set was built (connected, reorganized, loaded at startup).
+	 */
 	forAddress(address: string): UTXO[] {
 		const keys = this._byAddress.get(address);
-		return keys ? [...keys].map((key) => this._byOutpoint.get(key)!) : [];
+		if (!keys) return [];
+		return [...keys]
+			.map((key) => this._byOutpoint.get(key)!)
+			.sort((a, b) => a.blockIndex - b.blockIndex || (a.txHash < b.txHash ? -1 : a.txHash > b.txHash ? 1 : a.outputIndex - b.outputIndex));
 	}
 }

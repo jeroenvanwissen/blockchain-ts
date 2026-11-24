@@ -29,6 +29,7 @@ const testOptions: BlockchainOptions = {
 	minStakeAge: 0,
 	validateDifficulty: false,
 	validateTimestamps: false,
+	dbPath: ':memory:', // fs is mocked; SQLite isn't
 };
 
 // Mock the fs module

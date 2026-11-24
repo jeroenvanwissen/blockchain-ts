@@ -5,11 +5,12 @@ import { Wallet } from './Wallet.js';
 import { BlockStore } from './BlockStore.js';
 import { addressFromPublicKey, isValidAddress } from './address.js';
 import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
-import { AddressIndex, type AddressActivity } from './AddressIndex.js';
+import { addressFlows, mergeHistories, type AddressActivity } from './AddressIndex.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
-import { readChainstate, writeChainstate, type Chainstate, type ChainRules } from './chainstate.js';
+import { BlockStatus, CHAIN_DB_VERSION, ChainDb, type BlockRecord, type ChainRules } from './ChainDb.js';
 import { readMempoolFile, writeMempoolFile } from './mempoolFile.js';
+import * as fs from 'fs';
 import * as path from 'path';
 import { Mempool } from './Mempool.js';
 import { bitsToTarget, MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
@@ -31,9 +32,8 @@ import {
 	GENESIS_TIMESTAMP,
 	MEDIAN_TIME_SPAN,
 	BLOCK_RESERVED_BYTES,
-	CHAINSTATE_FILENAME,
+	CHAIN_DB_FILENAME,
 	MEMPOOL_FILENAME,
-	CHAINSTATE_INTERVAL,
 	MAX_BLOCK_SIZE,
 	MAX_BLOCK_TRANSACTIONS,
 	MAX_MEMPOOL_BYTES,
@@ -63,11 +63,14 @@ export interface BlockchainOptions {
 	minRelayFeePerKb?: bigint;
 	/** Mempool size limit in bytes (default MAX_MEMPOOL_BYTES) */
 	maxMempoolBytes?: number;
-	/** Start from the saved chainstate when it matches (default true; false: --reindex) */
-	useChainstate?: boolean;
-	/** Save the chainstate every this many connected blocks (default CHAINSTATE_INTERVAL) */
-	chainstateInterval?: number;
+	/** Rebuild the chain database from the stored blocks, validating every block (--reindex) */
+	reindex?: boolean;
+	/** The chain database (default chain.db in blocksDir; ':memory:' for unit tests that mock fs) */
+	dbPath?: string;
 }
+
+/** Writing a block or its state failed (disk full, I/O): the block itself may be fine. */
+class StorageError extends Error {}
 
 /** What happened to a block passed to addMinedBlock. */
 export type BlockOutcome = 'connected' | 'reorganized' | 'side';
@@ -94,9 +97,10 @@ export class Blockchain {
 	private _utxos = new UtxoSet();
 	private _modifiers: string[] = [GENESIS_STAKE_MODIFIER]; // stake modifier after each block
 	private _index = new Map<string, IndexEntry>(); // every known block, by hash
-	private _undo = new Map<string, UTXO[]>(); // per active block: the outputs it spent
-	private _txIndex = new Map<string, string>(); // txid → hash of the active block that contains it
-	private _addressIndex = new AddressIndex(); // address → its transactions on the active chain
+	// The state of the active chain on disk (TASK-0053): the UTXO set, undo data, stake modifiers,
+	// the txid index and address histories, written as each block connects or disconnects
+	private _db: ChainDb;
+	private _connectedAtStartup = 0;
 	private _mempool!: Mempool;
 	// Witness hashes (data, keys and signatures) already verified, oldest first: signatures never
 	// change, so revalidating the mempool on each new tip and connecting blocks of transactions
@@ -116,15 +120,15 @@ export class Blockchain {
 			blocksDir: BLOCKS_DIR,
 			minRelayFeePerKb: MIN_RELAY_FEE_PER_KB,
 			maxMempoolBytes: MAX_MEMPOOL_BYTES,
-			useChainstate: true,
-			chainstateInterval: CHAINSTATE_INTERVAL,
+			reindex: false,
+			dbPath: path.join(options?.blocksDir ?? BLOCKS_DIR, CHAIN_DB_FILENAME),
 			...options,
 		};
 		this.blockStore = new BlockStore(this._options.blocksDir);
+		this._db = this._openDb();
 		const genesisBlock = this.createGenesisBlock();
 		genesisBlock.cumulativeWeight = Blockchain.blockWeight(genesisBlock);
 		this.chain = [genesisBlock];
-		this._indexTransactions(genesisBlock, true);
 		this._mempool = new Mempool(this._options.maxMempoolBytes);
 
 		// Initialize UTXO set and block index with the genesis block
@@ -164,7 +168,12 @@ export class Blockchain {
 
 	/** The address's transactions on the active chain, oldest first, with its balance after each. */
 	public getAddressHistory(address: string): readonly AddressActivity[] {
-		return this._addressIndex.history(address);
+		return this._db.history(address);
+	}
+
+	/** Whether the address has a transaction on the active chain. */
+	public hasAddressHistory(address: string): boolean {
+		return this._db.hasHistory(address);
 	}
 
 	/**
@@ -172,7 +181,7 @@ export class Blockchain {
 	 * with what it received and sent over all of them and their total balance after it.
 	 */
 	public getWalletHistory(addresses: readonly string[]): AddressActivity[] {
-		return this._addressIndex.historyOf(addresses);
+		return mergeHistories([...new Set(addresses)].map((address) => this._db.history(address)));
 	}
 
 	/**
@@ -299,11 +308,11 @@ export class Blockchain {
 	/**
 	 * The single block-validation path, used for new blocks, chain replacement and startup
 	 * load. Validates `block` on top of `ctx` and, only if every check passes, applies it to
-	 * ctx.utxos (nothing is changed when it throws). Returns the block's stake modifier and its
-	 * undo data (the outputs it spent). Consensus checks read time
+	 * ctx.utxos (nothing is changed when it throws). Returns the block's stake modifier, its
+	 * undo data (the outputs it spent) and the outputs it added. Consensus checks read time
 	 * from block data only; the wall clock is used only for the future-timestamp limit.
 	 */
-	private _connectBlock(block: Block, ctx: ConnectContext): { modifier: string; undo: UTXO[] } {
+	private _connectBlock(block: Block, ctx: ConnectContext): { modifier: string; undo: UTXO[]; created: UTXO[] } {
 		const height = ctx.prevBlocks.length;
 		const parent = ctx.prevBlocks[height - 1];
 
@@ -416,8 +425,9 @@ export class Blockchain {
 			const removed = ctx.utxos.remove(txHash, outputIndex);
 			if (removed) undo.push(removed);
 		}
-		for (const utxo of created.values()) ctx.utxos.add(utxo);
-		return { modifier: nextStakeModifier(proof, ctx.modifiers[height - 1]), undo };
+		const added = [...created.values()];
+		for (const utxo of added) ctx.utxos.add(utxo);
+		return { modifier: nextStakeModifier(proof, ctx.modifiers[height - 1]), undo, created: added };
 	}
 
 	/**
@@ -499,15 +509,10 @@ export class Blockchain {
 	}
 
 	/**
-	 * Validate a whole chain from genesis through _connectBlock and return its state. A
-	 * failure carries the failing height as `error.height`.
+	 * Validate `blocks` (genesis first) through _connectBlock into fresh state, touching neither
+	 * the node's state nor the database. A failure carries the failing height as `error.height`.
 	 */
-	/**
-	 * Validate `blocks` (genesis first) into fresh state. With `start`, the state after block
-	 * `start.height` is taken from a saved chainstate for that same block, and only the blocks
-	 * after it are validated.
-	 */
-	private _replayChain(blocks: Block[], start?: Chainstate): { utxos: UtxoSet; modifiers: string[]; undo: UTXO[][] } {
+	private _replayChain(blocks: Block[]): { utxos: UtxoSet; modifiers: string[]; undo: UTXO[][] } {
 		const genesis = this.createGenesisBlock();
 		if (
 			blocks.length === 0 ||
@@ -516,16 +521,10 @@ export class Blockchain {
 		) {
 			throw new Error('genesis block hash mismatch');
 		}
-		if (start && blocks[start.height]?.hash !== start.tip) throw new Error('chainstate is not on this branch');
-		const ctx: ConnectContext = {
-			prevBlocks: blocks.slice(0, (start?.height ?? 0) + 1),
-			utxos: new UtxoSet(),
-			modifiers: start ? [...start.modifiers] : [GENESIS_STAKE_MODIFIER],
-		};
-		const undo: UTXO[][] = start ? start.undo.map((spent) => [...spent]) : [[]];
-		if (start) for (const utxo of start.utxos) ctx.utxos.add(utxo);
-		else ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
-		for (let i = (start?.height ?? 0) + 1; i < blocks.length; i++) {
+		const ctx: ConnectContext = { prevBlocks: blocks.slice(0, 1), utxos: new UtxoSet(), modifiers: [GENESIS_STAKE_MODIFIER] };
+		const undo: UTXO[][] = [[]];
+		ctx.utxos.addOutputs(blocks[0].transactions[0], 0, blocks[0].timestamp);
+		for (let i = 1; i < blocks.length; i++) {
 			try {
 				const result = this._connectBlock(blocks[i], ctx);
 				ctx.modifiers.push(result.modifier);
@@ -538,44 +537,81 @@ export class Blockchain {
 		return { utxos: ctx.utxos, modifiers: ctx.modifiers, undo };
 	}
 
-	/** Fully validate `block` on top of the active tip and make it the new tip (no persistence). */
-	private _connectTip(block: Block): void {
-		const { modifier, undo } = this._connectBlock(block, {
+	/**
+	 * Fully validate `block` on top of the active tip and make it the new tip: in memory, then in
+	 * the chain database (one transaction). With `store`, a new block is first appended to the
+	 * block files (blocks of a branch being activated were stored when they arrived). If storing
+	 * or writing fails, the in-memory state is put back and a StorageError is thrown.
+	 */
+	private _connectTip(block: Block, store = false): void {
+		const height = this.chain.length;
+		const { modifier, undo, created } = this._connectBlock(block, {
 			prevBlocks: this.chain,
 			utxos: this._utxos,
 			modifiers: this._modifiers,
 		});
-		block.cumulativeWeight = this.getLatestBlock().cumulativeWeight + Blockchain.blockWeight(block);
+		const work = this.getLatestBlock().cumulativeWeight + Blockchain.blockWeight(block);
+		try {
+			if (store) {
+				this.blockStore.appendBlock(block);
+				this._db.addBlock(this._record(block, work));
+			}
+			const txids = block.transactions.map((tx) => tx.calculateHash());
+			this._db.connect({ hash: block.hash, height, modifier, spent: undo, created, txids, flows: addressFlows(block, undo, txids) });
+		} catch (error) {
+			for (const utxo of created) this._utxos.remove(utxo.txHash, utxo.outputIndex);
+			for (const utxo of undo) this._utxos.add(utxo);
+			throw new StorageError(`could not store block ${block.index}: ${(error as Error).message}`, { cause: error });
+		}
+		block.cumulativeWeight = work;
 		this._modifiers.push(modifier);
-		this._undo.set(block.hash, undo);
 		this.chain.push(block);
-		this._indexTransactions(block, true);
 		this.lastBlockTime = block.timestamp;
-		if (block.index % this._options.chainstateInterval === 0) this.saveChainstate();
+		this._connectedAtStartup++;
 	}
 
-	private get _chainstatePath(): string {
-		return path.join(this._options.blocksDir, CHAINSTATE_FILENAME);
+	/** The database's record of a block (its status starts as Stored). */
+	private _record(block: Block, work: bigint): BlockRecord {
+		const producer = block.isProofOfStake() ? block.transactions[1]?.outputs[1] : block.transactions[0]?.outputs[0];
+		return {
+			hash: block.hash,
+			height: block.index,
+			previousHash: block.previousHash,
+			timestamp: block.timestamp,
+			bits: block.bits,
+			isProofOfStake: block.isProofOfStake(),
+			work,
+			tieBreak: Blockchain._tieBreak(block),
+			producer: producer?.address ?? '',
+			txCount: block.transactions.length,
+			size: block.size(),
+			status: BlockStatus.Stored,
+			modifier: null,
+		};
 	}
 
 	/**
-	 * Save the validated state at the tip (UTXO set, stake modifiers, undo data) so the next
-	 * start validates only the blocks after it. Runs every `chainstateInterval` blocks and on
-	 * shutdown; a failed save only costs a slower start.
+	 * Open the chain database. An unreadable file (damaged, not a database) is removed and a new
+	 * one made: it holds only what can be rebuilt from the block files.
 	 */
-	public saveChainstate(): void {
+	private _openDb(): ChainDb {
+		const file = this._options.dbPath;
+		if (file === ':memory:') return new ChainDb(file);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
 		try {
-			writeChainstate(this._chainstatePath, {
-				tip: this.getLatestBlock().hash,
-				height: this.chain.length - 1,
-				rules: this._rules,
-				utxos: this._utxos.all(),
-				modifiers: this._modifiers,
-				undo: this.chain.map((block) => this._undo.get(block.hash) ?? []),
-			});
+			const db = new ChainDb(file);
+			db.describe();
+			return db;
 		} catch (error) {
-			log.warn('could not save the chainstate:', (error as Error).message);
+			log.warn(`the chain database is unreadable (${(error as Error).message}); making a new one`);
+			for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${file}${suffix}`, { force: true });
+			return new ChainDb(file);
 		}
+	}
+
+	/** Close the chain database (at shutdown). Nothing is lost: each block was written as it connected. */
+	public close(): void {
+		this._db.close();
 	}
 
 	private get _mempoolPath(): string {
@@ -628,58 +664,21 @@ export class Blockchain {
 		return { powCutoffBlock: this._options.powCutoffBlock, minStakeAge: this._options.minStakeAge };
 	}
 
-	/**
-	 * The saved chainstate, if any, readable and validated under this node's rules (otherwise
-	 * startup replays from genesis, so blocks the current rules reject are found).
-	 */
-	private _readChainstate(): Chainstate | undefined {
-		if (!this._options.useChainstate) return undefined;
-		let saved: Chainstate | undefined;
-		try {
-			saved = readChainstate(this._chainstatePath);
-		} catch (error) {
-			log.warn(`ignoring the saved chainstate: ${(error as Error).message}`);
-			return undefined;
-		}
-		const { powCutoffBlock, minStakeAge } = this._rules;
-		if (saved && (saved.rules.powCutoffBlock !== powCutoffBlock || saved.rules.minStakeAge !== minStakeAge)) {
-			log.warn(
-				`ignoring the saved chainstate: validated with other consensus rules (PoW until block ` +
-					`${saved.rules.powCutoffBlock}, stake age ${saved.rules.minStakeAge} s); validating every block`,
-			);
-			return undefined;
-		}
-		return saved;
-	}
-
-	/**
-	 * Add a newly active block's transactions to the txid and address indexes, or remove a
-	 * disconnected one's. Needs the block's undo data in `_undo`.
-	 */
-	private _indexTransactions(block: Block, add: boolean): void {
-		const txids = block.transactions.map((tx) => tx.calculateHash());
-		for (const txid of txids) {
-			if (add) this._txIndex.set(txid, block.hash);
-			else if (this._txIndex.get(txid) === block.hash) this._txIndex.delete(txid);
-		}
-		const spent = this._undo.get(block.hash) ?? [];
-		if (add) this._addressIndex.connect(block, spent, txids);
-		else this._addressIndex.disconnect(block, spent, txids);
-	}
-
 	/** Undo the active tip: remove the outputs it created and restore the ones it spent. */
 	private _disconnectTip(): Block {
-		const block = this.chain.pop()!;
-		this._indexTransactions(block, false);
-		this._modifiers.pop();
+		const block = this.getLatestBlock();
+		const created: { txHash: string; outputIndex: number }[] = [];
 		for (const tx of block.transactions) {
 			const txHash = tx.calculateHash();
 			tx.outputs.forEach((output, outputIndex) => {
-				if (output.amount > 0n) this._utxos.remove(txHash, outputIndex);
+				if (output.amount > 0n) created.push({ txHash, outputIndex });
 			});
 		}
-		for (const utxo of this._undo.get(block.hash) ?? []) this._utxos.add(utxo);
-		this._undo.delete(block.hash);
+		const spent = this._db.disconnect(block.hash, this.chain.length - 1, created);
+		this.chain.pop();
+		this._modifiers.pop();
+		for (const { txHash, outputIndex } of created) this._utxos.remove(txHash, outputIndex);
+		for (const utxo of spent) this._utxos.add(utxo);
 		return block;
 	}
 
@@ -730,7 +729,8 @@ export class Blockchain {
 	/**
 	 * Make the branch ending at `target` (which has more work than the active chain) active:
 	 * disconnect back to the fork point, then connect the branch with full validation. If a
-	 * branch block is invalid it is marked so and the previous chain is restored.
+	 * branch block is invalid it is marked so (in the database too), and the valid part before
+	 * it stays active if it beats the chain it replaced; otherwise the previous chain is restored.
 	 */
 	private _activateBranch(target: IndexEntry): void {
 		const branch: Block[] = [];
@@ -751,17 +751,37 @@ export class Blockchain {
 			}
 		} catch (error) {
 			const failed = branch[connected];
-			this._index.get(failed.hash)!.isInvalid = true;
-			for (let i = 0; i < connected; i++) this._disconnectTip();
-			for (const block of disconnected) this._connectTip(block); // known valid
+			const isInvalid = !(error instanceof StorageError);
+			if (isInvalid) {
+				this._index.get(failed.hash)!.isInvalid = true;
+				this._db.markInvalid(failed.hash);
+			}
+			// The valid part of the branch stays if it beats the chain it replaced (fork choice)
+			const replaced = disconnected.length > 0 ? this._index.get(disconnected[disconnected.length - 1].hash)! : fork;
+			const reached = this._index.get(this.getLatestBlock().hash)!;
+			if (isInvalid && connected > 0 && Blockchain._isBetter(reached, replaced)) {
+				this._reorganized(fork, disconnected, connected, reached.block);
+			} else {
+				for (let i = 0; i < connected; i++) this._disconnectTip();
+				for (const block of disconnected) this._connectTip(block); // known valid
+			}
 			const reason = (error as Error).message;
-			throw new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`, { cause: error });
+			throw Object.assign(new Error(failed === target.block ? reason : `block ${failed.index}: ${reason}`, { cause: error }), {
+				height: failed.index,
+				reason,
+			});
 		}
+		this._reorganized(fork, disconnected, branch.length, target.block);
+	}
 
-		log.info(
-			`reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
-				`replaced by ${branch.length}, tip ${target.block.hash.slice(0, 16)}`,
-		);
+	/** After a branch became active: log a reorganization, re-admit the disconnected transactions. */
+	private _reorganized(fork: IndexEntry, disconnected: Block[], connected: number, tip: Block): void {
+		if (disconnected.length > 0) {
+			log.info(
+				`reorganized at height ${fork.height}: ${disconnected.length} block(s) ` +
+					`replaced by ${connected}, tip ${tip.hash.slice(0, 16)}`,
+			);
+		}
 		this._readmitTransactions(disconnected.flatMap((block) => block.transactions));
 	}
 
@@ -811,14 +831,13 @@ export class Blockchain {
 		}
 
 		if (block.previousHash === this.getLatestBlock().hash) {
-			this._connectTip(block);
+			this._connectTip(block, true);
 			this._index.set(block.hash, {
 				block,
 				height: block.index,
 				work: block.cumulativeWeight,
 				isInvalid: false,
 			});
-			this.blockStore.appendBlock(block);
 			this._readmitTransactions();
 			return 'connected';
 		}
@@ -831,8 +850,9 @@ export class Blockchain {
 			isInvalid: false,
 		};
 		block.cumulativeWeight = entry.work;
-		this._index.set(block.hash, entry);
 		this.blockStore.appendBlock(block);
+		this._db.addBlock(this._record(block, entry.work));
+		this._index.set(block.hash, entry);
 		const tip = this._index.get(this.getLatestBlock().hash)!;
 		if (!Blockchain._isBetter(entry, tip)) {
 			return 'side';
@@ -879,9 +899,10 @@ export class Blockchain {
 	public findTransaction(txid: string): { transaction: Transaction; block: Block | null } | undefined {
 		const pending = this._mempool.get(txid);
 		if (pending) return { transaction: pending.transaction, block: null };
-		const blockHash = this._txIndex.get(txid);
-		const block = blockHash === undefined ? undefined : this._index.get(blockHash)?.block;
-		const transaction = block?.transactions.find((tx) => tx.calculateHash() === txid);
+		const location = this._db.findTransaction(txid);
+		if (!location) return undefined;
+		const block = this.chain[location.height];
+		const transaction = block?.transactions[location.position];
 		return block && transaction ? { transaction, block } : undefined;
 	}
 
@@ -1293,30 +1314,27 @@ export class Blockchain {
 		return this._mempool.select(max, Number.MAX_SAFE_INTEGER).map((entry) => entry.txid);
 	}
 
+	/**
+	 * Load the block tree from the block files and the active chain's state from the chain
+	 * database, then activate the best valid branch the way blocks from peers are: blocks stored
+	 * after the database's tip (a stop between the two writes) are validated and connected. A
+	 * database built by another version or under other rules, or out of line with the block
+	 * files, is rebuilt from genesis, as with --reindex: every stored block is validated again.
+	 */
 	private loadBlockchain(): void {
 		try {
-			const stored = this.blockStore.loadAllBlocks();
-
+			const genesis = this.chain[0];
+			let stored = this.blockStore.loadAllBlocks();
 			if (stored.length === 0) {
-				// No stored blocks — persist genesis and return
-				this.blockStore.appendBlock(this.chain[0]);
-				return;
+				this.blockStore.appendBlock(genesis);
+				stored = [genesis];
 			}
-
-			const genesis = this.createGenesisBlock();
 			if (stored[0].hash !== genesis.hash || stored[0].calculateHash() !== genesis.hash) {
 				throw new Error('invalid stored chain: genesis block hash mismatch');
 			}
 
-			// Rebuild the block tree; parents are always stored before their children
-			const index = new Map<string, IndexEntry>();
-			stored[0].cumulativeWeight = Blockchain.blockWeight(stored[0]);
-			index.set(stored[0].hash, {
-				block: stored[0],
-				height: 0,
-				work: stored[0].cumulativeWeight,
-				isInvalid: false,
-			});
+			// The block tree; parents are always stored before their children
+			const index = new Map<string, IndexEntry>([[genesis.hash, this._index.get(genesis.hash)!]]);
 			for (const block of stored.slice(1)) {
 				const parent = index.get(block.previousHash);
 				if (!parent || index.has(block.hash) || block.hash !== block.calculateHash()) {
@@ -1327,39 +1345,122 @@ export class Blockchain {
 				block.cumulativeWeight = work;
 				index.set(block.hash, { block, height: parent.height + 1, work, isInvalid: false });
 			}
+			this._index = index;
 
-			// Activate the best valid branch (fork choice, as in _isBetter). Stored side blocks
-			// were never fully validated, so fall back when a branch fails.
-			const candidates = [...index.values()].sort((a, b) => (Blockchain._isBetter(a, b) ? -1 : 1));
-			const saved = this._readChainstate();
-			for (const candidate of candidates) {
-				if (this._hasInvalidAncestor(candidate, index)) continue;
-				const branch = this._branchTo(candidate, index);
-				try {
-					// The saved state stands for every block up to its tip: validate only the rest
-					const start = saved && branch[saved.height]?.hash === saved.tip ? saved : undefined;
-					const state = this._replayChain(branch, start);
-					if (start) {
-						log.info(`chainstate at height ${start.height}; validated ${branch.length - 1 - start.height} newer block(s)`);
-					}
-					this.chain = branch;
-					this._utxos = state.utxos;
-					this._modifiers = state.modifiers;
-					this._undo = new Map(branch.map((block, i) => [block.hash, state.undo[i]]));
-					this._txIndex = new Map();
-					this._addressIndex = new AddressIndex();
-					for (const block of branch) this._indexTransactions(block, true); // after _undo: it reads it
-					this._index = index;
-					return;
-				} catch (error) {
-					const height = (error as Error & { height?: number }).height ?? 0;
-					index.get(branch[height].hash)!.isInvalid = true;
-					log.warn(`invalid stored block: ${(error as Error).message}`);
-				}
+			const dbHeight = this._loadState();
+			this._connectedAtStartup = 0;
+			this._activateBest();
+			const height = this.chain.length - 1;
+			if (dbHeight === null) {
+				log.info(`chain database built: validated ${this._connectedAtStartup} stored block(s), height ${height}`);
+			} else {
+				log.info(`chain database at height ${dbHeight}; validated ${this._connectedAtStartup} newer block(s)`);
 			}
 		} catch (error) {
 			log.error('Error loading blockchain:', error);
 			throw error;
+		}
+	}
+
+	/**
+	 * Take the active chain's state from the chain database if it holds for the stored blocks and
+	 * this node's rules, else empty the database and start from genesis. Every stored block gets
+	 * a record in the database; blocks it knows to be invalid are marked so. Returns the height
+	 * the database was at, or null when it starts over.
+	 */
+	private _loadState(): number | null {
+		const genesis = this.chain[0];
+		const described = this._db.describe();
+		const { powCutoffBlock, minStakeAge } = this._rules;
+		const tip = described ? this._db.tip() : null;
+		const tipEntry = tip ? this._index.get(tip.hash) : undefined;
+		let reason: string | undefined;
+		if (this._options.reindex) reason = '--reindex';
+		else if (!described) reason = 'new';
+		else if (described.version !== CHAIN_DB_VERSION) reason = `it is from another version (${described.version})`;
+		else if (described.rules.powCutoffBlock !== powCutoffBlock || described.rules.minStakeAge !== minStakeAge) {
+			reason = `it was built under other consensus rules (PoW until block ${described.rules.powCutoffBlock}, stake age ${described.rules.minStakeAge} s)`;
+		} else if (!tipEntry) reason = 'its tip is not among the stored blocks';
+
+		let dbHeight: number | null = null;
+		if (!reason) {
+			const branch = this._branchTo(tipEntry!);
+			const modifiers = this._db.activeModifiers();
+			if (modifiers.length === branch.length) {
+				this.chain = branch;
+				this._modifiers = modifiers;
+				this._utxos = new UtxoSet();
+				for (const utxo of this._db.loadUtxos()) this._utxos.add(utxo);
+				dbHeight = branch.length - 1;
+			} else {
+				reason = 'its active chain is incomplete';
+			}
+		}
+		if (dbHeight === null) {
+			if (reason === 'new') log.info('building the chain database from the stored blocks');
+			else if (reason === '--reindex') log.info('rebuilding the chain database from the stored blocks (--reindex)');
+			else log.warn(`rebuilding the chain database: ${reason}`);
+			this._db.reset(this._rules);
+			this._removeOldChainstate();
+			this._db.addBlock(this._record(genesis, genesis.cumulativeWeight));
+			this._utxos = new UtxoSet();
+			this._utxos.addOutputs(genesis.transactions[0], 0, genesis.timestamp);
+			const txids = genesis.transactions.map((tx) => tx.calculateHash());
+			this._db.connect({
+				hash: genesis.hash,
+				height: 0,
+				modifier: GENESIS_STAKE_MODIFIER,
+				spent: [],
+				created: this._utxos.all(),
+				txids,
+				flows: addressFlows(genesis, [], txids),
+			});
+			this.chain = [genesis];
+			this._modifiers = [GENESIS_STAKE_MODIFIER];
+		}
+
+		// Every stored block is in the database's block tree; invalid marks come back from it
+		const known = new Map(this._db.loadBlocks().map((record) => [record.hash, record.status]));
+		for (const entry of [...this._index.values()].sort((a, b) => a.height - b.height)) {
+			const status = known.get(entry.block.hash);
+			if (status === undefined) this._db.addBlock(this._record(entry.block, entry.work));
+			else if (status === BlockStatus.Invalid) entry.isInvalid = true;
+		}
+		return dbHeight;
+	}
+
+	/** chainstate.json (before TASK-0053) is replaced by the chain database. */
+	private _removeOldChainstate(): void {
+		const old = path.join(this._options.blocksDir, 'chainstate.json');
+		if (!fs.existsSync(old)) return;
+		fs.rmSync(old, { force: true });
+		log.info('removed chainstate.json: the chain database replaces it');
+	}
+
+	/**
+	 * Make the best valid known branch active (startup): connect stored blocks with more work
+	 * than the tip; a branch with an invalid block is marked so and the next best one tried.
+	 */
+	private _activateBest(): void {
+		for (;;) {
+			// One pass in height order: a block is out if it or an ancestor is invalid
+			const out = new Set<string>();
+			let best = this._index.get(this.getLatestBlock().hash)!;
+			for (const entry of [...this._index.values()].sort((a, b) => a.height - b.height)) {
+				if (entry.isInvalid || out.has(entry.block.previousHash)) {
+					out.add(entry.block.hash);
+					continue;
+				}
+				if (Blockchain._isBetter(entry, best)) best = entry;
+			}
+			if (best.block.hash === this.getLatestBlock().hash) return;
+			try {
+				this._activateBranch(best);
+			} catch (error) {
+				if (error instanceof StorageError || (error as Error).cause instanceof StorageError) throw error;
+				const { height, reason } = error as Error & { height: number; reason: string };
+				log.warn(`invalid stored block: block ${height}: ${reason}`);
+			}
 		}
 	}
 

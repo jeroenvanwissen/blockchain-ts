@@ -177,7 +177,7 @@ async function main(): Promise<void> {
 
 		step('stop node A with SIGTERM and restart it without mining; expect the same chain and wallet');
 		await stopNode(nodeB);
-		await stopNode(nodeA, 'SIGTERM'); // what systemd and Docker send: must save the chainstate
+		await stopNode(nodeA, 'SIGTERM'); // what systemd and Docker send: a clean stop
 		assertFile(path.join(dataA, 'blocks', 'mempool.json')); // and the pending transactions (none here)
 		if (!nodeA.output().includes('saved 0 pending transaction(s)')) throw new Error("A didn't report saving its mempool");
 		const minedHeights = [...nodeA.output().matchAll(/mined block (\d+) \((\w+)\)/g)];
@@ -191,8 +191,8 @@ async function main(): Promise<void> {
 			new RegExp(`Chain loaded: height ${lastHeight}, tip ${lastHash}`),
 			'loading the mined chain',
 		);
-		// A saved its chainstate on shutdown: the restart starts from it instead of revalidating
-		await waitFor(nodeA, /chainstate at height \d+; validated 0 newer block\(s\)/, 'starting from the saved chainstate');
+		// A's chain database is up to date with every block: the restart starts from it instead of revalidating
+		await waitFor(nodeA, /chain database at height \d+; validated 0 newer block\(s\)/, 'starting from the chain database');
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
 
 		step('the address and wallet histories match after the restart; the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
