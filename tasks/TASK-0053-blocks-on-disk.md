@@ -1,6 +1,6 @@
 # TASK-0053: Blocks and undo data on disk, not in memory: memory and chainstate don't grow with the chain
 
-Status: pending
+Status: in-progress
 Priority: P1
 Size: large
 Depends on: TASK-0052
