@@ -2,7 +2,7 @@ import { Block, merkleRoot } from '../Block.js';
 import { requiredBits } from '../retarget.js';
 import { bitsToTarget, blockWork, MAX_TARGET_BITS, POS_LIMIT_BITS, POW_LIMIT_BITS, targetToBits } from '../target.js';
 import { NULL_HASH, Transaction } from '../Transaction.js';
-import { COIN, POS_LIMIT, POW_LIMIT, RETARGET_WINDOW, TARGET_SPACING } from '../../config.js';
+import { COIN, POS_LIMIT, POW_CUTOFF_BLOCK, POW_LIMIT, RETARGET_WINDOW, STAKE_MIN_AGE, TARGET_SPACING } from '../../config.js';
 
 const ADDRESS = '1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH';
 const EASY_BITS = targetToBits((1n << 252n) - 1n); // ~16 hashes per block
@@ -192,5 +192,31 @@ describe('retarget', () => {
 		const first = requiredBits(chain, chain.length, false);
 		const copy = chain.map((b) => Block.fromJSON(JSON.parse(JSON.stringify(b))));
 		expect(requiredBits(copy, copy.length, false)).toBe(first);
+	});
+});
+
+describe('PoW phase length (TASK-0051)', () => {
+	/** The PoW phase mined at a constant hash rate, each block taking its expected time under the retarget. */
+	function powPhase(hashesPerSecond: number): Block[] {
+		const chain = [new Block(1_700_000_000_000, [Transaction.coinbase('genesis', 0n, 0)], NULL_HASH)];
+		for (let height = 1; height <= POW_CUTOFF_BLOCK; height++) {
+			const bits = requiredBits(chain, height, false);
+			const ms = Math.max(1, Math.round((Number(blockWork(bits)) / hashesPerSecond) * 1000));
+			const prev = chain[height - 1];
+			const coinbase = Transaction.coinbase(ADDRESS, 10n * COIN, height);
+			chain.push(new Block(prev.timestamp + ms, [coinbase], prev.hash, 0, bits, height));
+		}
+		return chain;
+	}
+
+	// A slow JavaScript miner to a fast native one: the faster, the longer the first blocks come quickly
+	it.each([
+		['10 kH/s', 1e4],
+		['1 MH/s', 1e6],
+		['1 GH/s', 1e9],
+	])('should outlast the stake age at %s, so the first coins can stake when it ends', (_, hashesPerSecond) => {
+		const chain = powPhase(hashesPerSecond);
+		const length = chain[POW_CUTOFF_BLOCK].timestamp - chain[1].timestamp;
+		expect(length).toBeGreaterThan(STAKE_MIN_AGE * 1000); // block 1's coinbase is old enough to stake
 	});
 });

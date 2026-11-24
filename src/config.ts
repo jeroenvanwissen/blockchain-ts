@@ -64,7 +64,7 @@ export const MAX_API_BODY_BYTES = 64 * 1024; // larger request bodies get 413
 
 // Peer protocol (TASK-0013)
 export const NETWORK_MAGIC = 'blockchain-ts/devnet'; // peers on another network are dropped
-export const PROTOCOL_VERSION = 2; // 2: transaction timestamp rules (TASK-0025)
+export const PROTOCOL_VERSION = 3; // 2: transaction timestamp rules (TASK-0025); 3: 1200 PoW blocks (TASK-0051)
 export const HANDSHAKE_TIMEOUT = 10_000; // ms to complete VERSION/VERACK before disconnecting
 export const SYNC_BATCH_SIZE = 200; // max blocks per BLOCKS reply
 export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS locator
@@ -105,7 +105,9 @@ export const SEED_NODES: string[] = process.env.SEED_NODES
 	: DEFAULT_SEED_NODES;
 
 // Consensus configuration
-export const POW_CUTOFF_BLOCK = 100; // last PoW height; PoS from POW_CUTOFF_BLOCK + 1
+// Last PoW height; PoS from POW_CUTOFF_BLOCK + 1. About 10 hours of 30-second blocks: longer than
+// STAKE_MIN_AGE, so the first mined coins can stake before the PoW phase ends (TASK-0051).
+export const POW_CUTOFF_BLOCK = 1200;
 
 // Proof of stake (kernel staking, TASK-0009)
 export const STAKE_MIN_AGE = 8 * 60 * 60; // seconds a UTXO must exist before it can stake

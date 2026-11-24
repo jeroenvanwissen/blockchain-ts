@@ -1,6 +1,6 @@
 // Peer limits and misbehavior (TASK-0020) over real WebSockets, in-process. Difficulty
 // validation is off so blocks build instantly.
-import { once } from 'events';
+import { EventEmitter, once } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
@@ -239,6 +239,38 @@ describe('Peer limits and misbehavior', () => {
 			jest.runAllTimers();
 
 			const delays = attempts.map((t, i) => t - (attempts[i - 1] ?? 0));
+			const expected = Array.from({ length: MAX_RECONNECT_ATTEMPTS }, (_, i) =>
+				Math.min(RECONNECT_BASE_DELAY * 2 ** i, RECONNECT_MAX_DELAY),
+			);
+			expect(delays).toEqual(expected);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('should keep backing off a peer that accepts the connection but refuses the handshake', () => {
+		// Another protocol version or a ban: the socket opens, then the peer closes it before VERACK
+		jest.useFakeTimers();
+		try {
+			const attempts: number[] = [];
+			const start = Date.now();
+			jest.spyOn(node as unknown as { _dial: (url: string) => void }, '_dial').mockImplementation((url) => {
+				attempts.push(Date.now() - start);
+				const socket = Object.assign(new EventEmitter(), {
+					url,
+					readyState: WebSocket.OPEN,
+					send: () => {},
+					close: () => {},
+					terminate: () => {},
+				});
+				node['connectSocket'](socket as unknown as WebSocket);
+				socket.emit('close');
+			});
+
+			node.connectToPeers(['ws://127.0.0.1:1']); // configured, dialed at once
+			jest.runAllTimers();
+
+			const delays = attempts.slice(1).map((t, i) => t - attempts[i]);
 			const expected = Array.from({ length: MAX_RECONNECT_ATTEMPTS }, (_, i) =>
 				Math.min(RECONNECT_BASE_DELAY * 2 ** i, RECONNECT_MAX_DELAY),
 			);

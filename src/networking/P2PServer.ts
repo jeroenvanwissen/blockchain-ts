@@ -154,6 +154,9 @@ export class P2PServer {
 	private readonly _seen = new Set<string>(); // recent `b:<hash>` / `t:<txid>`, oldest first
 	private readonly _banned = new Map<string, number>(); // ban key → expiry (ms)
 	private readonly _dialing = new Set<WebSocket>(); // outbound sockets not open yet
+	// Peer address → its latest redial attempt, until a handshake with it completes: a peer that
+	// accepts the connection and then refuses the handshake backs off like an unreachable one
+	private readonly _redials = new Map<string, number>();
 	private readonly _blockJson = new Map<string, string>(); // block hash → serialized block, oldest first
 	private readonly _banListPath: string | undefined;
 
@@ -238,6 +241,7 @@ export class P2PServer {
 		this._stopPeerBroadcast();
 		for (const socket of [...this.sockets, ...this._dialing]) socket.terminate();
 		this._dialing.clear();
+		this._redials.clear();
 		for (const state of this._peerState.values()) {
 			if (state.handshakeTimer) clearTimeout(state.handshakeTimer);
 		}
@@ -449,7 +453,10 @@ export class P2PServer {
 		socket.on('close', () => {
 			this._forget(socket);
 			const url = (socket as unknown as { url?: string }).url;
-			if (url && !state.isSelf && !state.isDuplicate && !this._isClosing) this.reconnectToPeer(this.normalizePeerUrl(url));
+			if (url && !state.isSelf && !state.isDuplicate && !this._isClosing) {
+				const peer = this.normalizePeerUrl(url);
+				this.reconnectToPeer(peer, (this._redials.get(peer) ?? 0) + 1);
+			}
 		});
 
 		this.logPeerConnection(socket);
@@ -488,18 +495,24 @@ export class P2PServer {
 	}
 
 	/**
-	 * Redial a lost outbound peer with capped exponential backoff. After MAX_RECONNECT_ATTEMPTS
-	 * the periodic outbound fill may still pick it up. Never redials banned peers or beyond
-	 * the outbound limit.
+	 * Redial a lost outbound peer with capped exponential backoff. The backoff starts over only
+	 * after a completed handshake, so a peer that keeps refusing it (another protocol version,
+	 * a ban) isn't redialed every second. After MAX_RECONNECT_ATTEMPTS the periodic outbound fill
+	 * may still pick it up. Never redials banned peers or beyond the outbound limit.
 	 */
 	private reconnectToPeer(peer: string, attempt: number = 1): void {
 		if (attempt > MAX_RECONNECT_ATTEMPTS) {
+			this._redials.delete(peer);
 			log.info(`Max reconnection attempts reached for peer: ${peer}`);
 			return;
 		}
+		this._redials.set(peer, attempt);
 		const delay = Math.min(RECONNECT_BASE_DELAY * 2 ** (attempt - 1), RECONNECT_MAX_DELAY);
 		const timer = setTimeout(() => {
-			if (!this._canDial(peer)) return;
+			if (!this._canDial(peer)) {
+				this._redials.delete(peer);
+				return;
+			}
 			this._dial(peer, () => {
 				log.debug(`Reconnection attempt ${attempt} failed for peer: ${peer}`);
 				this.reconnectToPeer(peer, attempt + 1);
@@ -645,6 +658,7 @@ export class P2PServer {
 		}
 		const dialed = (socket as unknown as { url?: string }).url;
 		if (dialed) {
+			this._redials.delete(this.normalizePeerUrl(dialed)); // a later loss starts the backoff over
 			this._addresses.markSuccess(this.normalizePeerUrl(dialed), Date.now());
 			this._persistPeers();
 		}

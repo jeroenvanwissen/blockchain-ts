@@ -19,7 +19,7 @@
 
 ## Status
 
-**Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`).
+**Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 1200 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings the PoW phase lasts about 10 hours, longer than the 8-hour stake age (`STAKE_MIN_AGE`), so staking takes over from mining without a pause.
 
 Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), can be [encrypted](#wallet-encryption), and is backed up as a [24-word seed phrase](#seed-phrase-backup). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
 
@@ -65,7 +65,7 @@ git --version          # Should be 2.30+
 
 | Feature                  | Description                                                       |
 | ------------------------ | ----------------------------------------------------------------- |
-| **Hybrid Consensus**     | PoW transitions to PoS at block 100 with difficulty adjustment    |
+| **Hybrid Consensus**     | PoW transitions to PoS after block 1200 (about 10 hours)          |
 | **UTXO Model**           | Unspent Transaction Output tracking with double-spend prevention  |
 | **Coinbase Maturity**    | Coinbase outputs require 10 confirmations before spending         |
 | **P2P Networking**       | WebSocket-based peer communication with chain synchronization     |
@@ -149,7 +149,7 @@ Key constants in `src/config.ts`:
 | `API_PORT`                      | P2P port + 1000 | HTTP API port (env: `API_PORT`; `0` picks a free port) |
 | `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
 | `LOG_LEVEL`                     | info    | Node log level: debug, info, warn or error (env: `LOG_LEVEL`) |
-| `POW_CUTOFF_BLOCK`              | 100     | Last PoW height; PoS from the next block       |
+| `POW_CUTOFF_BLOCK`              | 1200    | Last PoW height; PoS from the next block       |
 | `STAKE_MIN_AGE`                 | 8 h     | Age a UTXO needs before it can stake, counted from the block that created it |
 | `STAKE_MIN_CONFIRMATIONS`       | 10      | Confirmations a UTXO needs before it can stake |
 | `STAKE_TIMESTAMP_GRANULARITY`   | 16 s    | PoS block timestamps are multiples of this     |
@@ -185,7 +185,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
-| `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
+| `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks, if the consensus rules are the same |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
@@ -225,7 +225,7 @@ npm run dev -- --mine
 
 The target is retargeted every block toward one block per `BLOCK_TIME` (30 s): a new chain mines its first blocks quickly until the target catches up with the miner's hash rate. Mining stops after the PoW phase (`POW_CUTOFF_BLOCK`).
 
-After block 100 blocks are proof of stake. Start a node with `--stake` to stake with its wallet: every 16-second slot it checks whether one of its outputs (at least 10 confirmations and 8 hours old) has a kernel that meets the target, and if so signs and broadcasts a PoS block paying the fixed 10-coin reward to the address that staked. Outputs on any of the wallet's addresses can stake:
+After block 1200 (about 10 hours of mining) blocks are proof of stake. Start a node with `--stake` to stake with its wallet: every 16-second slot it checks whether one of its outputs (at least 10 confirmations and 8 hours old) has a kernel that meets the target, and if so signs and broadcasts a PoS block paying the fixed 10-coin reward to the address that staked. Outputs on any of the wallet's addresses can stake:
 
 ```bash
 npm run dev -- --stake
@@ -408,7 +408,7 @@ All nodes of a network must run the same version: the same genesis block and net
    A node passes on only addresses it has connected to itself or was given, saves the ones that work in `peers.json`, and keeps up to 8 outbound connections. After a restart it rejoins from that file, without seed nodes.
 3. **Ports.** If others reach a node under a different port than the one it listens on (Docker publishing `7001:5001`, a router forwarding 7001), set `P2P_EXTERNAL_PORT=7001`. The node then announces the port they can dial. A node that can't be reached from outside still works: it dials out, others just can't dial it.
 4. **Clocks.** Keep every machine's clock synchronized (NTP, on by default on most systems). Proof of stake works in 16-second slots and refuses blocks more than 2 hours ahead. A clock that is off by minutes makes a node's blocks lose races or be refused.
-5. **Phases.** Someone mines the first 100 blocks (`--mine`). After that only staked blocks are valid, and a coin can stake once it is 8 hours old and 10 blocks deep. On a brand-new network this means a pause of several hours after block 100 ([TASK-0051](tasks/TASK-0051-pow-phase-length.md)).
+5. **Phases.** Someone mines the first 1200 blocks (`--mine`), which takes about 10 hours. After that only staked blocks are valid, and a coin can stake once it is 8 hours old and 10 blocks deep. Because mining lasts longer than that, the coins mined in the first hours can stake by the time it ends, so run `--stake` on the mining node (or on a node that received coins early) for the network to continue.
 6. **Check it.** `cli status` on each machine shows its peers and height, `GET /peers` lists the connections, and every node should report the same tip. The [block explorer](#block-explorer) shows the same chain on each.
 
 Peers talk plain WebSocket (`ws://`) and exchange only blocks, transactions and peer addresses, which are public anyway. The HTTP API stays on loopback unless `API_HOST` exposes it, and the wallet routes never answer another machine.
@@ -514,7 +514,7 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 
 The `MEMPOOL` exchange gets a payment to peers that weren't connected when it was made: a node that sent a payment while it had no peers, or a node that just started. Nodes from before the exchange ignore these two messages.
 
-A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up every minute from its address book: addresses that worked first, at random. Peers' `PEERS` messages add at most 32 addresses each and never decide whom the node dials. Addresses that fail 5 times in a row are dropped, unless you configured them (`--peers`, `SEED_NODES`), and only configured or verified addresses are passed on. Lost peers are redialed with doubling delays capped at 60 s. A node keeps one connection per peer node, recognized by the nonce in `VERSION`, even when it is reachable under several addresses (a Docker service name and its IP) or both nodes dial each other: the dialing side closes the extra one (for two nodes that dialed each other, the one with the higher nonce) and doesn't redial that address while the node stays connected. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
+A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up every minute from its address book: addresses that worked first, at random. Peers' `PEERS` messages add at most 32 addresses each and never decide whom the node dials. Addresses that fail 5 times in a row are dropped, unless you configured them (`--peers`, `SEED_NODES`), and only configured or verified addresses are passed on. Lost peers are redialed with doubling delays capped at 60 s; the delay starts over only after a completed handshake, so a peer that keeps refusing it (another protocol version, a ban) is redialed less and less often. A node keeps one connection per peer node, recognized by the nonce in `VERSION`, even when it is reachable under several addresses (a Docker service name and its IP) or both nodes dial each other: the dialing side closes the extra one (for two nodes that dialed each other, the one with the higher nonce) and doesn't redial that address while the node stays connected. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
 
 ---
 
@@ -571,7 +571,7 @@ Block and transaction formats change while the project is pre-release, and each 
 
 ### `Disconnecting peer: protocol version ...` or `invalid stored block` after an upgrade
 
-Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
+Consensus rules also change while the project is pre-release. When they do, the protocol version goes up, and nodes on different versions refuse to peer. Stored blocks that break a new rule are dropped at startup, and the node continues from the last valid block: the saved chainstate records the rules it was validated under, so after a rule change the node validates every stored block again. Upgrade every node, and delete old data directories if the chain shrinks unexpectedly.
 
 ### Port Already in Use
 

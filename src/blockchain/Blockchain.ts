@@ -8,7 +8,7 @@ import { outpointKey, UtxoSet, type UTXO } from './UtxoSet.js';
 import { AddressIndex, type AddressActivity } from './AddressIndex.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
-import { readChainstate, writeChainstate, type Chainstate } from './chainstate.js';
+import { readChainstate, writeChainstate, type Chainstate, type ChainRules } from './chainstate.js';
 import { readMempoolFile, writeMempoolFile } from './mempoolFile.js';
 import * as path from 'path';
 import { Mempool } from './Mempool.js';
@@ -568,6 +568,7 @@ export class Blockchain {
 			writeChainstate(this._chainstatePath, {
 				tip: this.getLatestBlock().hash,
 				height: this.chain.length - 1,
+				rules: this._rules,
 				utxos: this._utxos.all(),
 				modifiers: this._modifiers,
 				undo: this.chain.map((block) => this._undo.get(block.hash) ?? []),
@@ -623,15 +624,32 @@ export class Blockchain {
 		log.info(`Mempool loaded: ${admitted} pending transaction(s)${dropped > 0 ? `, ${dropped} no longer valid` : ''}`);
 	}
 
-	/** The saved chainstate, if any and readable (otherwise startup replays from genesis). */
+	private get _rules(): ChainRules {
+		return { powCutoffBlock: this._options.powCutoffBlock, minStakeAge: this._options.minStakeAge };
+	}
+
+	/**
+	 * The saved chainstate, if any, readable and validated under this node's rules (otherwise
+	 * startup replays from genesis, so blocks the current rules reject are found).
+	 */
 	private _readChainstate(): Chainstate | undefined {
 		if (!this._options.useChainstate) return undefined;
+		let saved: Chainstate | undefined;
 		try {
-			return readChainstate(this._chainstatePath);
+			saved = readChainstate(this._chainstatePath);
 		} catch (error) {
 			log.warn(`ignoring the saved chainstate: ${(error as Error).message}`);
 			return undefined;
 		}
+		const { powCutoffBlock, minStakeAge } = this._rules;
+		if (saved && (saved.rules.powCutoffBlock !== powCutoffBlock || saved.rules.minStakeAge !== minStakeAge)) {
+			log.warn(
+				`ignoring the saved chainstate: validated with other consensus rules (PoW until block ` +
+					`${saved.rules.powCutoffBlock}, stake age ${saved.rules.minStakeAge} s); validating every block`,
+			);
+			return undefined;
+		}
+		return saved;
 	}
 
 	/**

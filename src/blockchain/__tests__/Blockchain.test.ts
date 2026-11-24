@@ -109,13 +109,19 @@ describe('Blockchain', () => {
 	});
 
 	describe('Consensus Transition', () => {
-		it(`should use PoW for first ${Number(POW_CUTOFF_BLOCK)} blocks`, async () => {
+		it('should start in the PoW phase on the default parameters', () => {
+			expect(blockchain['_options'].powCutoffBlock).toBe(POW_CUTOFF_BLOCK);
+			expect(blockchain.isProofOfStakePhase()).toBe(false);
+		});
+
+		it('should take PoW blocks up to the cutoff height and refuse them after it', async () => {
+			const cutoff = 12;
+			blockchain = new Blockchain({ ...testOptions, powCutoffBlock: cutoff });
 			const minerAddr = minerWallet.getAddress();
-			await minePowBlocks(Number(POW_CUTOFF_BLOCK), String(minerAddr));
-			const chain = blockchain.getChain();
-			for (let i = 1; i <= Number(POW_CUTOFF_BLOCK); i++) {
-				expect(chain[i].isProofOfWork()).toBe(true);
-			}
+			await minePowBlocks(cutoff, minerAddr);
+			expect(blockchain.getChain().slice(1).every((block) => block.isProofOfWork())).toBe(true);
+			expect(blockchain.isProofOfStakePhase()).toBe(true);
+			await expect(minePowBlocks(1, minerAddr)).rejects.toThrow(`PoW blocks no longer accepted after block ${cutoff}`);
 		});
 
 	});

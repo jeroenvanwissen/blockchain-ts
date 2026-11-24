@@ -99,7 +99,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0048](TASK-0048-payments-survive-crash.md) | Pending payments survive a crash | done | P2 | small | TASK-0047 | owner request |
 | [TASK-0049](TASK-0049-seed-phrase.md) | Seed-phrase backup and restore (BIP39) | done | P2 | medium | TASK-0041 | owner request |
 | [TASK-0050](TASK-0050-multi-machine-network.md) | A network of nodes on separate machines | done | P2 | medium | TASK-0043 | owner request |
-| [TASK-0051](TASK-0051-pow-phase-length.md) | A new network shouldn't pause between the PoW phase and the first stakeable coins | todo (owner decision) | P2 | small | TASK-0025 | found in TASK-0050 |
+| [TASK-0051](TASK-0051-pow-phase-length.md) | A new network shouldn't pause between the PoW phase and the first stakeable coins | done | P2 | small | TASK-0025 | found in TASK-0050 |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

@@ -4,18 +4,26 @@ import type { UTXO } from './UtxoSet.js';
 
 /**
  * Validated chain state at a tip, saved so startup can skip re-validating the blocks up to it
- * (TASK-0029). File: a header line `{"version":1,"checksum":"<sha256 of the payload>"}`, then the
- * payload as JSON. Outputs are stored as tuples to keep the file small.
+ * (TASK-0029). File: a header line `{"version":2,"checksum":"<sha256 of the payload>"}`, then the
+ * payload as JSON. Outputs are stored as tuples to keep the file small. The state holds only under
+ * the consensus rules it was validated with, so it records them (TASK-0051).
  */
 export interface Chainstate {
 	tip: string; // hash of the block the state is after
 	height: number;
+	rules: ChainRules;
 	utxos: UTXO[];
 	modifiers: string[]; // stake modifier after each block 0..height
 	undo: UTXO[][]; // outputs each block 0..height spent
 }
 
-export const CHAINSTATE_VERSION = 1;
+/** The network parameters a chainstate was validated under. */
+export interface ChainRules {
+	powCutoffBlock: number;
+	minStakeAge: number; // seconds
+}
+
+export const CHAINSTATE_VERSION = 2; // 2: records the rules (TASK-0051)
 
 // [txHash, outputIndex, address, amount, blockIndex, flags (1 coinbase, 2 coinstake), txTimestamp, blockTimestamp]
 type UtxoTuple = [string, number, string, string, number, number, number, number];
@@ -57,11 +65,18 @@ function fromTuple(t: unknown): UTXO {
 	};
 }
 
+function isChainRules(value: unknown): value is ChainRules {
+	if (typeof value !== 'object' || value === null) return false;
+	const { powCutoffBlock, minStakeAge } = value as Record<string, unknown>;
+	return Number.isSafeInteger(powCutoffBlock) && Number.isSafeInteger(minStakeAge);
+}
+
 /** Write atomically (temporary file, then rename). */
 export function writeChainstate(file: string, state: Chainstate): void {
 	const payload = JSON.stringify({
 		tip: state.tip,
 		height: state.height,
+		rules: state.rules,
 		utxos: state.utxos.map(toTuple),
 		modifiers: state.modifiers,
 		undo: state.undo.map((spent) => spent.map(toTuple)),
@@ -84,9 +99,10 @@ export function readChainstate(file: string): Chainstate | undefined {
 	if (crypto.createHash('sha256').update(payload).digest('hex') !== header.checksum) throw new Error('checksum mismatch');
 
 	const data = JSON.parse(payload) as Record<string, unknown>;
-	const { tip, height, utxos, modifiers, undo } = data;
+	const { tip, height, rules, utxos, modifiers, undo } = data;
 	if (typeof tip !== 'string' || !HASH_PATTERN.test(tip)) throw new Error('malformed tip');
 	if (!Number.isSafeInteger(height) || (height as number) < 0) throw new Error('malformed height');
+	if (!isChainRules(rules)) throw new Error('malformed rules');
 	const count = (height as number) + 1;
 	if (!Array.isArray(modifiers) || modifiers.length !== count || !modifiers.every((m) => typeof m === 'string' && HASH_PATTERN.test(m))) {
 		throw new Error('malformed stake modifiers');
@@ -96,6 +112,7 @@ export function readChainstate(file: string): Chainstate | undefined {
 	return {
 		tip,
 		height: height as number,
+		rules: { powCutoffBlock: rules.powCutoffBlock, minStakeAge: rules.minStakeAge },
 		utxos: utxos.map(fromTuple),
 		modifiers: modifiers as string[],
 		undo: (undo as unknown[][]).map((spent) => spent.map(fromTuple)),

@@ -1,12 +1,26 @@
 // Saved chainstate (TASK-0029): startup takes the validated state at a saved tip and validates
-// only the blocks after it. Whatever the path, the live state must equal a full replay.
+// only the blocks after it, if it was validated under the same rules. Whatever the path, the live
+// state must equal a full replay.
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Block } from '../../blockchain/Block.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
 import { BLOCK_TIME, COIN, COIN_MATURITY } from '../../config.js';
-import { advanceTime, extendBranch, makeTempDir, mineBlocks, openChain, openWallet, removeTempDir, useTestClock } from './helpers.js';
+import {
+	advanceTime,
+	extendBranch,
+	finishPowPhase,
+	makeTempDir,
+	mineBlocks,
+	openChain,
+	openPosChain,
+	openWallet,
+	POS_TEST_CUTOFF,
+	removeTempDir,
+	stakeBlocks,
+	useTestClock,
+} from './helpers.js';
 
 const SPACING = BLOCK_TIME * 1000;
 
@@ -118,6 +132,33 @@ describe('Saved chainstate', () => {
 		expect(damaged.validated).toBe(length - 1);
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring the saved chainstate: checksum mismatch'));
 		expectConsistent(damaged.chain);
+	});
+
+	it('should validate every block when the chainstate was saved under other rules, dropping those they reject', async () => {
+		// A node that staked after the old PoW phase starts with a longer one (TASK-0051)
+		const chain = openPosChain(dir);
+		await finishPowPhase(chain, miner.address);
+		await stakeBlocks(chain, miner, 2);
+		chain.saveChainstate();
+		const warn = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+		const { chain: reopened, validated } = reopen({ powCutoffBlock: POS_TEST_CUTOFF + 10 });
+
+		// From genesis: the PoW blocks and the first PoS block, which fails; then the PoW blocks again
+		expect(validated).toBe(2 * POS_TEST_CUTOFF + 1);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining(`validated with other consensus rules (PoW until block ${POS_TEST_CUTOFF}`));
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining(`PoS blocks not accepted before block ${POS_TEST_CUTOFF + 11}`));
+		expect(reopened.getChain()).toHaveLength(POS_TEST_CUTOFF + 1);
+		expectConsistent(reopened);
+		await mineBlocks(reopened, miner.address, 1); // the PoW phase goes on
+		expect(reopened.getLatestBlock().isProofOfWork()).toBe(true);
+
+		reopened.saveChainstate(); // under the new rules: used at the next start
+		warn.mockClear();
+		const again = reopen({ powCutoffBlock: POS_TEST_CUTOFF + 10 }).chain;
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('other consensus rules'));
+		expect(again.getLatestBlock().hash).toBe(reopened.getLatestBlock().hash);
+		expectConsistent(again);
 	});
 
 	it('should save the chainstate every chainstateInterval blocks', async () => {
