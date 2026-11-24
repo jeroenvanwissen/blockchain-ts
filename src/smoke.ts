@@ -161,6 +161,8 @@ async function main(): Promise<void> {
 		step('stop node A with SIGTERM and restart it without mining; expect the same chain and wallet');
 		await stopNode(nodeB);
 		await stopNode(nodeA, 'SIGTERM'); // what systemd and Docker send: must save the chainstate
+		assertFile(path.join(dataA, 'blocks', 'mempool.json')); // and the pending transactions (none here)
+		if (!nodeA.output().includes('saved 0 pending transaction(s)')) throw new Error("A didn't report saving its mempool");
 		const minedHeights = [...nodeA.output().matchAll(/mined block (\d+) \((\w+)\)/g)];
 		const [, lastHeight, lastHash] = minedHeights[minedHeights.length - 1];
 		nodeA = startNode('node A (restart)', cwd, dataA, portA);

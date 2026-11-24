@@ -146,7 +146,8 @@ if (isStaking) {
 }
 
 // Stop cleanly on SIGINT (Ctrl+C) and SIGTERM (systemd, Docker, kill): stop producing blocks,
-// save the chainstate (the next start validates only newer blocks), close peers and the API.
+// save the chainstate (the next start validates only newer blocks) and the pending transactions
+// (re-admitted at the next start), close peers and the API.
 // A second signal exits at once.
 let stopping = false;
 async function shutdown(code = 0): Promise<void> {
@@ -156,6 +157,7 @@ async function shutdown(code = 0): Promise<void> {
 	staking.stop();
 	await miner.stop().catch(() => {});
 	blockchain.saveChainstate();
+	blockchain.saveMempool();
 	await Promise.allSettled([p2pServer.close(), api.close()]);
 	process.exit(code);
 }

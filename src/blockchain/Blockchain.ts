@@ -9,6 +9,7 @@ import { AddressIndex, type AddressActivity } from './AddressIndex.js';
 import { requiredBits } from './retarget.js';
 import { minRelayFee } from './fees.js';
 import { readChainstate, writeChainstate, type Chainstate } from './chainstate.js';
+import { readMempoolFile, writeMempoolFile } from './mempoolFile.js';
 import * as path from 'path';
 import { Mempool } from './Mempool.js';
 import { bitsToTarget, MAX_TARGET_BITS, POW_LIMIT_BITS } from './target.js';
@@ -31,6 +32,7 @@ import {
 	MEDIAN_TIME_SPAN,
 	BLOCK_RESERVED_BYTES,
 	CHAINSTATE_FILENAME,
+	MEMPOOL_FILENAME,
 	CHAINSTATE_INTERVAL,
 	MAX_BLOCK_SIZE,
 	MAX_BLOCK_TRANSACTIONS,
@@ -134,8 +136,9 @@ export class Blockchain {
 			isInvalid: false,
 		});
 
-		// Load the rest of the blockchain
+		// Load the rest of the blockchain, then the transactions that were pending at shutdown
 		this.loadBlockchain();
+		this._loadMempool();
 	}
 
 	/** Chain work contributed by one block (PoW and PoS alike): 2^256 / (target + 1). */
@@ -572,6 +575,50 @@ export class Blockchain {
 		} catch (error) {
 			log.warn('could not save the chainstate:', (error as Error).message);
 		}
+	}
+
+	private get _mempoolPath(): string {
+		return path.join(this._options.blocksDir, MEMPOOL_FILENAME);
+	}
+
+	/**
+	 * Save the pending transactions so the next start re-admits them (on shutdown). A failed
+	 * save only loses them; the wallet's coins stay spendable.
+	 */
+	public saveMempool(): void {
+		try {
+			const transactions = this._mempool.transactions();
+			writeMempoolFile(this._mempoolPath, transactions);
+			log.info(`saved ${transactions.length} pending transaction(s)`);
+		} catch (error) {
+			log.warn('could not save the mempool:', (error as Error).message);
+		}
+	}
+
+	/**
+	 * Re-admit the transactions saved at the last shutdown, in their arrival order, with the
+	 * usual checks: those confirmed, conflicting or otherwise invalid by now are dropped.
+	 */
+	private _loadMempool(): void {
+		let saved: Transaction[];
+		try {
+			saved = readMempoolFile(this._mempoolPath);
+		} catch (error) {
+			log.warn(`ignoring the saved mempool: ${(error as Error).message}`);
+			return;
+		}
+		let admitted = 0;
+		for (const tx of saved) {
+			try {
+				this._addTransactionInternal(tx);
+				admitted++;
+			} catch (error) {
+				log.debug(`dropped saved transaction ${tx.calculateHash().slice(0, 16)}: ${(error as Error).message}`);
+			}
+		}
+		if (saved.length === 0) return;
+		const dropped = saved.length - admitted;
+		log.info(`Mempool loaded: ${admitted} pending transaction(s)${dropped > 0 ? `, ${dropped} no longer valid` : ''}`);
 	}
 
 	/** The saved chainstate, if any and readable (otherwise startup replays from genesis). */
@@ -1219,6 +1266,11 @@ export class Blockchain {
 
 	getPendingTransactions(): Transaction[] {
 		return this._mempool.transactions();
+	}
+
+	/** Txids of pending transactions for peers: highest fee rate first, at most `max`. */
+	getMempoolInventory(max: number): string[] {
+		return this._mempool.select(max, Number.MAX_SAFE_INTEGER).map((entry) => entry.txid);
 	}
 
 	private loadBlockchain(): void {

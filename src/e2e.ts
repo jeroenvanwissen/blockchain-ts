@@ -11,6 +11,9 @@
 //   5. C reconnects: one side reorganizes and all tips converge.
 //   6. A restarts and the network converges again; C's CLI reports the payment in its balance
 //      and its history, with the blocks C staked.
+//   7. C, alone, pays A and restarts with the payment pending (the mempool is saved and loaded).
+//      It rejoins behind and without staking: A requests the payment from C's mempool after the
+//      handshake and stakes it into a block.
 // Node tips and balances are read from each node's HTTP API.
 import * as fs from 'fs';
 import * as os from 'os';
@@ -25,6 +28,7 @@ import {
 } from './config.js';
 import { P2PServer } from './networking/P2PServer.js';
 import {
+	API_READY,
 	apiGet,
 	apiUrl,
 	freePort,
@@ -179,6 +183,33 @@ async function main(): Promise<void> {
 		if (stakedByC > 0 && !(/\breward\s+\+/.test(historyC.stdout) && /\bstake\s+0\s/.test(historyC.stdout))) {
 			throw new Error(`C staked a block on the converged chain, but its CLI history doesn't show it: ${historyC.stdout.trim()}`);
 		}
+
+		step("C pays A while alone, restarts with the payment pending, then rejoins without staking: A gets it and stakes it");
+		await stopNode(nodeC);
+		fs.rmSync(path.join(dirs.c, 'peers.json'), { force: true });
+		nodeC = start('C (alone)', dirs.c, await freePort(), []);
+		await waitFor(nodeC, API_READY, 'C API');
+		const paid = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'send', addressA, '1.5']);
+		if (paid.code !== 0) throw new Error(`C's cli send failed: ${paid.stderr.trim()}`);
+		const pendingTxid = paid.stdout.trim();
+		const alone = nodeC;
+		await stopNode(nodeC, 'SIGTERM');
+		if (!alone.output().includes('saved 1 pending transaction(s)')) throw new Error("C didn't save its pending payment");
+		nodeC = start('C (restarted, payment pending)', dirs.c, await freePort(), []);
+		await waitFor(nodeC, /Mempool loaded: 1 pending transaction\(s\)\n/, 'C re-admitting its pending payment');
+		await waitFor(nodeC, API_READY, 'C API');
+		const pendingHistory = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'history', '--limit', '1']);
+		if (!new RegExp(`^pending\\s+send\\s+-1\\.5\\d*\\s+${pendingTxid}  to ${addressA}, fee `, 'm').test(pendingHistory.stdout)) {
+			throw new Error(`C's history doesn't show the pending payment: ${pendingHistory.stdout.trim()} ${pendingHistory.stderr.trim()}`);
+		}
+		await stopNode(nodeC);
+		// C is behind now (A kept staking): it catches up first, and A requests the payment from C's MEMPOOL
+		nodeC = start('C (rejoined, not staking)', dirs.c, await freePort(), ['--peers', `ws://127.0.0.1:${portA}`]);
+		await waitUntil(() => !!harnessChain.findTransaction(pendingTxid)?.block, "A to stake C's payment into a block", PHASE_TIMEOUT_MS);
+		await waitUntil(() => agree([nodeA, nodeB, nodeC]), 'A, B and C to agree again', PHASE_TIMEOUT_MS);
+		const confirmedAtC = await apiGet<{ confirmations: number }>(nodeC, `/transactions/${pendingTxid}`);
+		if (confirmedAtC.confirmations < 1) throw new Error("C doesn't see its payment confirmed");
+
 		if (!harnessChain.isChainValid()) throw new Error('converged chain is not valid');
 		running.filter((node) => node.child.exitCode === null).forEach(noLoadErrors);
 		const penalizing = running.find((node) => /Peer misbehaving|Banning peer/.test(node.output()));

@@ -34,6 +34,7 @@ export const PEER_DATA_PATH = path.join(DATA_DIR, 'peers.json');
 export const MAX_BLOCK_FILE_SIZE = 128 * 1024 * 1024; // 128 MB per blk file
 // Saved chainstate (TASK-0029): startup validates only blocks after it
 export const CHAINSTATE_FILENAME = 'chainstate.json'; // in the blocks directory
+export const MEMPOOL_FILENAME = 'mempool.json'; // in the blocks directory: pending transactions saved at shutdown
 export const CHAINSTATE_INTERVAL = 500; // also saved every this many connected blocks, besides on shutdown
 
 // P2P configuration
@@ -60,6 +61,7 @@ export const SYNC_BATCH_SIZE = 200; // max blocks per BLOCKS reply
 export const MAX_LOCATOR_HASHES = 64; // max hashes accepted in a GET_BLOCKS locator
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024; // larger WebSocket messages close the socket
 export const RELAY_SEEN_CACHE_SIZE = 20_000; // recent block hashes / txids remembered for relay
+export const MAX_INVENTORY = 5000; // txids in one MEMPOOL or GET_TRANSACTIONS message (highest fee rates first)
 
 // Regression-test network (--regtest): separate network id, short PoW phase, no stake age,
 // for end-to-end tests with real node processes

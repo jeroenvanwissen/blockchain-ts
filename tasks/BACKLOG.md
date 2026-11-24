@@ -95,7 +95,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0044](TASK-0044-one-connection-per-node.md) | One connection per peer node, whatever address reaches it | done | P2 | small | TASK-0039 | found in TASK-0043 |
 | [TASK-0045](TASK-0045-address-history.md) | Address history index: every transaction per address, in the API and explorer | done | P2 | medium | TASK-0042 | owner request |
 | [TASK-0046](TASK-0046-wallet-history.md) | Wallet transaction history over all addresses, in the API and CLI | done | P2 | small | TASK-0045 | owner request |
-| [TASK-0047](TASK-0047-keep-unconfirmed-payments.md) | Keep the wallet's unconfirmed payments across restarts | todo | P2 | small | TASK-0019 | found in TASK-0046 |
+| [TASK-0047](TASK-0047-keep-unconfirmed-payments.md) | Keep the wallet's unconfirmed payments across restarts | done | P2 | small | TASK-0019 | found in TASK-0046 |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

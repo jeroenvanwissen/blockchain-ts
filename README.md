@@ -183,6 +183,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
 | `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
+| `blocks/mempool.json`   | Transactions still pending at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed, account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
@@ -241,6 +242,8 @@ npm run cli -- send <address1> 1 <address2> 2.25     # several recipients in one
 ```
 
 For another node, pass its data dir (for its `api.cookie`) and API URL: `npm run cli -- --data-dir ./data/node2 --api http://127.0.0.1:6002 balance`.
+
+A payment that is still pending when the node stops (Ctrl+C, SIGTERM, `docker stop`) is saved in `blocks/mempool.json` and pending again after the restart. Peers that connect later get it through the [`MEMPOOL` exchange](#p2p-message-protocol), so it confirms even if it was sent while the node had no peers. A node that crashes or is killed loses its pending payments unless a peer already has them; the coins stay in the wallet and can be sent again.
 
 ### Wallet Addresses
 
@@ -434,8 +437,12 @@ JSON over WebSocket. Every connection starts with a handshake; other messages ar
 | `GET_BLOCKS`  | Request   | Block locator (tip-dense, then exponentially sparse hashes) |
 | `BLOCKS`      | Reply     | Up to 200 blocks after the highest common block, plus `more` |
 | `BLOCK`       | Broadcast | New or newly synced tip block; relayed once accepted, never back to the sender. An unknown parent triggers `GET_BLOCKS` to that peer |
-| `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender |
+| `TRANSACTION` | Broadcast | New transaction; relayed once accepted to the mempool, never back to the sender. Also the reply to `GET_TRANSACTIONS` |
 | `PEERS`       | Broadcast | Known peer addresses (discovery) |
+| `MEMPOOL`     | Both, after the handshake | The txids of up to 5,000 pending transactions, highest fee rates first. The receiver requests the ones it lacks once it has the sender's chain: right away if it has the sender's tip, otherwise after syncing from it |
+| `GET_TRANSACTIONS` | Request | Txids from the peer's `MEMPOOL`; each announced transaction is sent once, as `TRANSACTION` |
+
+The `MEMPOOL` exchange gets a payment to peers that weren't connected when it was made: a node that sent a payment while it had no peers, or a node that just started. Nodes from before the exchange ignore these two messages.
 
 A node accepts up to 32 inbound connections and dials up to 8 peers, topping outbound connections up every minute from its address book: addresses that worked first, at random. Peers' `PEERS` messages add at most 32 addresses each and never decide whom the node dials. Addresses that fail 5 times in a row are dropped, unless you configured them (`--peers`, `SEED_NODES`), and only configured or verified addresses are passed on. Lost peers are redialed with doubling delays capped at 60 s. A node keeps one connection per peer node, recognized by the nonce in `VERSION`, even when it is reachable under several addresses (a Docker service name and its IP) or both nodes dial each other: the dialing side closes the extra one (for two nodes that dialed each other, the one with the higher nonce) and doesn't redial that address while the node stays connected. Malformed messages and invalid blocks add misbehavior points; at 100 the peer is disconnected and banned for 24 hours (by IP; by IP and listen port on loopback). Bans are kept in `banned.json`, so they survive restarts. Block requests from one peer are served one at a time, 100 ms apart; more than 4 waiting counts as misbehavior.
 

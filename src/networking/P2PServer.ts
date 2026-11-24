@@ -13,6 +13,7 @@ import {
 	HANDSHAKE_TIMEOUT,
 	MAX_ADDRESSES_PER_MESSAGE,
 	MAX_INBOUND_PEERS,
+	MAX_INVENTORY,
 	MAX_OUTBOUND_PEERS,
 	MAX_PENDING_GET_BLOCKS,
 	MAX_RECONNECT_ATTEMPTS,
@@ -39,6 +40,8 @@ export enum MessageType {
 	BLOCK = 'BLOCK',
 	TRANSACTION = 'TRANSACTION',
 	PEERS = 'PEERS',
+	MEMPOOL = 'MEMPOOL', // after the handshake: the txids of our pending transactions
+	GET_TRANSACTIONS = 'GET_TRANSACTIONS', // the announced ones we lack; answered with TRANSACTION messages
 }
 
 /** First message on every connection, in both directions. */
@@ -59,7 +62,9 @@ export type Message =
 	| { type: MessageType.BLOCKS; data: { blocks: Block[]; more: boolean } }
 	| { type: MessageType.BLOCK; data: Block }
 	| { type: MessageType.TRANSACTION; data: Transaction }
-	| { type: MessageType.PEERS; data: string[] };
+	| { type: MessageType.PEERS; data: string[] }
+	| { type: MessageType.MEMPOOL; data: { txids: string[] } }
+	| { type: MessageType.GET_TRANSACTIONS; data: { txids: string[] } };
 
 interface PeerState {
 	versionReceived: boolean;
@@ -72,6 +77,11 @@ interface PeerState {
 	score: number; // misbehavior points; BAN_SCORE gets the peer banned
 	pendingGetBlocks: number; // block requests queued for this peer
 	nextBlocksAt: number; // earliest time (ms) the next block batch may be sent
+	caughtUp: boolean; // we have the peer's tip, or finished syncing from it
+	inventoryReceived: boolean; // the peer's MEMPOOL arrived (one per connection)
+	inventory: string[] | null; // its txids, kept until we have caught up
+	announced: Set<string>; // txids in our MEMPOOL to it that it may still request
+	requested: Set<string>; // txids we asked it for
 }
 
 /** Block rejections an honest peer can cause (races, our clock): no misbehavior points. */
@@ -108,6 +118,13 @@ function isVersionPayload(data: unknown): data is VersionPayload {
 		(v.listenPort as number) >= 0 &&
 		(v.listenPort as number) <= 65535
 	);
+}
+
+/** The txid list of a MEMPOOL or GET_TRANSACTIONS message, or null if malformed. */
+function parseTxids(data: unknown): string[] | null {
+	const txids = (data as { txids?: unknown } | null)?.txids;
+	if (!Array.isArray(txids) || txids.length > MAX_INVENTORY) return null;
+	return txids.every((txid) => typeof txid === 'string' && HASH_PATTERN.test(txid)) ? (txids as string[]) : null;
 }
 
 export function isValidPeerAddress(address: string): boolean {
@@ -412,6 +429,11 @@ export class P2PServer {
 			score: 0,
 			pendingGetBlocks: 0,
 			nextBlocksAt: 0,
+			caughtUp: false,
+			inventoryReceived: false,
+			inventory: null,
+			announced: new Set(),
+			requested: new Set(),
 		};
 		state.handshakeTimer?.unref?.(); // don't keep the process alive for it
 		this._peerState.set(socket, state);
@@ -547,6 +569,14 @@ export class P2PServer {
 				case MessageType.PEERS:
 					this._handlePeersMessage(data.data, socket);
 					break;
+				case MessageType.MEMPOOL: {
+					const payload = data.data;
+					enqueue(() => Promise.resolve(this._handleMempool(socket, payload))); // after any BLOCKS before it
+					break;
+				}
+				case MessageType.GET_TRANSACTIONS:
+					this._handleGetTransactions(socket, data.data);
+					break;
 			}
 		});
 	}
@@ -600,7 +630,10 @@ export class P2PServer {
 		if (state.versionReceived && state.version) this._onReady(socket, state.version);
 	}
 
-	/** Handshake complete: share peers and fetch blocks if the peer has a tip we don't. */
+	/**
+	 * Handshake complete: share peers and our pending transactions' txids, and fetch blocks if
+	 * the peer has a tip we don't.
+	 */
 	private _onReady(socket: WebSocket, version: VersionPayload): void {
 		const state = this._peerState.get(socket);
 		if (state?.handshakeTimer) {
@@ -614,7 +647,72 @@ export class P2PServer {
 		}
 		if (this._dropDuplicate(socket, version.nonce)) return;
 		this._sendPeerList(socket);
+		this._sendInventory(socket);
 		if (!this.blockchain.hasBlock(version.tip)) this._requestBlocks(socket);
+		else this._caughtUp(socket);
+	}
+
+	/**
+	 * Tell a new peer which transactions we have pending (highest fee rates first), so a payment
+	 * made while it was away or before it started still reaches it (TASK-0047).
+	 */
+	private _sendInventory(socket: WebSocket): void {
+		const state = this._peerState.get(socket);
+		const txids = this.blockchain.getMempoolInventory(MAX_INVENTORY);
+		if (!state || txids.length === 0) return;
+		state.announced = new Set(txids);
+		this._send(socket, { type: MessageType.MEMPOOL, data: { txids } });
+	}
+
+	/**
+	 * A peer's pending txids: request the ones we lack once we have caught up with its chain
+	 * (until then their inputs may be in blocks we don't have yet). One MEMPOOL per connection.
+	 */
+	private _handleMempool(socket: WebSocket, data: unknown): void {
+		const txids = parseTxids(data);
+		if (!txids) {
+			this._misbehaving(socket, 10, 'malformed MEMPOOL');
+			return;
+		}
+		const state = this._peerState.get(socket);
+		if (!state || state.inventoryReceived) return;
+		state.inventoryReceived = true;
+		if (state.caughtUp) this._requestMissing(socket, txids);
+		else state.inventory = txids;
+	}
+
+	/** We have the peer's chain: request the announced transactions we don't have. */
+	private _caughtUp(socket: WebSocket): void {
+		const state = this._peerState.get(socket);
+		if (!state || state.caughtUp) return;
+		state.caughtUp = true;
+		if (state.inventory) this._requestMissing(socket, state.inventory);
+		state.inventory = null;
+	}
+
+	private _requestMissing(socket: WebSocket, txids: string[]): void {
+		const state = this._peerState.get(socket);
+		if (!state) return;
+		const missing = txids.filter((txid) => !this.blockchain.findTransaction(txid));
+		if (missing.length === 0) return;
+		state.requested = new Set(missing);
+		this._send(socket, { type: MessageType.GET_TRANSACTIONS, data: { txids: missing } });
+	}
+
+	/** Send the requested transactions we announced to this peer and still have, each once. */
+	private _handleGetTransactions(socket: WebSocket, data: unknown): void {
+		const txids = parseTxids(data);
+		if (!txids) {
+			this._misbehaving(socket, 10, 'malformed GET_TRANSACTIONS');
+			return;
+		}
+		const state = this._peerState.get(socket);
+		if (!state) return;
+		for (const txid of txids) {
+			if (!state.announced.delete(txid)) continue; // never announced, or already sent
+			const found = this.blockchain.findTransaction(txid);
+			if (found && !found.block) this._send(socket, { type: MessageType.TRANSACTION, data: found.transaction });
+		}
 	}
 
 	/** Inbound peers tell us their listen port: remember host:port so others can reach them. */
@@ -758,12 +856,15 @@ export class P2PServer {
 		}
 		if (payload.more === true && lastHash) {
 			this._requestBlocks(socket, lastHash);
-		} else if (accepted > 0) {
+			return;
+		}
+		if (accepted > 0) {
 			// Caught up: announce the new tip so peers that lack it can sync from us
 			const tip = this.blockchain.getLatestBlock();
 			this._markSeen(`b:${tip.hash}`);
 			this.broadcast({ type: MessageType.BLOCK, data: tip }, socket);
 		}
+		this._caughtUp(socket);
 	}
 
 	/**
@@ -817,7 +918,10 @@ export class P2PServer {
 			return;
 		}
 		try {
-			if (!this._markSeen(`t:${transaction.calculateHash()}`)) return;
+			const txid = transaction.calculateHash();
+			// One we requested is reconsidered even if seen before (e.g. rejected while we were behind)
+			const requested = !!from && !!this._peerState.get(from)?.requested.delete(txid);
+			if (!this._markSeen(`t:${txid}`) && !requested) return;
 			await this.blockchain.addTransaction(transaction);
 			// Relay only accepted transactions, and not back to the sender
 			this.broadcast({ type: MessageType.TRANSACTION, data: transaction }, from);
