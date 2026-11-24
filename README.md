@@ -77,7 +77,7 @@ git --version          # Should be 2.30+
 | **Staking**              | Kernel PoS: any mature UTXO can stake; PoS blocks signed by the staker; fixed 10-coin reward |
 | **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
 | **Block Header**         | Merkle root of full transactions, compact target (`bits`), sha256d |
-| **Persistence**          | Chunked block storage with protobuf index, wallet as protobuf   |
+| **Persistence**          | Append-only block files and block index, wallet as protobuf     |
 
 ---
 
@@ -88,7 +88,7 @@ src/
 ├── blockchain/
 │   ├── Block.ts              # Block header (merkle root, bits), hashing, JSON wire form
 │   ├── Blockchain.ts         # Block tree, fork choice, reorgs, validation (_connectBlock), mempool
-│   ├── BlockStore.ts         # Append-only chunked block storage with protobuf index
+│   ├── BlockStore.ts         # Append-only block files and block index
 │   ├── Transaction.ts        # Transaction format, txid/witness hash, signing, verification
 │   ├── UtxoSet.ts            # Unspent outputs by outpoint, per-address index
 │   ├── Wallet.ts             # HD keys, addresses, encryption, persistence (keys only)
@@ -117,6 +117,7 @@ src/
 ├── cli.ts                    # npm run cli: status, balance, addresses, history, send via the API
 ├── smoke.ts                  # npm run smoke: two real nodes
 ├── e2e.ts                    # npm run e2e: three regtest nodes, partition, reorg
+├── scale.ts                  # npm run scale: costs as the chain grows
 └── nodeHarness.ts            # Helpers for driving node processes
 ```
 
@@ -126,7 +127,7 @@ src/
 | ------------------ | --------------------- | ---------------------------------------------------- |
 | **Block**          | `Block.ts`            | Block structure, hash calculation, PoW/PoS detection |
 | **Blockchain**     | `Blockchain.ts`       | Chain management, UTXO set, consensus, staking       |
-| **BlockStore**     | `BlockStore.ts`       | Chunked block persistence with protobuf index        |
+| **BlockStore**     | `BlockStore.ts`       | Append-only block files and block index              |
 | **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
 | **Wallet**         | `Wallet.ts`           | HD keys and addresses, encryption, protobuf storage  |
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
@@ -184,7 +185,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | File                    | Content                                    |
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
-| `blocks/index.dat`      | Block index (hash/height → file + offset)  |
+| `blocks/index.dat`      | Block index (hash/height → file + offset): one record appended per stored block; rebuilt from the `blk*.dat` files if it's missing or damaged |
 | `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks, if the consensus rules are the same |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
@@ -340,6 +341,7 @@ npm run check           # Build, test suite and lint
 npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
 npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~2 min)
 npm run docker:check    # Build the image and check a running container (needs Docker)
+npm run scale           # Cost per block, memory and startup on a 16,000-block chain (~1 min)
 ```
 
 ### Running in Docker

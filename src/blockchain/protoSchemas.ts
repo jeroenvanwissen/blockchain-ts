@@ -43,24 +43,6 @@ message BlockchainData {
 }
 `;
 
-export const BLOCK_INDEX_SCHEMA = `
-syntax = "proto3";
-
-message BlockIndexEntry {
-  string hash = 1;
-  uint32 height = 2;
-  uint32 file_number = 3;
-  uint64 byte_offset = 4;
-  uint32 data_length = 5;
-}
-
-message BlockIndex {
-  repeated BlockIndexEntry entries = 1;
-  uint32 current_file_number = 2;
-  uint64 current_file_size = 3;
-}
-`;
-
 export const WALLET_SCHEMA = `
 syntax = "proto3";
 

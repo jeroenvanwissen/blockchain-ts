@@ -101,6 +101,13 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0050](TASK-0050-multi-machine-network.md) | A network of nodes on separate machines | done | P2 | medium | TASK-0043 | owner request |
 | [TASK-0051](TASK-0051-pow-phase-length.md) | A new network shouldn't pause between the PoW phase and the first stakeable coins | done | P2 | small | TASK-0025 | found in TASK-0050 |
 
+## Milestone 9: a chain that runs for years (scale measurement, 2026-11-24)
+
+| ID | Task | Status | Priority | Size | Depends on | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| [TASK-0052](TASK-0052-append-only-block-index.md) | Append-only block index: storing a block costs the same at any height | done | P1 | small | none | scale measurement |
+| [TASK-0053](TASK-0053-blocks-on-disk.md) | Blocks and undo data on disk, not in memory: memory and chainstate don't grow with the chain | pending | P1 | large | TASK-0052 | scale measurement |
+
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 
 The old backlog used wave IDs (A1 to F3). Its task files lived in `.agent/tasks/` and are still in git history before this change.
