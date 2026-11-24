@@ -2,7 +2,7 @@
 
 ## Purpose and layout
 
-A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, WebSocket peers, protobuf block storage. **It doesn't work end to end yet.** See [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) for what is broken and [tasks/BACKLOG.md](tasks/BACKLOG.md) for the plan.
+A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 signatures, an HD wallet, WebSocket peers, protobuf block storage, an HTTP API with a block explorer, a CLI and a Docker image. It works end to end: nodes mine the PoW phase, stake Peercoin-style kernel PoS blocks, pay each other, sync, reorganize and restart, and `npm run e2e` checks this with real node processes. Work items and their status are in [tasks/BACKLOG.md](tasks/BACKLOG.md); the assessments in `tasks/` record the findings the backlog came from.
 
 - `src/blockchain/`: chain state and consensus (`Blockchain.ts`), `Block.ts`, `Transaction.ts`, `Wallet.ts` (HD wallet: BIP32 addresses m/0'/0/i from one seed via `hd.ts`, a primary address for rewards and change, a watched lookahead; keys only, balances come from the chain's UTXO set), `amount.ts` (`parseCoins`, `formatCoins`), `BlockStore.ts` (append-only `blk*.dat` files plus `index.dat`), `Miner.ts` (in-node PoW miner, enabled with `--mine`) with `miningWorker.cjs`, `StakingService.ts` (in-node staking loop, enabled with `--stake`)
 - `src/api/ApiServer.ts`: HTTP API. Public read-only chain routes (`/status`, `/blocks`, `/blocks/:heightOrHash`, `/transactions/:txid`, `/addresses/:address[/utxos|/transactions]`, `/mempool`, `/peers`) and wallet routes (`GET /wallet`, `GET`/`POST /wallet/addresses`, `GET /wallet/transactions`, `POST /wallet/send`, encrypt, unlock, lock, passphrase, `GET /wallet/staking`) that answer only loopback clients and need the bearer token from `<data dir>/api.cookie` (`src/api/cookie.ts`, rewritten at every start); `listen()`/`close()`, port 0 supported
@@ -20,15 +20,15 @@ A hybrid PoW/PoS blockchain node in TypeScript: UTXO transactions, secp256k1 sig
 - `src/blockchain/target.ts` (compact `bits` ↔ target, block work) and `src/blockchain/retarget.ts` (`requiredBits`: per-block retarget, separate for PoW and PoS)
 - `src/blockchain/kernel.ts`: PoS kernel hash, kernel target check, stake modifier chaining
 - Tests sit next to their sources in `__tests__/` folders (`*.test.ts`). Unit tests mock `fs` and `protobufjs`.
-- `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the open attack scenarios as `test.failing`
+- `src/__tests__/integration/`: tests with real files in temp dirs (`helpers.ts`: `openChain`, `openWallet`, `mineBlocks`, `solve`). `ConsensusAttacks.test.ts` holds the attack scenarios from the assessment as regression tests (all fixed; an open one would be `test.failing`)
 
 ## Setup and commands
 
 Run npm scripts from the repository root.
 
 - Install: `npm install`
-- Build: `npm run build` (tsc)
-- Test: `npm test` (Jest + ts-jest; about 1 minute)
+- Build: `npm run build` (tsc, then copies the explorer's files to `dist/`)
+- Test: `npm test` (Jest + ts-jest; about 20 seconds)
 - Smoke: `npm run smoke` (real node processes in temp dirs: node A mines, node B syncs and accepts A's next block, A restarts with its chain; fails on any logged error; about 10 s; `-- --keep` keeps the temp dir)
 - Docker: `npm run docker:check` builds the image (`Dockerfile`) and checks a running regtest container: explorer and chain routes from the host, wallet routes refused from the host, the CLI inside (`docker/cli`), native secp256k1, non-root, health, clean `docker stop` with the chainstate saved, restart from the volume. Run it for changes to the Dockerfile, startup, ports or the data dir. `compose.yaml` runs one node; `compose.regtest.yaml` runs a two-node regtest network
 - End-to-end: `npm run e2e` (three `--regtest` node processes plus an in-process harness peer: payment, PoW→PoS, both A and C staking, partition and reorg, restart, convergence, a payment pending across a restart that confirms after rejoining; about 2.5 minutes; prints each node's tip and last log lines on failure). Run it for changes to consensus, P2P or staking
