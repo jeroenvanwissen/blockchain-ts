@@ -4,6 +4,7 @@ import * as path from 'path';
 import protobuf from 'protobufjs';
 import type { Transaction } from './Transaction.js';
 import { addressFromPublicKey } from './address.js';
+import { entropyToMnemonic, MnemonicError, mnemonicToEntropy, mnemonicToSeed, mnemonicWords } from './bip39.js';
 import {
 	HARDENED,
 	derivePath,
@@ -22,6 +23,7 @@ import {
 	MAX_WALLET_BACKUPS,
 	MIN_PASSPHRASE_LENGTH,
 	WALLET_ADDRESS_LOOKAHEAD,
+	WALLET_DISCOVERY_GAP,
 	WALLET_DATA_FILENAME,
 	WALLET_SCRYPT,
 } from '../config.js';
@@ -30,6 +32,14 @@ import { logger } from '../logger.js';
 const log = logger('Wallet');
 
 const SECRET_SIZE = 32; // the seed and a private key are 32 bytes each
+const SEED_PHRASE_WORDS = 24; // 32 bytes of BIP39 entropy
+
+/**
+ * How the stored 32-byte seed becomes the BIP32 seed: 'bip39' entropy goes through its 24-word
+ * phrase (PBKDF2, see bip39.ts); a 'raw' seed (wallets before TASK-0049) is used as it is.
+ */
+type SeedFormat = 'raw' | 'bip39';
+const SEED_FORMAT_BIP39 = 1; // WalletData.seed_format
 
 /** The wallet's secrets encrypted with a passphrase (see EncryptedKey in protoSchemas.ts). */
 interface EncryptedKey {
@@ -52,6 +62,7 @@ interface StoredWalletData {
 	accountPublicKey?: Uint8Array;
 	accountChainCode?: Uint8Array;
 	receiveCount?: number;
+	seedFormat?: number;
 }
 
 export type WalletErrorCode =
@@ -60,7 +71,8 @@ export type WalletErrorCode =
 	| 'not-encrypted'
 	| 'already-encrypted'
 	| 'wrong-passphrase'
-	| 'weak-passphrase';
+	| 'weak-passphrase'
+	| 'no-seed-phrase';
 
 /** Wallet state errors, with a code callers (the API) can map to a response. */
 export class WalletError extends Error {
@@ -98,6 +110,7 @@ interface ParsedWallet {
 	account: ExtendedPublicKey | null; // null: an older wallet that has no seed yet
 	encryptedKey: EncryptedKey | null;
 	receiveCount: number;
+	seedFormat: SeedFormat;
 }
 
 let _walletProtoRoot: protobuf.Root | null = null;
@@ -124,12 +137,23 @@ function deriveAccount(seed: Buffer): { account: ExtendedPublicKey; receiveChain
 	return { account: publicAccount, receiveChain };
 }
 
-/** A fresh seed whose account and receiving chain exist (all but ~2^-125 of them do). */
+/** The account and receiving chain for a stored seed in `format`. */
+function deriveStored(stored: Buffer, format: SeedFormat): { account: ExtendedPublicKey; receiveChain: ExtendedPrivateKey } {
+	if (format === 'raw') return deriveAccount(stored);
+	const seed = mnemonicToSeed(entropyToMnemonic(stored));
+	try {
+		return deriveAccount(seed);
+	} finally {
+		seed.fill(0);
+	}
+}
+
+/** Fresh BIP39 entropy whose account and receiving chain exist (all but ~2^-125 do). */
 function newSeed(): Buffer {
 	for (let attempt = 0; attempt < 8; attempt++) {
 		const seed = crypto.randomBytes(SECRET_SIZE);
 		try {
-			deriveAccount(seed).receiveChain.privateKey.fill(0);
+			deriveStored(seed, 'bip39').receiveChain.privateKey.fill(0);
 			return seed;
 		} catch {
 			seed.fill(0);
@@ -211,13 +235,17 @@ function parseWalletData(data: StoredWalletData): ParsedWallet {
 
 	let account: ExtendedPublicKey | null = null;
 	const seed = bytes(data.seed);
+	const formatCode = data.seedFormat ?? 0;
+	if (formatCode !== 0 && formatCode !== SEED_FORMAT_BIP39) throw new Error('unknown seed format');
+	const seedFormat: SeedFormat = formatCode === SEED_FORMAT_BIP39 ? 'bip39' : 'raw';
+	if (seedFormat === 'bip39' && !accountPublicKey) throw new Error('seed format without an account key');
 	if (accountPublicKey) {
 		const chainCode = bytes(data.accountChainCode);
 		if (!secp256k1.publicKeyVerify(accountPublicKey) || chainCode?.length !== 32) throw new Error('invalid account key');
 		account = { publicKey: accountPublicKey, chainCode };
 		if (encryptedKey ? seed : seed?.length !== SECRET_SIZE) throw new Error('missing or conflicting seed');
 		if (seed) {
-			const derived = deriveAccount(seed);
+			const derived = deriveStored(seed, seedFormat);
 			derived.receiveChain.privateKey.fill(0);
 			if (!derived.account.publicKey.equals(accountPublicKey) || !derived.account.chainCode.equals(chainCode)) {
 				throw new Error('seed does not match the account key');
@@ -233,7 +261,7 @@ function parseWalletData(data: StoredWalletData): ParsedWallet {
 		const secrets = (account ? 1 : 0) + (legacy ? 1 : 0);
 		if (!isWellFormed(encryptedKey, secrets * SECRET_SIZE)) throw new Error('malformed encrypted key');
 	}
-	return { legacy, seed: account ? seed : null, account, encryptedKey, receiveCount };
+	return { legacy, seed: account ? seed : null, account, encryptedKey, receiveCount, seedFormat };
 }
 
 /**
@@ -258,25 +286,112 @@ export class Wallet {
 	private readonly walletPath: string;
 	private _legacyPublicKey: Buffer | null = null;
 	private _account: ExtendedPublicKey | null = null; // m/0'; null until an older wallet is upgraded
+	private _seedFormat: SeedFormat = 'raw';
 	private _receiveChain: ExtendedPublicKey | null = null; // m/0'/0
 	private _receiveCount = 0; // receiving addresses handed out
 	private _receive: (string | null)[] = []; // derived receiving addresses by index; null: skipped index
 	private readonly _addresses = new Map<string, WalletAddress>();
+	private readonly _scanned = new Map<number, string | null>(); // receiving addresses past the lookahead, by index
 	private _secrets: Secrets | null = null; // null while locked
 	private encryptedKey: EncryptedKey | null = null;
 	private stakingOnly = false;
 	private unlockedUntilMs: number | null = null;
 	private relockTimer: NodeJS.Timeout | null = null;
 
-	constructor(walletPath?: string) {
+	/** Load the wallet file, or create a new wallet there (from `restore`: Wallet.restore). */
+	constructor(walletPath?: string, restore?: { entropy: Buffer; passphrase?: string }) {
 		// saveWallet() creates the directory when needed
 		this.walletPath = walletPath ?? path.join(DATA_DIR, WALLET_DATA_FILENAME);
 
-		if (fs.existsSync(this.walletPath)) {
+		if (restore) {
+			if (fs.existsSync(this.walletPath)) throw new Error(`${this.walletPath} already exists`);
+			this.generateNewWallet(restore.entropy, restore.passphrase);
+		} else if (fs.existsSync(this.walletPath)) {
 			this.loadWallet();
 		} else {
 			this.generateNewWallet();
 		}
+	}
+
+	/**
+	 * Create a wallet file from a 24-word seed phrase (the node must be stopped). Never replaces
+	 * an existing file. With a passphrase the wallet is encrypted before anything is written, and
+	 * starts locked. Throws a MnemonicError for words that aren't a valid phrase.
+	 */
+	static restore(phrase: string, walletPath = path.join(DATA_DIR, WALLET_DATA_FILENAME), passphrase?: string): Wallet {
+		const words = mnemonicWords(phrase);
+		if (words.length !== SEED_PHRASE_WORDS) throw new MnemonicError(`expected ${SEED_PHRASE_WORDS} words, got ${words.length}`);
+		if (fs.existsSync(walletPath)) {
+			throw new Error(`${walletPath} already exists: move it away first (it may hold the keys to coins)`);
+		}
+		const entropy = mnemonicToEntropy(words.join(' '));
+		try {
+			return new Wallet(walletPath, { entropy, passphrase });
+		} finally {
+			entropy.fill(0);
+		}
+	}
+
+	/** Whether a seed phrase restores this wallet: one created with BIP39 and without an older single key. */
+	hasSeedPhrase(): boolean {
+		return this._account !== null && this._seedFormat === 'bip39' && this._legacyPublicKey === null;
+	}
+
+	/**
+	 * The 24-word seed phrase. An encrypted wallet needs its passphrase every time, also while
+	 * unlocked, and stays locked or unlocked as it was.
+	 */
+	seedPhrase(passphrase?: string): string {
+		if (!this.hasSeedPhrase()) {
+			const reason = this._legacyPublicKey ? 'its primary address is an older single key' : 'it was created before seed phrases';
+			throw new WalletError('no-seed-phrase', `this wallet has no seed phrase (${reason}): back up wallet.dat instead`);
+		}
+		if (!this.encryptedKey) return entropyToMnemonic(this._secrets!.seed);
+		if (passphrase === undefined) throw new WalletError('wrong-passphrase', 'the wallet is encrypted: its passphrase is needed');
+		const secrets = this.decrypt(passphrase);
+		try {
+			return entropyToMnemonic(secrets.seed);
+		} finally {
+			wipe(secrets);
+		}
+	}
+
+	/**
+	 * Look for receiving addresses with transactions past the ones handed out, up to `gap` unused
+	 * ones in a row (further than the watched lookahead), and treat every address up to the last
+	 * one found as handed out. A restored wallet (or one from an older backup) finds its
+	 * addresses this way as the chain arrives. Returns how many addresses were added.
+	 */
+	discoverUsedAddresses(isUsed: (address: string) => boolean, gap = WALLET_DISCOVERY_GAP): number {
+		if (!this._receiveChain) return 0;
+		let last = -1;
+		for (let index = this._receiveCount, unused = 0; unused < gap && index < MAX_WALLET_ADDRESSES; index++) {
+			const address = this._receiveAddress(index);
+			if (address && isUsed(address)) {
+				last = index;
+				unused = 0;
+			} else {
+				unused++;
+			}
+		}
+		if (last < 0) return 0;
+		const added = last + 1 - this._receiveCount;
+		this._receiveCount = last + 1;
+		this.extendAddresses();
+		this.saveWallet({ backup: false }); // only the address count changed
+		return added;
+	}
+
+	/** Receiving address `index`, also past the lookahead (cached; null where BIP32 skips). */
+	private _receiveAddress(index: number): string | null {
+		if (index < this._receive.length) return this._receive[index];
+		let address = this._scanned.get(index);
+		if (address === undefined) {
+			const child = derivePublic(this._receiveChain!, index);
+			address = child && addressFromPublicKey(child.publicKey);
+			this._scanned.set(index, address);
+		}
+		return address;
 	}
 
 	isEncrypted(): boolean {
@@ -427,7 +542,7 @@ export class Wallet {
 				throw new Error('decrypted key does not match the wallet');
 			}
 			if (seed) {
-				const { account, receiveChain } = deriveAccount(seed);
+				const { account, receiveChain } = deriveStored(seed, this._seedFormat);
 				if (!account.publicKey.equals(this._account!.publicKey) || !account.chainCode.equals(this._account!.chainCode)) {
 					throw new Error('decrypted seed does not match the wallet');
 				}
@@ -435,9 +550,10 @@ export class Wallet {
 			}
 			// Encrypt for the new account first: nothing changes if that fails
 			const freshSeed = newSeed();
-			const { account, receiveChain } = deriveAccount(freshSeed);
+			const { account, receiveChain } = deriveStored(freshSeed, 'bip39');
 			const secrets = { seed: freshSeed, legacyKey, receiveChain };
 			const encryptedKey = this.encryptSecrets(secrets, passphrase, account);
+			this._seedFormat = 'bip39';
 			this.setAccount(account, 0);
 			this.encryptedKey = encryptedKey;
 			this.saveWallet({ backup: false });
@@ -451,7 +567,8 @@ export class Wallet {
 	/** Give an older single-key wallet a seed; its key stays the primary address. */
 	private addSeed(legacyKey: Buffer | null): Secrets {
 		const seed = newSeed();
-		const { account, receiveChain } = deriveAccount(seed);
+		const { account, receiveChain } = deriveStored(seed, 'bip39');
+		this._seedFormat = 'bip39';
 		this.setAccount(account, 0);
 		return { seed, legacyKey, receiveChain };
 	}
@@ -562,13 +679,20 @@ export class Wallet {
 		this.address = this._receive[index]!;
 	}
 
-	private generateNewWallet(): void {
+	/** A new wallet from fresh entropy or `entropy`; with `passphrase`, encrypted (and locked) before it is written. */
+	private generateNewWallet(entropy?: Buffer, passphrase?: string): void {
 		this.resetState();
-		const seed = newSeed();
-		const { account, receiveChain } = deriveAccount(seed);
+		const seed = entropy ? Buffer.from(entropy) : newSeed();
+		const { account, receiveChain } = deriveStored(seed, 'bip39');
+		this._seedFormat = 'bip39';
 		this._secrets = { seed, legacyKey: null, receiveChain };
 		this.setAccount(account, 0);
 		this.setPrimary();
+		if (passphrase !== undefined) {
+			this.encryptedKey = this.encryptSecrets(this._secrets, passphrase); // throws for a weak passphrase
+			wipe(this._secrets);
+			this._secrets = null;
+		}
 		this.saveWallet();
 	}
 
@@ -578,10 +702,12 @@ export class Wallet {
 		this.encryptedKey = null;
 		this._legacyPublicKey = null;
 		this._account = null;
+		this._seedFormat = 'raw';
 		this._receiveChain = null;
 		this._receiveCount = 0;
 		this._receive = [];
 		this._addresses.clear();
+		this._scanned.clear();
 	}
 
 	private loadWallet(): void {
@@ -598,12 +724,13 @@ export class Wallet {
 		this.resetState();
 		this.encryptedKey = parsed.encryptedKey;
 		this._legacyPublicKey = parsed.legacy?.publicKey ?? null;
+		this._seedFormat = parsed.seedFormat;
 		// A new wallet always issues its first address; a count of 0 only means an older wallet
 		if (parsed.account) this.setAccount(parsed.account, parsed.receiveCount);
 		if (!parsed.encryptedKey) {
 			const legacyKey = parsed.legacy?.privateKey ?? null;
 			this._secrets = parsed.seed
-				? { seed: parsed.seed, legacyKey, receiveChain: deriveAccount(parsed.seed).receiveChain }
+				? { seed: parsed.seed, legacyKey, receiveChain: deriveStored(parsed.seed, parsed.seedFormat).receiveChain }
 				: this.addSeed(legacyKey); // an older unencrypted wallet: upgraded now
 		}
 		this.setPrimary();
@@ -630,6 +757,7 @@ export class Wallet {
 			accountPublicKey: this._account?.publicKey,
 			accountChainCode: this._account?.chainCode,
 			receiveCount: this._receiveCount,
+			seedFormat: this._account && this._seedFormat === 'bip39' ? SEED_FORMAT_BIP39 : undefined,
 		});
 		const buffer = WalletDataType.encode(message).finish();
 

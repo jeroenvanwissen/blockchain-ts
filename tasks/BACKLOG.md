@@ -97,6 +97,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0046](TASK-0046-wallet-history.md) | Wallet transaction history over all addresses, in the API and CLI | done | P2 | small | TASK-0045 | owner request |
 | [TASK-0047](TASK-0047-keep-unconfirmed-payments.md) | Keep the wallet's unconfirmed payments across restarts | done | P2 | small | TASK-0019 | found in TASK-0046 |
 | [TASK-0048](TASK-0048-payments-survive-crash.md) | Pending payments survive a crash | done | P2 | small | TASK-0047 | owner request |
+| [TASK-0049](TASK-0049-seed-phrase.md) | Seed-phrase backup and restore (BIP39) | done | P2 | medium | TASK-0041 | owner request |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

@@ -88,5 +88,6 @@ message WalletData {
   bytes account_public_key = 8; // m/0' public key and chain code: receiving addresses can be
   bytes account_chain_code = 9; // derived while the wallet is locked
   uint32 receive_count = 10; // receiving addresses handed out
+  uint32 seed_format = 11; // 1: the seed is BIP39 entropy (a 24-word phrase); 0: a raw BIP32 seed (before TASK-0049)
 }
 `;

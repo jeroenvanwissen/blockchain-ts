@@ -5,7 +5,7 @@ import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import { minRelayFee } from '../../blockchain/fees.js';
-import type { Wallet } from '../../blockchain/Wallet.js';
+import { Wallet } from '../../blockchain/Wallet.js';
 import { COIN, COIN_MATURITY, POS_BLOCK_REWARD, POW_BLOCK_REWARD } from '../../config.js';
 import type { PeerInfo } from '../../networking/P2PServer.js';
 import * as path from 'path';
@@ -337,7 +337,31 @@ describe('HTTP API', () => {
 				locked: false,
 				stakingOnly: false,
 				unlockedUntil: null,
+				seedPhrase: true,
 			});
+		});
+
+		it('should show the seed phrase, for an encrypted wallet only with its passphrase', async () => {
+			const post = (route: string, body: unknown, token = TOKEN) =>
+				get(route, {
+					method: 'POST',
+					headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+			expect((await post('/wallet/seed-phrase', {}, 'wrong')).status).toBe(401);
+			const shown = await post('/wallet/seed-phrase', {});
+			expect(shown.status).toBe(200);
+			const phrase = shown.body.phrase as string;
+			expect(phrase.split(' ')).toHaveLength(24);
+			expect(Wallet.restore(phrase, path.join(dir, 'restored.dat')).address).toBe(miner.address);
+
+			const passphrase = 'correct horse battery';
+			expect((await post('/wallet/encrypt', { passphrase })).status).toBe(200);
+			expect((await post('/wallet/seed-phrase', {})).status).toBe(400); // the passphrase is needed
+			expect((await post('/wallet/seed-phrase', { passphrase: 'not it at all' })).status).toBe(403);
+			const again = await post('/wallet/seed-phrase', { passphrase });
+			expect(again.body).toEqual({ phrase });
+			expect(miner.isLocked()).toBe(true); // showing it doesn't unlock the wallet
 		});
 
 		it('should hand out new addresses and list them with their balances', async () => {

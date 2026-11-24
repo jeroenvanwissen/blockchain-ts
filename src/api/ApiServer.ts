@@ -118,6 +118,7 @@ export class ApiServer {
 		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
 		{ method: 'POST', pattern: /^\/wallet\/lock$/, wallet: true, handle: () => this._lock() },
 		{ method: 'POST', pattern: /^\/wallet\/passphrase$/, wallet: true, handle: (_, body) => this._changePassphrase(body) },
+		{ method: 'POST', pattern: /^\/wallet\/seed-phrase$/, wallet: true, handle: (_, body) => this._seedPhrase(body) },
 		{ method: 'GET', pattern: /^\/wallet\/staking$/, wallet: true, handle: () => this._staking() },
 		{ method: 'GET', pattern: /^\/$/, handle: () => this._explorerFile('/') },
 		{ method: 'GET', pattern: /^\/explorer\/([a-z]+\.[a-z]+)$/, handle: ([name]) => this._explorerFile(`/explorer/${name}`) },
@@ -275,7 +276,19 @@ export class ApiServer {
 			locked: wallet.isLocked(),
 			stakingOnly: wallet.isStakingOnly(),
 			unlockedUntil: until === null ? null : new Date(until).toISOString(),
+			seedPhrase: wallet.hasSeedPhrase(),
 		};
+	}
+
+	/**
+	 * POST /wallet/seed-phrase { passphrase? }: the wallet's 24-word seed phrase. An encrypted
+	 * wallet needs its passphrase every time and isn't unlocked by this. 409 for a wallet without
+	 * a phrase (created before seed phrases, or with an older single key). Never logged.
+	 */
+	private _seedPhrase(body: unknown) {
+		const wallet = this._wallet();
+		const passphrase = wallet.isEncrypted() && wallet.hasSeedPhrase() ? parsePassphrase(body) : undefined;
+		return { phrase: this._walletCall(() => wallet.seedPhrase(passphrase)) };
 	}
 
 	/**
@@ -663,6 +676,7 @@ const WALLET_ERROR_STATUS: Record<WalletErrorCode, number> = {
 	'already-encrypted': 409,
 	'wrong-passphrase': 403,
 	'weak-passphrase': 400,
+	'no-seed-phrase': 409,
 };
 
 function parsePassphrase(body: unknown): string {

@@ -135,6 +135,23 @@ async function main(): Promise<void> {
 			throw new Error('the API token appeared in output');
 		}
 
+		step("show A's seed phrase with the CLI and restore it into new data dirs, plain and encrypted");
+		const shown = await runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), 'seed-phrase']);
+		const phrase = [...shown.stdout.matchAll(/\d+\. ([a-z]+)/g)].map((match) => match[1]).join(' ');
+		if (shown.code !== 0 || phrase.split(' ').length !== 24) throw new Error(`cli seed-phrase failed: ${shown.stderr.trim()}`);
+		const restored = await runCli(['--data-dir', path.join(root, 'restored'), 'restore-wallet'], shown.stdout); // numbered lines
+		if (restored.code !== 0 || !restored.stdout.includes(`primary address: ${address}\n`)) {
+			throw new Error(`cli restore-wallet failed: ${restored.stdout.trim()} ${restored.stderr.trim()}`);
+		}
+		const encryptedRestore = path.join(root, 'restored-encrypted');
+		const restoredEncrypted = await runCli(['--data-dir', encryptedRestore, 'restore-wallet', '--encrypt'], `${phrase}\n${PASSPHRASE}\n`);
+		if (!restoredEncrypted.stdout.includes(`primary address: ${address}\n`) || !restoredEncrypted.stdout.includes('wallet: encrypted, locked')) {
+			throw new Error(`cli restore-wallet --encrypt failed: ${restoredEncrypted.stdout.trim()} ${restoredEncrypted.stderr.trim()}`);
+		}
+		if (storedSeed(path.join(encryptedRestore, 'wallet.dat')).length !== 0) throw new Error('an encrypted restore wrote the seed unencrypted');
+		const refused = await runCli(['--data-dir', dataA, 'restore-wallet'], shown.stdout);
+		if (refused.code === 0 || !refused.stderr.includes('already exists')) throw new Error("restore-wallet didn't refuse an existing wallet");
+
 		step("encrypt A's wallet with the CLI; the unencrypted seed must leave the disk");
 		const walletFile = path.join(dataA, 'wallet.dat');
 		const plainSeed = storedSeed(walletFile);
@@ -196,6 +213,10 @@ async function main(): Promise<void> {
 			throw new Error(`cli history doesn't end at the wallet balance: ${walletHistory.stdout.trim()} ${walletHistory.stderr.trim()}`);
 		}
 		if (!(await cli(['addresses'])).stdout.includes(created)) throw new Error('the new address is gone after restart');
+		const phraseAfterRestart = await cli(['seed-phrase'], `${PASSPHRASE}\n`); // encrypted now: needs the passphrase
+		if ([...phraseAfterRestart.stdout.matchAll(/\d+\. ([a-z]+)/g)].map((match) => match[1]).join(' ') !== phrase) {
+			throw new Error(`cli seed-phrase of the encrypted wallet failed: ${phraseAfterRestart.stderr.trim()}`);
+		}
 		const wrong = await cli(['unlock'], 'not the passphrase\n');
 		if (wrong.code === 0 || !wrong.stderr.includes('wrong passphrase')) throw new Error('a wrong passphrase unlocked the wallet');
 		const unlocked = await cli(['unlock', '--staking-only'], `${PASSPHRASE}\n`);
@@ -208,6 +229,7 @@ async function main(): Promise<void> {
 			throw new Error(`cli change-passphrase failed: ${changed.stderr.trim()}`);
 		}
 		if (running.some((node) => node.output().includes(PASSPHRASE))) throw new Error('the passphrase appeared in output');
+		if (running.some((node) => node.output().includes(phrase))) throw new Error('the seed phrase appeared in node output');
 
 		running.forEach(noErrors);
 		step('PASS');

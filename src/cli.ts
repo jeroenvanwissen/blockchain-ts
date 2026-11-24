@@ -1,7 +1,11 @@
 // Command-line client for a running node's HTTP API: `npm run cli -- [options] <command>`.
+// `restore-wallet` works offline on the data dir instead (with the node stopped).
+import * as fs from 'fs';
+import * as path from 'path';
 import { readApiCookie } from './api/cookie.js';
 import { formatCoins, parseCoins } from './blockchain/amount.js';
-import { API_COOKIE_PATH, API_PORT } from './config.js';
+import { Wallet } from './blockchain/Wallet.js';
+import { API_COOKIE_PATH, API_PORT, DATA_DIR, MIN_PASSPHRASE_LENGTH, WALLET_DATA_FILENAME } from './config.js';
 
 const USAGE = `usage: npm run cli -- [--data-dir <dir>] [--api <url>] <command>
 
@@ -29,12 +33,20 @@ commands:
                                             and new are asked for; two stdin lines otherwise)
   staking                                   whether the node stakes, eligible outputs, the chance
                                             of a kernel per slot, and the last block it staked
+  seed-phrase                               show the wallet's 24-word seed phrase (an encrypted
+                                            wallet asks for its passphrase)
+  restore-wallet [--encrypt]                with the node stopped: create the data dir's wallet
+                                            from a seed phrase (asked for; read from stdin when
+                                            it isn't a terminal), optionally encrypted at once;
+                                            never replaces an existing wallet.dat
 
 options:
   --data-dir <dir>   the node's data dir, for its api.cookie (default: the default data dir)
   --api <url>        the node's API (default: http://127.0.0.1:${API_PORT}, from P2P_PORT/API_PORT)`;
 
 class UsageError extends Error {}
+
+const SEED_PHRASE_WORDS = 24;
 
 interface Status {
 	network: string;
@@ -54,6 +66,7 @@ interface WalletInfo {
 	locked: boolean;
 	stakingOnly: boolean;
 	unlockedUntil: string | null;
+	seedPhrase: boolean;
 }
 
 interface AddressInfo {
@@ -174,6 +187,21 @@ async function readPassphrase(prompt: string): Promise<string> {
 	});
 }
 
+/**
+ * Read a 24-word seed phrase over as many lines as it takes (not echoed on a terminal), plain
+ * or numbered as `cli seed-phrase` prints it. Stops early at an empty line or the end of input.
+ */
+async function readSeedPhrase(): Promise<string> {
+	const words: string[] = [];
+	while (words.length < SEED_PHRASE_WORDS) {
+		const prompt = words.length === 0 ? 'Seed phrase (24 words, not shown; Enter after any of them): ' : `${SEED_PHRASE_WORDS - words.length} more word(s): `;
+		const tokens = (await readPassphrase(prompt)).split(/\s+/).filter((token) => token && !/^\d+[.)]?$/.test(token));
+		if (tokens.length === 0) break;
+		words.push(...tokens);
+	}
+	return words.join(' ');
+}
+
 /** Split off --data-dir (read by config.ts) and --api; the rest is the command. */
 function parseArgs(argv: string[]): { api: string; command: string[] } {
 	let api = `http://127.0.0.1:${API_PORT}`;
@@ -231,6 +259,7 @@ async function run(argv: string[]): Promise<void> {
 			console.log(`balance: ${formatCoins(BigInt(w.balance))}`);
 			console.log(`spendable: ${formatCoins(BigInt(w.spendable))}`);
 			console.log(`outputs: ${w.utxos}`);
+			console.log(`backup: ${w.seedPhrase ? 'seed phrase (cli seed-phrase)' : 'copy wallet.dat (no seed phrase)'}`);
 			return;
 		}
 		case 'new-address': {
@@ -324,6 +353,42 @@ async function run(argv: string[]): Promise<void> {
 			console.log(`kernel chance per slot: ${(s.chancePerSlot * 100).toFixed(2)}%${expected}`);
 			console.log(`staked since start: ${s.stakedSinceStart}`);
 			console.log(`last staked: ${s.lastStaked ? `block ${s.lastStaked.height} at ${s.lastStaked.time}` : 'none in the last 10,000 blocks'}`);
+			return;
+		}
+		case 'seed-phrase': {
+			if (rest.length > 0) throw new UsageError('seed-phrase takes no arguments');
+			const w = await request<WalletInfo>(api, 'GET', '/wallet');
+			const body = w.encrypted && w.seedPhrase ? { passphrase: await readPassphrase('Wallet passphrase: ') } : {};
+			const { phrase } = await request<{ phrase: string }>(api, 'POST', '/wallet/seed-phrase', body);
+			const words = phrase.split(' ');
+			for (let row = 0; row < words.length; row += 4) {
+				console.log(words.slice(row, row + 4).map((word, i) => `${String(row + i + 1).padStart(2)}. ${word.padEnd(9)}`).join('  ').trimEnd());
+			}
+			console.error("Write the words down in order and keep them offline: anyone who has them can spend this wallet's coins.");
+			console.error('`cli restore-wallet` recreates the wallet from them on any node.');
+			return;
+		}
+		case 'restore-wallet': {
+			const encrypt = rest.includes('--encrypt');
+			if (rest.some((arg) => arg !== '--encrypt')) throw new UsageError('restore-wallet takes only --encrypt');
+			const walletPath = path.join(DATA_DIR, WALLET_DATA_FILENAME);
+			if (fs.existsSync(walletPath)) {
+				throw new Error(`${walletPath} already exists: stop the node and move it away first (it may hold the keys to coins)`);
+			}
+			const phrase = await readSeedPhrase();
+			let passphrase: string | undefined;
+			if (encrypt) {
+				passphrase = await readPassphrase('New wallet passphrase: ');
+				if (passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
+				if (process.stdin.isTTY && (await readPassphrase('Repeat passphrase: ')) !== passphrase) {
+					throw new Error('passphrases do not match');
+				}
+			}
+			const wallet = Wallet.restore(phrase, walletPath, passphrase);
+			console.log(`restored ${walletPath}`);
+			console.log(`primary address: ${wallet.address}`);
+			console.log(`wallet: ${encrypt ? 'encrypted, locked' : 'not encrypted (cli encrypt-wallet once the node runs)'}`);
+			console.error('Start the node: it finds the addresses in use as it syncs the chain.');
 			return;
 		}
 		case 'change-passphrase': {

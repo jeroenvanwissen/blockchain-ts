@@ -21,7 +21,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`).
 
-Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), and can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), can be [encrypted](#wallet-encryption), and is backed up as a [24-word seed phrase](#seed-phrase-backup). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
 
 ---
 
@@ -72,7 +72,7 @@ git --version          # Should be 2.30+
 | **Fork Resolution**      | Block tree; the branch with the most work wins (equal work: a tie-break block contents can't influence); reorgs with undo data |
 | **Digital Signatures**   | secp256k1 ECDSA per input (low-S), txid excludes signatures      |
 | **Integer Amounts**      | `bigint` base units, 1 coin = 100,000,000 (`COIN`)               |
-| **Wallet System**        | HD wallet (BIP32): any number of addresses from one seed, Base58Check, protobuf persistence |
+| **Wallet System**        | HD wallet (BIP32): any number of addresses from one seed, a BIP39 seed phrase for backup and restore, Base58Check, protobuf persistence |
 | **Worker Mining**        | Non-blocking PoW mining using Node.js worker threads             |
 | **Staking**              | Kernel PoS: any mature UTXO can stake; PoS blocks signed by the staker; fixed 10-coin reward |
 | **Difficulty Adjustment**| Per-block retarget toward 30 s spacing, separate for PoW and PoS |
@@ -170,6 +170,7 @@ Key constants in `src/config.ts`:
 | `MAX_WALLET_BACKUPS`            | 3       | Maximum wallet backup files to keep            |
 | `WALLET_ADDRESS_LOOKAHEAD`      | 20      | Addresses watched past the last one handed out |
 | `MAX_WALLET_ADDRESSES`          | 100,000 | Receiving addresses a wallet can hand out      |
+| `WALLET_DISCOVERY_GAP`          | 100     | Unused addresses in a row a restored wallet looks past for ones in use |
 
 ### Data Files
 
@@ -184,7 +185,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
 | `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
-| `wallet.dat`            | Wallet seed, account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
+| `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
 | `banned.json`           | Banned peers and when their bans expire    |
@@ -303,7 +304,32 @@ npm run cli -- lock
 npm run cli -- change-passphrase                 # re-encrypts; old backups are deleted
 ```
 
-An encrypted wallet is locked whenever the node starts. While locked the node doesn't stake and `send` is refused; mining rewards still arrive. Without a terminal the CLI reads the passphrase from the first line of stdin. There's no passphrase recovery: losing it means losing the coins.
+An encrypted wallet is locked whenever the node starts. While locked the node doesn't stake and `send` is refused; mining rewards still arrive. Without a terminal the CLI reads the passphrase from the first line of stdin. There's no passphrase recovery: losing the passphrase means restoring from the [seed phrase](#seed-phrase-backup).
+
+### Seed Phrase Backup
+
+A new wallet has a 24-word seed phrase (BIP39). Write it down and keep it offline: it recreates every address of the wallet on any node, and anyone who has it can spend the coins.
+
+```bash
+npm run cli -- seed-phrase                       # an encrypted wallet asks for its passphrase
+npm run cli -- balance                           # "backup:" says whether the wallet has a phrase
+```
+
+`seed-phrase` prints the words numbered. An encrypted wallet asks for its passphrase every time, even while unlocked, and stays locked. The node never logs the phrase.
+
+To restore, stop the node and run `restore-wallet` on its data dir. It never replaces an existing `wallet.dat`; move that away first, since it may hold the keys to coins:
+
+```bash
+npm run cli -- --data-dir ./data/restored restore-wallet --encrypt   # asks for the words, then a new passphrase
+npm start -- --data-dir ./data/restored --peers ws://host:5001
+```
+
+- **Entering the words:** type them on one line or several, plain or numbered as `seed-phrase` prints them. Without a terminal they're read from stdin, followed by the passphrase line for `--encrypt`. A wrong word count, a word that isn't in the BIP39 list, or a checksum that doesn't match is refused before anything is written.
+- **`--encrypt`:** the wallet is encrypted before the file is written, so the seed never reaches the disk unencrypted. Without it the restored wallet is unencrypted, like a new one.
+- **Finding the addresses:** as the node syncs, it finds the addresses that were in use and watches them again (it checks every minute). This includes addresses handed out after up to 100 unused ones in a row (`WALLET_DISCOVERY_GAP`).
+- **Compatibility:** the phrase is standard BIP39 (English words, no BIP39 passphrase) and addresses are m/0'/0/i, so other BIP39 tools derive the same keys.
+
+Wallets created before seed phrases have a raw seed that no phrase can express, and a wallet whose primary address is an older single key can't be restored from a phrase either. For those, `seed-phrase` says so: back up `wallet.dat`, or create a new wallet and send the coins to it.
 
 ### Step 4: Verify
 
@@ -347,7 +373,14 @@ docker compose -f compose.regtest.yaml exec a cli send "$(docker compose -f comp
 docker compose -f compose.regtest.yaml down -v   # -v also deletes both chains
 ```
 
-Back up the wallet with `docker compose cp node:/data/wallet.dat ./wallet-backup.dat`.
+Back up the wallet with `docker compose exec node cli seed-phrase`, or copy the file with `docker compose cp node:/data/wallet.dat ./wallet-backup.dat`. To restore a seed phrase into the volume, with the node stopped:
+
+```bash
+docker compose stop node
+docker compose run --rm --no-deps --entrypoint mv node /data/wallet.dat /data/wallet.dat.old   # keep the old one
+docker compose run --rm --no-deps --entrypoint cli node restore-wallet --encrypt
+docker compose start node
+```
 
 ---
 
@@ -392,7 +425,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /addresses/:address/utxos` | Each unspent output: txid, index, amount, height, confirmations, coinbase/coinstake, spendable |
 | `GET /mempool` | Number and total size of pending transactions, and their txids |
 | `GET /peers` | Connected peers that completed the handshake: address, direction, height at handshake |
-| `GET /wallet` | The wallet's primary address, the number of addresses handed out, and the balance, spendable balance and number of outputs over all its addresses (token required) |
+| `GET /wallet` | The wallet's primary address, the number of addresses handed out, the balance, spendable balance and number of outputs over all its addresses, its encryption state, and whether it has a seed phrase (token required) |
 | `GET /wallet/addresses` | The addresses handed out (plus watched ones holding coins), each with its receiving index, balance and outputs; the primary first (token required) |
 | `POST /wallet/addresses` | Body `{}`: hands out a new receiving address, also while locked; returns `{"address": "..."}` (token required) |
 | `GET /wallet/transactions?before=<n>&limit=<n>` | The wallet's transactions over all its addresses, one entry per transaction, newest first and paged like an address's: position, txid, height, time, confirmations, type (`receive`, `send`, `self`, `mined`, `reward`, `stake`), `amount` (the net change to the wallet, negative for a payment, fee included), the fee when the wallet paid it, the addresses paid (a payment's recipients, otherwise the wallet's own), the balance after it, and whether mined or staked coins are still immature. `pending` lists mempool transactions (token required) |
@@ -402,6 +435,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `POST /wallet/lock` | Wipes the keys from memory (token required) |
 | `GET /wallet/staking` | Whether the node stakes, whether its wallet can sign, eligible outputs and value, the chance per 16 s slot of finding a kernel and the expected wait, blocks staked since start, and the last block it staked (token required) |
 | `POST /wallet/passphrase` | Body `{"passphrase": "...", "newPassphrase": "..."}`: re-encrypts the seed under the new passphrase and deletes backups (token required) |
+| `POST /wallet/seed-phrase` | Body `{}`, or `{"passphrase": "..."}` for an encrypted wallet (needed every time; the wallet isn't unlocked): returns `{"phrase": "<24 words>"}`. 409 for a wallet without a phrase (token required) |
 
 ### Block Explorer
 
@@ -483,6 +517,8 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | New address       | `npm run cli -- new-address`                                  |
 | Wallet addresses  | `npm run cli -- addresses`                                    |
 | Wallet history    | `npm run cli -- history`                                      |
+| Seed phrase       | `npm run cli -- seed-phrase`                                  |
+| Restore wallet    | `npm run cli -- --data-dir <dir> restore-wallet --encrypt` (node stopped) |
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
 | Staking status    | `npm run cli -- staking`                                      |
 | Block explorer    | open `http://127.0.0.1:6001/`                                 |

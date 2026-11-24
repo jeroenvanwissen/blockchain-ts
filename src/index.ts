@@ -20,6 +20,7 @@ import {
 	REGTEST_POW_CUTOFF_BLOCK,
 	REGTEST_STAKE_MIN_AGE,
 	SEED_NODES,
+	WALLET_DISCOVERY_INTERVAL,
 } from './config.js';
 import { logger } from './logger.js';
 
@@ -74,6 +75,15 @@ const wallet = new Wallet();
 log.info(
 	`Wallet initialized with address: ${wallet.address}${wallet.isEncrypted() ? ' (encrypted, locked: unlock with cli unlock)' : ''}`,
 );
+
+// Watch every address the wallet has used, also past the lookahead: a wallet restored from its
+// seed phrase finds them as the chain arrives
+const discoverAddresses = () => {
+	const found = wallet.discoverUsedAddresses((address) => blockchain.getAddressHistory(address).length > 0);
+	if (found > 0) log.info(`wallet: found ${found} more address(es) in use; ${wallet.issuedCount()} handed out`);
+};
+discoverAddresses();
+setInterval(discoverAddresses, WALLET_DISCOVERY_INTERVAL).unref();
 
 // Create P2P server
 const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;

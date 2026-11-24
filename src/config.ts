@@ -146,6 +146,8 @@ export const MAX_WALLET_BACKUPS = 3; // Maximum number of wallet backup files to
 // Receiving addresses the wallet watches beyond those it handed out (TASK-0041), so a backup
 // still sees coins on addresses created after it (the BIP44 gap limit)
 export const WALLET_ADDRESS_LOOKAHEAD = 20;
+export const WALLET_DISCOVERY_INTERVAL = 60_000; // ms between checks for used addresses past the lookahead (restored wallets)
+export const WALLET_DISCOVERY_GAP = 100; // unused receiving addresses in a row that discovery looks past
 export const MAX_WALLET_ADDRESSES = 100_000; // receiving addresses a wallet hands out (bounds load time)
 // Wallet encryption (TASK-0024): scrypt KDF + AES-256-GCM. log2(N) = 15, r = 8 → 32 MiB and about
 // 0.1 s per unlock attempt. Stored per wallet, so stronger settings apply to newly encrypted ones.
