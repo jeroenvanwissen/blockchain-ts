@@ -6,10 +6,19 @@ import type { Blockchain } from '../../blockchain/Blockchain.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import { minRelayFee } from '../../blockchain/fees.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
-import { COIN, COIN_MATURITY, POW_BLOCK_REWARD } from '../../config.js';
+import { COIN, COIN_MATURITY, POS_BLOCK_REWARD, POW_BLOCK_REWARD } from '../../config.js';
 import type { PeerInfo } from '../../networking/P2PServer.js';
 import * as path from 'path';
-import { makeTempDir, openChain, openWallet, removeTempDir } from './helpers.js';
+import {
+	findStakeBlock,
+	finishPowPhase,
+	makeTempDir,
+	openChain,
+	openPosChain,
+	openWallet,
+	removeTempDir,
+	useTestClock,
+} from './helpers.js';
 
 const OPTIONS = { validateDifficulty: false, powCutoffBlock: 1000 };
 const SPACING = 30_000;
@@ -359,6 +368,56 @@ describe('HTTP API', () => {
 			expect(wallet.balance).toBe((BigInt(list[0].balance) + POW_BLOCK_REWARD).toString());
 		});
 
+		it("should list the wallet's transactions over all its addresses, typed, newest first", async () => {
+			const auth = { authorization: `Bearer ${TOKEN}` };
+			expect((await get('/wallet/transactions')).status).toBe(401);
+			const second = miner.newAddress();
+			const outsider = openWallet(dir, 'outsider');
+			const paid = (await send({ outputs: [{ address: outsider.address, amount: (2n * COIN).toString() }] })).body;
+			const toSelf = (await send({ outputs: [{ address: second, amount: COIN.toString() }] })).body;
+			await buildBlocks(chain, miner.address, 1);
+			const fromOutsider = chain.createTransaction(outsider.address, second, COIN / 2n, outsider);
+			await chain.addTransaction(fromOutsider);
+			type Entry = {
+				position: number;
+				txid: string;
+				type: string;
+				amount: string;
+				fee: string | null;
+				balance: string;
+				addresses: string[];
+				immature: boolean;
+				confirmations: number;
+			};
+			type Page = { total: number; transactions: Entry[]; pending: unknown[] };
+
+			const page = (await get('/wallet/transactions?limit=3', { headers: auth })).body as unknown as Page;
+
+			const mined = COIN_MATURITY + 3; // a coinbase per block
+			expect(page.total).toBe(mined + 2);
+			expect(page.transactions.map((t) => t.position)).toEqual([mined + 1, mined, mined - 1]);
+			const [paidFee, selfFee] = [BigInt(paid.fee as string), BigInt(toSelf.fee as string)];
+			const effect = (t: Entry) => [t.type, t.amount, t.fee, t.addresses, t.immature, t.confirmations];
+			const byTxid = new Map(page.transactions.map((t) => [t.txid, effect(t)]));
+			expect(byTxid.get(paid.txid as string)).toEqual(['send', (-(2n * COIN + paidFee)).toString(), paidFee.toString(), [outsider.address], false, 1]);
+			expect(byTxid.get(toSelf.txid as string)).toEqual(['self', (-selfFee).toString(), selfFee.toString(), [second, miner.address], false, 1]);
+			// The block's coinbase comes first in the block, so it is the oldest of the three
+			expect(effect(page.transactions[2])).toEqual(['mined', (POW_BLOCK_REWARD + paidFee + selfFee).toString(), null, [miner.address], true, 1]);
+			const wallet = (await get('/wallet', { headers: auth })).body;
+			expect(page.transactions[0].balance).toBe(wallet.balance);
+			expect(page.pending).toEqual([
+				{ txid: fromOutsider.calculateHash(), type: 'receive', amount: (COIN / 2n).toString(), fee: null, addresses: [second] },
+			]);
+
+			const oldest = (await get('/wallet/transactions?before=1&limit=5', { headers: auth })).body as unknown as Page;
+			expect(oldest.transactions.map((t) => [t.position, t.type, t.amount, t.balance, t.immature])).toEqual([
+				[0, 'mined', POW_BLOCK_REWARD.toString(), POW_BLOCK_REWARD.toString(), false],
+			]);
+			for (const query of ['before=-1', 'limit=0', 'limit=101']) {
+				expect((await get(`/wallet/transactions?${query}`, { headers: auth })).status).toBe(400);
+			}
+		});
+
 		it('should pay several outputs with change back to the wallet, and relay the payment', async () => {
 			const [r1, r2] = [openWallet(dir, 'r1'), openWallet(dir, 'r2')];
 
@@ -509,5 +568,42 @@ describe('HTTP API', () => {
 				await plain.close();
 			}
 		});
+	});
+});
+
+describe("HTTP API: a staking wallet's history", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		useTestClock();
+		jest.spyOn(console, 'log').mockImplementation(() => {});
+		dir = makeTempDir();
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
+		jest.restoreAllMocks();
+		removeTempDir(dir);
+	});
+
+	it('should show the stake reward and the coinstake, immature until their outputs can be spent', async () => {
+		const chain = openPosChain(dir);
+		const staker = openWallet(dir, 'staker');
+		await finishPowPhase(chain, staker.address);
+		await chain.addMinedBlock(findStakeBlock(chain, staker));
+		// Fake timers: call the route's handler instead of going through HTTP
+		const api = new ApiServer(chain, { getPeerInfo: () => [] }, { host: '127.0.0.1', port: 0, network: 'x' }, {
+			wallet: staker,
+			token: 'unused',
+			broadcast: () => {},
+		});
+
+		const page = api['_walletTransactions'](new URLSearchParams('limit=2'));
+
+		expect(page.transactions.map((t) => [t.type, t.amount, t.fee, t.addresses, t.immature])).toEqual([
+			['stake', '0', null, [staker.address], true], // the kernel output goes back to its owner
+			['reward', POS_BLOCK_REWARD.toString(), null, [staker.address], true],
+		]);
+		expect(page.transactions[0].balance).toBe(chain.getBalance(staker.address).toString());
 	});
 });

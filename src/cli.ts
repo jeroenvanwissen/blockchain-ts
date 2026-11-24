@@ -12,6 +12,10 @@ commands:
   new-address                               hand out a new receiving address (no passphrase
                                             needed)
   addresses                                 the wallet's addresses with their balances
+  history [--limit <n>] [--before <position>]
+                                            the wallet's transactions over all its addresses,
+                                            newest first (pending ones on top): type, change,
+                                            balance after, txid, recipients and fee
   send <address> <coins> [<address> <coins> ...]
                                             pay from the node's wallet plus the minimum fee;
                                             prints the txid (and the fee on stderr)
@@ -61,6 +65,20 @@ interface AddressInfo {
 	primary: boolean;
 }
 
+interface WalletEntry {
+	txid: string;
+	type: string; // receive, send, self, mined, reward or stake
+	amount: string; // net change to the wallet, negative for a payment (fee included)
+	fee: string | null;
+	addresses: string[]; // a payment's recipients, otherwise the wallet's addresses it paid
+}
+
+interface WalletHistory {
+	total: number;
+	transactions: (WalletEntry & { position: number; height: number; timestamp: number; balance: string; immature: boolean })[];
+	pending: WalletEntry[];
+}
+
 interface StakingInfo {
 	enabled: boolean;
 	phase: string;
@@ -80,6 +98,35 @@ function formatDuration(seconds: number): string {
 	if (seconds < 90 * 60) return `${Math.round(seconds / 60)} min`;
 	if (seconds < 48 * 3600) return `${(seconds / 3600).toFixed(1)} h`;
 	return `${(seconds / 86_400).toFixed(1)} days`;
+}
+
+/** A timestamp (ms) as local "YYYY-MM-DD HH:MM:SS". */
+function formatTime(ms: number): string {
+	const d = new Date(ms);
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** One line of `history`: fixed-width columns, then the txid and notes. */
+function historyRow(height: string, time: string, type: string, amount: string, balance: string, txid: string, note = ''): string {
+	const columns = `${height.padStart(7)}  ${time.padEnd(19)}  ${type.padEnd(7)}  ${amount.padStart(16)}  ${balance.padStart(16)}`;
+	return `${columns}  ${txid}${note ? `  ${note}` : ''}`;
+}
+
+/** Where a history entry paid, its fee and whether its coins are spendable yet. */
+function historyNote(entry: WalletEntry & { immature?: boolean }): string {
+	const notes: string[] = [];
+	const [first, ...more] = entry.addresses;
+	if (first) notes.push(`to ${first}${more.length > 0 ? ` +${more.length} more` : ''}`);
+	if (entry.fee !== null) notes.push(`fee ${formatCoins(BigInt(entry.fee))}`);
+	if (entry.immature) notes.push('immature');
+	return notes.join(', ');
+}
+
+/** Base units as coins with a sign: "+1.5", "-0.25", "0". */
+function signedCoins(amount: string): string {
+	const value = BigInt(amount);
+	return `${value > 0n ? '+' : ''}${formatCoins(value)}`;
 }
 
 function walletState(w: WalletInfo): string {
@@ -199,6 +246,33 @@ async function run(argv: string[]): Promise<void> {
 				const note = a.primary ? '  (primary)' : a.index === null ? '' : `  #${a.index}`;
 				console.log(`${a.address}  ${formatCoins(BigInt(a.balance)).padStart(16)}${note}`);
 			}
+			return;
+		}
+		case 'history': {
+			const query = new URLSearchParams();
+			for (let i = 0; i < rest.length; i++) {
+				if ((rest[i] === '--limit' || rest[i] === '--before') && /^\d+$/.test(rest[i + 1] ?? '')) {
+					query.set(rest[i].slice(2), rest[++i]);
+				} else {
+					throw new UsageError(`history: unexpected ${rest[i]}`);
+				}
+			}
+			const path = query.size > 0 ? `/wallet/transactions?${query.toString()}` : '/wallet/transactions';
+			const h = await request<WalletHistory>(api, 'GET', path);
+			if (h.total === 0 && h.pending.length === 0) {
+				console.log('no transactions yet');
+				return;
+			}
+			console.log(historyRow('height', 'time', 'type', 'amount', 'balance', 'txid'));
+			if (!query.has('before')) {
+				for (const p of h.pending) console.log(historyRow('pending', '', p.type, signedCoins(p.amount), '', p.txid, historyNote(p)));
+			}
+			for (const t of h.transactions) {
+				const balance = formatCoins(BigInt(t.balance));
+				console.log(historyRow(String(t.height), formatTime(t.timestamp), t.type, signedCoins(t.amount), balance, t.txid, historyNote(t)));
+			}
+			const oldest = h.transactions[h.transactions.length - 1];
+			if (oldest && oldest.position > 0) console.log(`${oldest.position} older: history --before ${oldest.position}`);
 			return;
 		}
 		case 'send': {

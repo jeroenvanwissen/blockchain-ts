@@ -58,8 +58,8 @@ describe('Address history', () => {
 		const payment = chain.createTransaction(miner.address, alice.address, 3n * COIN, miner);
 		await chain.addTransaction(payment);
 
-		expect(chain.getPendingActivity(alice.address)).toEqual([{ txid: payment.calculateHash(), received: 3n * COIN, sent: 0n }]);
-		const [pending] = chain.getPendingActivity(miner.address);
+		expect(chain.getPendingActivity([alice.address])).toEqual([{ txid: payment.calculateHash(), received: 3n * COIN, sent: 0n }]);
+		const [pending] = chain.getPendingActivity([miner.address]);
 		expect(pending.sent - pending.received).toBeGreaterThan(3n * COIN); // the payment plus its fee
 		await mineBlocks(chain, openWallet(dir, 'other').address, 1);
 		const forward = chain.createTransaction(alice.address, bob.address, COIN, alice);
@@ -69,16 +69,16 @@ describe('Address history', () => {
 		const height = chain.getLatestBlock().index;
 		const change = 3n * COIN - COIN - (3n * COIN - forward.outputs.reduce((sum, o) => sum + o.amount, 0n));
 		expect(chain.getAddressHistory(alice.address)).toEqual([
-			{ txid: payment.calculateHash(), height: height - 1, received: 3n * COIN, sent: 0n, balance: 3n * COIN },
-			{ txid: forward.calculateHash(), height, received: change, sent: 3n * COIN, balance: change },
+			{ txid: payment.calculateHash(), height: height - 1, indexInBlock: 1, received: 3n * COIN, sent: 0n, balance: 3n * COIN },
+			{ txid: forward.calculateHash(), height, indexInBlock: 1, received: change, sent: 3n * COIN, balance: change },
 		]);
 		expect(chain.getAddressHistory(bob.address)).toEqual([
-			{ txid: forward.calculateHash(), height, received: COIN, sent: 0n, balance: COIN },
+			{ txid: forward.calculateHash(), height, indexInBlock: 1, received: COIN, sent: 0n, balance: COIN },
 		]);
 		const minerHistory = chain.getAddressHistory(miner.address);
 		expect(minerHistory).toHaveLength(COIN_MATURITY + 2); // the coinbases and the payment
 		expect(minerHistory[0]).toMatchObject({ height: 1, received: POW_BLOCK_REWARD, sent: 0n, balance: POW_BLOCK_REWARD });
-		expect(chain.getPendingActivity(alice.address)).toEqual([]);
+		expect(chain.getPendingActivity([alice.address])).toEqual([]);
 		expectConsistent(chain);
 	});
 
@@ -111,8 +111,8 @@ describe('Address history', () => {
 		await chain.addMinedBlock(block);
 
 		expect(chain.getAddressHistory(alice.address)).toEqual([
-			{ txid: pay.calculateHash(), height, received: 2n * COIN, sent: 0n, balance: 2n * COIN },
-			{ txid: passOn.calculateHash(), height, received: 0n, sent: 2n * COIN, balance: 0n },
+			{ txid: pay.calculateHash(), height, indexInBlock: 1, received: 2n * COIN, sent: 0n, balance: 2n * COIN },
+			{ txid: passOn.calculateHash(), height, indexInBlock: 2, received: 0n, sent: 2n * COIN, balance: 0n },
 		]);
 		expect(chain.getAddressHistory(bob.address).map((entry) => entry.balance)).toEqual([2n * COIN]);
 		expectConsistent(chain);
@@ -135,7 +135,7 @@ describe('Address history', () => {
 		}
 
 		expect(chain.getAddressHistory(alice.address)).toEqual([]);
-		expect(chain.getPendingActivity(alice.address).map((entry) => entry.txid)).toEqual([payment.calculateHash()]);
+		expect(chain.getPendingActivity([alice.address]).map((entry) => entry.txid)).toEqual([payment.calculateHash()]);
 		expectConsistent(chain);
 
 		await mineBlocks(chain, miner.address, 1); // confirms the payment again
@@ -159,6 +159,70 @@ describe('Address history', () => {
 		const [reward, stake] = chain.getAddressHistory(miner.address).slice(-2);
 		expect(reward).toMatchObject({ txid: block.transactions[0].calculateHash(), received: POS_BLOCK_REWARD, sent: 0n });
 		expect(stake).toMatchObject({ txid: block.transactions[1].calculateHash(), received: kernel, sent: kernel });
+		expectConsistent(chain);
+	});
+
+	it("should merge a wallet's addresses into one entry per transaction, in chain order", async () => {
+		const chain = openChain(dir);
+		const [outsider, funder] = [openWallet(dir, 'outsider'), openWallet(dir, 'funder')];
+		await mineBlocks(chain, funder.address, 1);
+		await mineBlocks(chain, miner.address, COIN_MATURITY + 1);
+		const second = miner.newAddress();
+		await mineBlocks(chain, second, 1); // a reward to the second address
+		/** Inputs minus outputs, while the inputs are still unspent. */
+		const feeOf = (tx: Transaction) =>
+			tx.inputs.reduce((sum, input) => sum + chain.getUTXO(input.previousTx, input.outputIndex)!.output.amount, 0n) -
+			tx.outputs.reduce((sum, output) => sum + output.amount, 0n);
+
+		// One block: a payment out with change, a payment to the wallet's own second address, and
+		// an outsider's payment to that address, mined first (not in the order the addresses list them)
+		const payOut = chain.createPayment(miner, [{ address: outsider.address, amount: 2n * COIN }]);
+		await chain.addTransaction(payOut.transaction);
+		const toSelf = chain.createTransaction(miner.address, second, COIN, miner);
+		const selfFee = feeOf(toSelf);
+		await chain.addTransaction(toSelf);
+		const fromOutsider = chain.createTransaction(funder.address, second, 3n * COIN, funder);
+		const outsiderFee = feeOf(fromOutsider);
+		await chain.addTransaction(fromOutsider);
+		advanceTime(BLOCK_TIME * 1000);
+		const tip = chain.getLatestBlock();
+		const reward = POW_BLOCK_REWARD + outsiderFee + payOut.fee + selfFee;
+		const block = new Block(
+			Date.now(),
+			[Transaction.coinbase(outsider.address, reward, tip.index + 1, Date.now()), fromOutsider, payOut.transaction, toSelf],
+			tip.hash,
+			0,
+			chain.getRequiredBits(false),
+			tip.index + 1,
+		);
+		block.solve();
+		await chain.addMinedBlock(block);
+
+		const addresses = miner.addresses();
+		const history = chain.getWalletHistory(addresses);
+		const txids = history.map((entry) => entry.txid);
+		expect(new Set(txids).size).toBe(txids.length); // one entry per transaction
+		const [, ...blockTxids] = chain.getLatestBlock().transactions.map((tx) => tx.calculateHash());
+		expect(blockTxids).toHaveLength(3);
+		expect(txids.slice(-3)).toEqual(blockTxids); // block order, across addresses
+		const flows = history.slice(-3).map((entry) => [entry.received - entry.sent, entry.sent > 0n]);
+		const net = new Map(blockTxids.map((txid, i) => [txid, flows[i]]));
+		expect(net.get(payOut.transaction.calculateHash())).toEqual([-(2n * COIN + payOut.fee), true]);
+		expect(net.get(toSelf.calculateHash())).toEqual([-selfFee, true]); // only the fee leaves the wallet
+		expect(net.get(fromOutsider.calculateHash())).toEqual([3n * COIN, false]);
+
+		const total = addresses.reduce((sum, address) => sum + chain.getBalance(address), 0n);
+		expect(history[history.length - 1].balance).toBe(total);
+		expect(history).toEqual([...history].sort((a, b) => a.height - b.height || a.indexInBlock - b.indexInBlock));
+		expect(chain.getWalletHistory([...addresses, ...addresses])).toEqual(history); // duplicates count once
+
+		// A pending payment between the wallet's addresses is one entry: the fee leaves the wallet
+		const pendingSelf = chain.createTransaction(miner.address, second, COIN, miner);
+		const pendingFee = feeOf(pendingSelf);
+		await chain.addTransaction(pendingSelf);
+		const pending = chain.getPendingActivity(addresses);
+		expect(pending.map((entry) => [entry.txid, entry.received - entry.sent])).toEqual([[pendingSelf.calculateHash(), -pendingFee]]);
+		expect(chain.getPendingActivity([second])).toEqual([{ txid: pendingSelf.calculateHash(), received: COIN, sent: 0n }]);
 		expectConsistent(chain);
 	});
 });

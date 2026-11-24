@@ -164,16 +164,28 @@ export class Blockchain {
 		return this._addressIndex.history(address);
 	}
 
-	/** Pending transactions that pay `address` or spend its outputs, with what each moves. */
-	public getPendingActivity(address: string): { txid: string; received: bigint; sent: bigint }[] {
+	/**
+	 * The combined history of `addresses` (a wallet's): one entry per transaction, oldest first,
+	 * with what it received and sent over all of them and their total balance after it.
+	 */
+	public getWalletHistory(addresses: readonly string[]): AddressActivity[] {
+		return this._addressIndex.historyOf(addresses);
+	}
+
+	/**
+	 * Pending transactions that pay any of `addresses` or spend their outputs, with what each
+	 * moves to and from them in total.
+	 */
+	public getPendingActivity(addresses: readonly string[]): { txid: string; received: bigint; sent: bigint }[] {
+		const watched = new Set(addresses);
 		const activity: { txid: string; received: bigint; sent: bigint }[] = [];
 		for (const tx of this.getPendingTransactions()) {
 			let received = 0n;
 			let sent = 0n;
-			for (const output of tx.outputs) if (output.address === address) received += output.amount;
+			for (const output of tx.outputs) if (watched.has(output.address)) received += output.amount;
 			for (const input of tx.inputs) {
 				const utxo = this._utxos.get(input.previousTx, input.outputIndex); // pending inputs are confirmed outputs
-				if (utxo?.output.address === address) sent += utxo.output.amount;
+				if (utxo && watched.has(utxo.output.address)) sent += utxo.output.amount;
 			}
 			if (received > 0n || sent > 0n) activity.push({ txid: tx.calculateHash(), received, sent });
 		}

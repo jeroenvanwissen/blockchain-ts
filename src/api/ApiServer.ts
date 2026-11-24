@@ -10,7 +10,7 @@ import { NULL_HASH, type Transaction, type TxInput, type TxOutput } from '../blo
 import { isValidAddress } from '../blockchain/address.js';
 import { outpointKey, type UTXO } from '../blockchain/UtxoSet.js';
 import { WalletError, type Wallet, type WalletErrorCode } from '../blockchain/Wallet.js';
-import { MAX_API_BODY_BYTES, MAX_TRANSACTION_OUTPUTS } from '../config.js';
+import { COIN_MATURITY, MAX_API_BODY_BYTES, MAX_TRANSACTION_OUTPUTS } from '../config.js';
 import type { PeerInfo } from '../networking/P2PServer.js';
 import { logger } from '../logger.js';
 
@@ -112,6 +112,7 @@ export class ApiServer {
 		{ method: 'GET', pattern: /^\/wallet$/, wallet: true, handle: () => this._walletInfo() },
 		{ method: 'GET', pattern: /^\/wallet\/addresses$/, wallet: true, handle: () => this._walletAddresses() },
 		{ method: 'POST', pattern: /^\/wallet\/addresses$/, wallet: true, handle: () => this._newAddress() },
+		{ method: 'GET', pattern: /^\/wallet\/transactions$/, wallet: true, handle: (_, __, query) => this._walletTransactions(query) },
 		{ method: 'POST', pattern: /^\/wallet\/send$/, wallet: true, handle: (_, body) => this._sendPayment(body) },
 		{ method: 'POST', pattern: /^\/wallet\/encrypt$/, wallet: true, handle: (_, body) => this._encrypt(body) },
 		{ method: 'POST', pattern: /^\/wallet\/unlock$/, wallet: true, handle: (_, body) => this._unlock(body) },
@@ -293,6 +294,66 @@ export class ApiServer {
 	/** POST /wallet/addresses: hand out a new receiving address (works while locked). */
 	private _newAddress() {
 		return { address: this._walletCall(() => this._wallet().newAddress()) };
+	}
+
+	/**
+	 * GET /wallet/transactions?before=<n>&limit=<n>: the wallet's transactions over all its
+	 * addresses, one entry per transaction, newest first, paged like an address's history (a
+	 * newly watched address that already has transactions shifts the positions). `amount` is the
+	 * net change to the wallet's balance (negative for a payment, fee included) and `balance` the
+	 * wallet's balance after it. Coinbase and coinstake entries are `immature` until their outputs
+	 * can be spent. `pending` lists mempool transactions.
+	 */
+	private _walletTransactions(query: URLSearchParams) {
+		const addresses = this._wallet().addresses();
+		const history = this._blockchain.getWalletHistory(addresses);
+		const chain = this._blockchain.getChain();
+		const transactions = historyPage(query, history.length).map((i) => {
+			const entry = history[i];
+			const block = chain[entry.height];
+			const tx = block.transactions[entry.indexInBlock];
+			const confirmations = this._confirmations(entry.height);
+			return {
+				position: i,
+				txid: entry.txid,
+				height: entry.height,
+				timestamp: block.timestamp,
+				confirmations,
+				...this._walletEffect(tx, block, entry),
+				balance: entry.balance.toString(),
+				immature: (tx.isCoinbase() || tx.isCoinStake()) && confirmations < COIN_MATURITY,
+			};
+		});
+		const pending = this._blockchain.getPendingActivity(addresses).map((entry) => ({
+			txid: entry.txid,
+			...this._walletEffect(this._blockchain.findTransaction(entry.txid)!.transaction, null, entry),
+		}));
+		return { total: history.length, transactions, pending };
+	}
+
+	/**
+	 * What a transaction was to the wallet: its type, the net change over the wallet's addresses,
+	 * the fee when the wallet paid every input, and the addresses it paid (a payment's recipients,
+	 * otherwise the wallet's own addresses).
+	 */
+	private _walletEffect(tx: Transaction, block: Block | null, flow: { received: bigint; sent: bigint }) {
+		const wallet = this._wallet();
+		const owns = (address: string) => wallet.owns(address);
+		const type = walletTxType(tx, block, flow.sent, owns);
+		let fee: bigint | null = null;
+		if (type === 'send' || type === 'self') {
+			const spent = tx.inputs.map((input) => this._spentOutput(input));
+			if (spent.every((output) => output && owns(output.address))) {
+				fee = flow.sent - tx.outputs.reduce((total, output) => total + output.amount, 0n);
+			}
+		}
+		const paid = tx.outputs.filter((output) => output.amount > 0n && owns(output.address) !== (type === 'send'));
+		return {
+			type,
+			amount: (flow.received - flow.sent).toString(),
+			fee: fee === null ? null : fee.toString(),
+			addresses: [...new Set(paid.map((output) => output.address))],
+		};
 	}
 
 	/** Run a wallet operation, mapping its WalletError codes to responses. */
@@ -530,17 +591,10 @@ export class ApiServer {
 	private _addressTransactions(address: string, query: URLSearchParams) {
 		this._checkAddress(address);
 		const history = this._blockchain.getAddressHistory(address);
-		const before = query.get('before') ?? String(history.length);
-		const limit = query.get('limit') ?? String(DEFAULT_HISTORY_LIST);
-		if (!HEIGHT_PATTERN.test(before)) throw new HttpError(400, 'before must be a position (0 or more)');
-		if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_HISTORY_LIST) {
-			throw new HttpError(400, `limit must be 1 to ${MAX_HISTORY_LIST}`);
-		}
 		const chain = this._blockchain.getChain();
-		const transactions = [];
-		for (let i = Math.min(Number(before), history.length) - 1; i >= 0 && transactions.length < Number(limit); i--) {
+		const transactions = historyPage(query, history.length).map((i) => {
 			const entry = history[i];
-			transactions.push({
+			return {
 				position: i,
 				txid: entry.txid,
 				height: entry.height,
@@ -549,9 +603,9 @@ export class ApiServer {
 				received: entry.received.toString(),
 				sent: entry.sent.toString(),
 				balance: entry.balance.toString(),
-			});
-		}
-		const pending = this._blockchain.getPendingActivity(address).map((entry) => ({
+			};
+		});
+		const pending = this._blockchain.getPendingActivity([address]).map((entry) => ({
 			txid: entry.txid,
 			received: entry.received.toString(),
 			sent: entry.sent.toString(),
@@ -635,6 +689,31 @@ function parsePayment(body: unknown): TxOutput[] {
 		}
 		return { address, amount: BigInt(amount) };
 	});
+}
+
+/**
+ * The positions on one page of a history of `total` entries (positions count from 0, oldest
+ * first): newest first, below `before` (default: from the newest), at most `limit`.
+ */
+function historyPage(query: URLSearchParams, total: number): number[] {
+	const before = query.get('before') ?? String(total);
+	const limit = query.get('limit') ?? String(DEFAULT_HISTORY_LIST);
+	if (!HEIGHT_PATTERN.test(before)) throw new HttpError(400, 'before must be a position (0 or more)');
+	if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_HISTORY_LIST) {
+		throw new HttpError(400, `limit must be 1 to ${MAX_HISTORY_LIST}`);
+	}
+	const newest = Math.min(Number(before), total) - 1;
+	return Array.from({ length: Math.min(Number(limit), newest + 1) }, (_, i) => newest - i);
+}
+
+type WalletTxType = 'receive' | 'send' | 'self' | 'mined' | 'reward' | 'stake';
+
+/** What a transaction was to a wallet that `owns` some addresses and spent `sent` in it. */
+function walletTxType(tx: Transaction, block: Block | null, sent: bigint, owns: (address: string) => boolean): WalletTxType {
+	if (tx.isCoinbase()) return block?.isProofOfStake() ? 'reward' : 'mined';
+	if (tx.isCoinStake()) return 'stake'; // the kernel output goes back to its owner: net 0
+	if (sent === 0n) return 'receive';
+	return tx.outputs.every((output) => output.amount === 0n || owns(output.address)) ? 'self' : 'send';
 }
 
 /** Who produced a block: the staker (coinstake owner) for PoS, the coinbase's payee for PoW. */

@@ -6,6 +6,7 @@ import { outpointKey, type UTXO } from './UtxoSet.js';
 export interface AddressActivity {
 	txid: string;
 	height: number; // block height on the active chain
+	indexInBlock: number; // the transaction's position in its block (0: the coinbase)
 	received: bigint; // paid to the address by this transaction
 	sent: bigint; // spent from the address by this transaction
 	balance: bigint; // the address's balance after this transaction
@@ -13,6 +14,7 @@ export interface AddressActivity {
 
 interface Flow {
 	txid: string;
+	indexInBlock: number;
 	address: string;
 	received: bigint;
 	sent: bigint;
@@ -30,11 +32,11 @@ export class AddressIndex {
 
 	/** Add a newly connected tip block. `spent` is its undo data; `txids` its transactions' ids. */
 	connect(block: Block, spent: readonly UTXO[], txids = block.transactions.map((tx) => tx.calculateHash())): void {
-		for (const { txid, address, received, sent } of AddressIndex._flows(block, spent, txids)) {
+		for (const { txid, indexInBlock, address, received, sent } of AddressIndex._flows(block, spent, txids)) {
 			let history = this._byAddress.get(address);
 			if (!history) this._byAddress.set(address, (history = []));
 			const before = history[history.length - 1]?.balance ?? 0n;
-			history.push({ txid, height: block.index, received, sent, balance: before + received - sent });
+			history.push({ txid, height: block.index, indexInBlock, received, sent, balance: before + received - sent });
 		}
 	}
 
@@ -54,6 +56,29 @@ export class AddressIndex {
 	}
 
 	/**
+	 * The combined history of several addresses (a wallet's): one entry per transaction, in
+	 * chain order, with what it received and sent over all of them and their total balance after it.
+	 */
+	historyOf(addresses: Iterable<string>): AddressActivity[] {
+		const byTx = new Map<string, AddressActivity>();
+		for (const address of new Set(addresses)) {
+			for (const entry of this.history(address)) {
+				const merged = byTx.get(entry.txid);
+				if (merged) {
+					merged.received += entry.received;
+					merged.sent += entry.sent;
+				} else {
+					byTx.set(entry.txid, { ...entry });
+				}
+			}
+		}
+		const history = [...byTx.values()].sort((a, b) => a.height - b.height || a.indexInBlock - b.indexInBlock);
+		let balance = 0n;
+		for (const entry of history) entry.balance = balance += entry.received - entry.sent;
+		return history;
+	}
+
+	/**
 	 * What each transaction of `block` received and sent per address. Inputs are resolved from
 	 * the undo data, or from an earlier transaction of the same block (those aren't in the undo).
 	 */
@@ -65,7 +90,7 @@ export class AddressIndex {
 			const flows = new Map<string, Flow>();
 			const flow = (address: string): Flow => {
 				let entry = flows.get(address);
-				if (!entry) flows.set(address, (entry = { txid, address, received: 0n, sent: 0n }));
+				if (!entry) flows.set(address, (entry = { txid, indexInBlock: t, address, received: 0n, sent: 0n }));
 				return entry;
 			};
 			if (!tx.isCoinbase()) {

@@ -176,7 +176,7 @@ async function main(): Promise<void> {
 		await waitFor(nodeA, /chainstate at height \d+; validated 0 newer block\(s\)/, 'starting from the saved chainstate');
 		if (walletAddress(nodeA) !== address) throw new Error('wallet changed across restart');
 
-		step('the address history matches after the restart; the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
+		step('the address and wallet histories match after the restart; the restarted wallet is locked: the CLI unlocks it (staking only) and locks it');
 		await waitFor(nodeA, API_READY, 'API');
 		// The address history is rebuilt from the chain at startup: it must end at the balance
 		const history = await apiGet<{ total: number; transactions: { balance: string }[] }>(nodeA, `/addresses/${address}/transactions?limit=1`);
@@ -185,7 +185,14 @@ async function main(): Promise<void> {
 			throw new Error(`A's address history doesn't match its balance after the restart (${history.total} entries)`);
 		}
 		const cli = (args: string[], input?: string) => runCli(['--data-dir', dataA, '--api', apiUrl(nodeA), ...args], input);
-		if (!(await cli(['balance'])).stdout.includes('wallet: encrypted, locked')) throw new Error('wallet not locked after restart');
+		const restartedWallet = (await cli(['balance'])).stdout;
+		if (!restartedWallet.includes('wallet: encrypted, locked')) throw new Error('wallet not locked after restart');
+		// The wallet history (all addresses, needs no unlock) is rebuilt too: its newest balance is the wallet's
+		const walletHistory = await cli(['history', '--limit', '2']);
+		const newest = /^\s+\d+\s+\S+ \S+\s+mined\s+\+[\d.]+\s+([\d.]+)\s+[0-9a-f]{64}/m.exec(walletHistory.stdout);
+		if (walletHistory.code !== 0 || !newest || !restartedWallet.includes(`balance: ${newest[1]}\n`)) {
+			throw new Error(`cli history doesn't end at the wallet balance: ${walletHistory.stdout.trim()} ${walletHistory.stderr.trim()}`);
+		}
 		if (!(await cli(['addresses'])).stdout.includes(created)) throw new Error('the new address is gone after restart');
 		const wrong = await cli(['unlock'], 'not the passphrase\n');
 		if (wrong.code === 0 || !wrong.stderr.includes('wrong passphrase')) throw new Error('a wrong passphrase unlocked the wallet');

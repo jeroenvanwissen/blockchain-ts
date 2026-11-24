@@ -9,7 +9,8 @@
 //   3. After block 20 the chain is proof of stake; A and C both stake.
 //   4. C is partitioned (restarted on a new port with no peers) and stakes alone.
 //   5. C reconnects: one side reorganizes and all tips converge.
-//   6. A restarts and the network converges again; C's CLI reports the payment.
+//   6. A restarts and the network converges again; C's CLI reports the payment in its balance
+//      and its history, with the blocks C staked.
 // Node tips and balances are read from each node's HTTP API.
 import * as fs from 'fs';
 import * as os from 'os';
@@ -167,12 +168,23 @@ async function main(): Promise<void> {
 		if (!reported || parseCoins(reported[1]) < paymentTotal) {
 			throw new Error(`C's CLI reports less than its payment: ${balanceC.stdout.trim()} ${balanceC.stderr.trim()}`);
 		}
+		// C's wallet history: the payment it received (at a non-primary address), and the blocks it
+		// staked with those coins if any are on the converged chain (they can lose a slot or a reorg)
+		const historyC = await runCli(['--data-dir', dirs.c, '--api', apiUrl(nodeC), 'history', '--limit', '100']);
+		const received = new RegExp(`^\\s+\\d+ .*\\breceive\\s+\\+${PAYMENT_OUTPUTS}\\s+\\S+\\s+${txid}  to ${addressC}$`, 'm');
+		if (historyC.code !== 0 || !received.test(historyC.stdout)) {
+			throw new Error(`C's CLI history lacks the payment: ${historyC.stdout.trim()} ${historyC.stderr.trim()}`);
+		}
+		const stakedByC = harnessChain.getChain().filter((block) => block.isProofOfStake() && block.transactions[1].outputs[1].address === addressC).length;
+		if (stakedByC > 0 && !(/\breward\s+\+/.test(historyC.stdout) && /\bstake\s+0\s/.test(historyC.stdout))) {
+			throw new Error(`C staked a block on the converged chain, but its CLI history doesn't show it: ${historyC.stdout.trim()}`);
+		}
 		if (!harnessChain.isChainValid()) throw new Error('converged chain is not valid');
 		running.filter((node) => node.child.exitCode === null).forEach(noLoadErrors);
 		const penalizing = running.find((node) => /Peer misbehaving|Banning peer/.test(node.output()));
 		if (penalizing) throw new Error(`${penalizing.name} penalized an honest peer`);
 		const posBlocks = harnessChain.getChain().filter((block) => block.isProofOfStake()).length;
-		step(`PASS: height ${harnessChain.getLatestBlock().index}, ${posBlocks} PoS blocks`);
+		step(`PASS: height ${harnessChain.getLatestBlock().index}, ${posBlocks} PoS blocks (${stakedByC} staked by C)`);
 	} catch (error) {
 		console.error(`[e2e] FAIL: ${(error as Error).message}`);
 		for (const node of running.filter((n) => n.child.exitCode === null)) {

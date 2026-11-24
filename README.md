@@ -21,7 +21,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 100 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings a fresh chain pauses after block 100 until its first coinbases are 8 hours old (`STAKE_MIN_AGE`).
 
-Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed and can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), and can be [encrypted](#wallet-encryption). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
 
 ---
 
@@ -114,7 +114,7 @@ src/
 ├── __tests__/integration/    # Real-filesystem / real-WebSocket integration tests
 ├── config.ts                 # All configuration constants
 ├── index.ts                  # Node entry point
-├── cli.ts                    # npm run cli: status, balance, addresses, send via the API
+├── cli.ts                    # npm run cli: status, balance, addresses, history, send via the API
 ├── smoke.ts                  # npm run smoke: two real nodes
 ├── e2e.ts                    # npm run e2e: three regtest nodes, partition, reorg
 └── nodeHarness.ts            # Helpers for driving node processes
@@ -256,6 +256,38 @@ npm run cli -- balance         # the primary address and the balance over all ad
 
 A wallet made by an older version has one key. It keeps that key as its primary address and gets a seed for further addresses: at the next start if unencrypted, or at the first `unlock` if encrypted (until then `new-address` asks you to unlock once).
 
+### Wallet History
+
+`history` lists the wallet's transactions over all its addresses, newest first, with pending ones on top. A payment that also sends change back to the wallet is one line, showing the net change:
+
+```bash
+npm run cli -- history                  # the newest 25
+npm run cli -- history --limit 100      # up to 100
+npm run cli -- history --before 24      # the page before position 24 (the command prints the next one)
+```
+
+```text
+ height  time                 type               amount           balance  txid
+     24  2026-11-24 09:24:00  self           -0.0000242             227.5  5b21…3c62  to 16TV…a6ib +1 more, fee 0.0000242
+     24  2026-11-24 09:24:00  send          -12.5000377       227.5000242  f6d5…e21c  to 1BmH…Mdba, fee 0.0000377
+     24  2026-11-24 09:24:00  stake                   0       240.0000619  8465…c60d  to 1Z4s…1YLn, immature
+     24  2026-11-24 09:24:00  reward        +10.0000619       240.0000619  3fd9…8589  to 1Z4s…1YLn, immature
+     20  2026-11-24 09:22:44  mined                 +10               200  9f66…00ca  to 1Z4s…1YLn, immature
+```
+
+The CLI prints full txids and addresses; they are shortened here. The amount is the change to the wallet's balance, fee included, and the balance is the wallet's balance after the transaction. The types are:
+
+| Type      | Meaning |
+| --------- | ------- |
+| `receive` | Coins paid to one of the wallet's addresses |
+| `send`    | A payment to someone else; the line shows the recipients and the fee |
+| `self`    | A payment between the wallet's own addresses: only the fee leaves the wallet |
+| `mined`   | The reward of a PoW block the wallet mined, plus its fees |
+| `reward`  | The reward of a PoS block the wallet staked, plus its fees |
+| `stake`   | The coinstake: the staked output goes back to its owner, so the change is 0 |
+
+Mined and staked coins are marked `immature` until they can be spent (10 confirmations). `history` needs no passphrase: it reads only the chain and the wallet's addresses.
+
 ### Wallet Encryption
 
 `wallet.dat` holds the seed unencrypted (mode 0600) until you encrypt it. Encryption uses a passphrase (scrypt, AES-256-GCM), deletes the old unencrypted backups, and locks the wallet:
@@ -360,6 +392,7 @@ Every node serves a JSON API on `127.0.0.1` at the P2P port + 1000 (6001 by defa
 | `GET /wallet` | The wallet's primary address, the number of addresses handed out, and the balance, spendable balance and number of outputs over all its addresses (token required) |
 | `GET /wallet/addresses` | The addresses handed out (plus watched ones holding coins), each with its receiving index, balance and outputs; the primary first (token required) |
 | `POST /wallet/addresses` | Body `{}`: hands out a new receiving address, also while locked; returns `{"address": "..."}` (token required) |
+| `GET /wallet/transactions?before=<n>&limit=<n>` | The wallet's transactions over all its addresses, one entry per transaction, newest first and paged like an address's: position, txid, height, time, confirmations, type (`receive`, `send`, `self`, `mined`, `reward`, `stake`), `amount` (the net change to the wallet, negative for a payment, fee included), the fee when the wallet paid it, the addresses paid (a payment's recipients, otherwise the wallet's own), the balance after it, and whether mined or staked coins are still immature. `pending` lists mempool transactions (token required) |
 | `POST /wallet/send` | Body `{"outputs": [{"address": "...", "amount": "<base units>"}]}` (1 to 255 outputs). Pays from the node's wallet plus the minimum fee and returns `{"txid": "...", "fee": "<base units>"}`; 423 while the wallet is locked or unlocked for staking only (token required) |
 | `POST /wallet/encrypt` | Body `{"passphrase": "..."}` (at least 8 characters): encrypts the seed at rest and locks the wallet (token required) |
 | `POST /wallet/unlock` | Body `{"passphrase": "...", "timeout": <seconds, 0 = no limit>, "stakingOnly": <bool>}`; 403 for a wrong passphrase (token required) |
@@ -442,6 +475,7 @@ A node accepts up to 32 inbound connections and dials up to 8 peers, topping out
 | Wallet balance    | `npm run cli -- balance`                                      |
 | New address       | `npm run cli -- new-address`                                  |
 | Wallet addresses  | `npm run cli -- addresses`                                    |
+| Wallet history    | `npm run cli -- history`                                      |
 | Send coins        | `npm run cli -- send <address> <coins>`                       |
 | Staking status    | `npm run cli -- staking`                                      |
 | Block explorer    | open `http://127.0.0.1:6001/`                                 |
