@@ -14,6 +14,7 @@ import {
 	BAN_LIST_PATH,
 	DATA_DIR,
 	NETWORK_MAGIC,
+	P2P_EXTERNAL_PORT,
 	P2P_PORT,
 	PEER_DATA_PATH,
 	REGTEST_NETWORK_MAGIC,
@@ -87,7 +88,11 @@ setInterval(discoverAddresses, WALLET_DISCOVERY_INTERVAL).unref();
 
 // Create P2P server
 const networkMagic = isRegtest ? REGTEST_NETWORK_MAGIC : NETWORK_MAGIC;
-const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, { networkMagic, banListPath: BAN_LIST_PATH });
+const p2pServer = new P2PServer(blockchain, P2P_PORT, PEER_DATA_PATH, {
+	networkMagic,
+	banListPath: BAN_LIST_PATH,
+	externalPort: P2P_EXTERNAL_PORT,
+});
 if (isRegtest) log.info('Regtest network');
 
 // Proof-of-stake block production with this node's wallet; started below with --stake

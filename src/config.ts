@@ -39,9 +39,18 @@ export const CHAINSTATE_INTERVAL = 500; // also saved every this many connected 
 
 // P2P configuration
 export const DEFAULT_P2P_PORT = 5001;
+
+function parsePort(name: string, value: string): number {
+	const port = Number(value);
+	if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`${name} must be a port number (1 to 65535), not "${value}"`);
+	return port;
+}
 export const P2P_PORT = process.env.P2P_PORT
 	? parseInt(process.env.P2P_PORT)
 	: DEFAULT_P2P_PORT;
+// The port peers should dial, announced in VERSION, when it isn't P2P_PORT: a Docker port
+// published under another number, or a router forwarding another port to this machine
+export const P2P_EXTERNAL_PORT = process.env.P2P_EXTERNAL_PORT ? parsePort('P2P_EXTERNAL_PORT', process.env.P2P_EXTERNAL_PORT) : P2P_PORT;
 
 // Local HTTP API (TASK-0016): read-only; loopback unless API_HOST says otherwise.
 // API_PORT=0 lets the OS pick a free port (logged at startup).

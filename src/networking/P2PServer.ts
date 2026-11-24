@@ -158,14 +158,16 @@ export class P2PServer {
 	private readonly _banListPath: string | undefined;
 
 	private readonly _networkMagic: string;
+	private readonly _externalPort: number; // announced in VERSION as the port peers dial
 
 	constructor(
 		private blockchain: Blockchain,
 		private p2pPort: number,
 		private peerDataPath: string,
-		options: { networkMagic?: string; banListPath?: string } = {},
+		options: { networkMagic?: string; banListPath?: string; externalPort?: number } = {},
 	) {
 		this._networkMagic = options.networkMagic ?? NETWORK_MAGIC;
+		this._externalPort = options.externalPort ?? p2pPort;
 		this._banListPath = options.banListPath;
 		this._loadBans();
 		this.sockets = [];
@@ -222,7 +224,8 @@ export class P2PServer {
 			server.once('listening', () => {
 				server.off('error', reject);
 				server.on('error', (error) => log.error('WebSocket Server error:', error));
-				log.info(`P2P Server listening on 0.0.0.0:${this.p2pPort}`);
+				const external = this._externalPort === this.p2pPort ? '' : ` (peers dial port ${this._externalPort})`;
+				log.info(`P2P Server listening on 0.0.0.0:${this.p2pPort}${external}`);
 				this._startPeerBroadcast();
 				resolve();
 			});
@@ -476,7 +479,7 @@ export class P2PServer {
 			height: tip.index,
 			tip: tip.hash,
 			nonce: this._nonce,
-			listenPort: this.p2pPort,
+			listenPort: this._externalPort, // what peers dial: P2P_EXTERNAL_PORT, or the port we listen on
 		};
 	}
 

@@ -143,6 +143,8 @@ Key constants in `src/config.ts`:
 | Setting                         | Default | Description                                    |
 | ------------------------------- | ------- | ---------------------------------------------- |
 | `P2P_PORT`                      | 5001    | WebSocket P2P port (env: `P2P_PORT`)           |
+| `P2P_EXTERNAL_PORT`             | P2P port | The port peers should dial, when they reach the node under another one (env: `P2P_EXTERNAL_PORT`) |
+| `SEED_NODES`                    | none    | Peers to dial at startup, comma-separated `ws://host:port` (env: `SEED_NODES`) |
 | `DATA_DIR`                      | platform default | Data directory when `--data-dir` isn't given (env: `DATA_DIR`) |
 | `API_PORT`                      | P2P port + 1000 | HTTP API port (env: `API_PORT`; `0` picks a free port) |
 | `API_HOST`                      | 127.0.0.1 | HTTP API bind address (env: `API_HOST`)      |
@@ -382,6 +384,40 @@ docker compose run --rm --no-deps --entrypoint cli node restore-wallet --encrypt
 docker compose start node
 ```
 
+### Running a Network Across Machines
+
+All nodes of a network must run the same version: the same genesis block and network id (`cli status` shows the network).
+
+1. **First node.** Start it on a machine whose P2P port (5001) the others can reach. Open the port in the firewall; on a home network, forward it on the router. `compose.yaml` publishes 5001.
+2. **Joining nodes.** Give them the address of any node that is already running. They learn the other nodes from it:
+
+   ```bash
+   SEED_NODES=ws://node1.example.com:5001 npm start -- --stake   # or: npm start -- --peers ws://node1.example.com:5001 --stake
+   ```
+
+   With Docker, set it in a `compose.override.yaml` next to `compose.yaml` (compose reads both):
+
+   ```yaml
+   services:
+     node:
+       environment:
+         SEED_NODES: ws://node1.example.com:5001
+       command: ["--stake"]
+   ```
+
+   A node passes on only addresses it has connected to itself or was given, saves the ones that work in `peers.json`, and keeps up to 8 outbound connections. After a restart it rejoins from that file, without seed nodes.
+3. **Ports.** If others reach a node under a different port than the one it listens on (Docker publishing `7001:5001`, a router forwarding 7001), set `P2P_EXTERNAL_PORT=7001`. The node then announces the port they can dial. A node that can't be reached from outside still works: it dials out, others just can't dial it.
+4. **Clocks.** Keep every machine's clock synchronized (NTP, on by default on most systems). Proof of stake works in 16-second slots and refuses blocks more than 2 hours ahead. A clock that is off by minutes makes a node's blocks lose races or be refused.
+5. **Phases.** Someone mines the first 100 blocks (`--mine`). After that only staked blocks are valid, and a coin can stake once it is 8 hours old and 10 blocks deep. On a brand-new network this means a pause of several hours after block 100 ([TASK-0051](tasks/TASK-0051-pow-phase-length.md)).
+6. **Check it.** `cli status` on each machine shows its peers and height, `GET /peers` lists the connections, and every node should report the same tip. The [block explorer](#block-explorer) shows the same chain on each.
+
+Peers talk plain WebSocket (`ws://`) and exchange only blocks, transactions and peer addresses, which are public anyway. The HTTP API stays on loopback unless `API_HOST` exposes it, and the wallet routes never answer another machine.
+
+`npm run network:check` tests this setup with three containers that act as separate machines, each with its own IP address and hostname:
+- C is configured with only B, finds A through B and connects to it.
+- A payment from A confirms at C.
+- C, recreated without seed nodes, rejoins from its `peers.json`.
+
 ---
 
 ## Usage Example
@@ -555,9 +591,11 @@ Start once with `--reindex`: the node ignores `blocks/chainstate.json`, validate
 
 ### Node Can't Connect to Peers
 
-- Verify the peer node is running
-- Check the `--peers` argument format: `ws://host:port`, comma-separated
-- Ensure firewall allows WebSocket connections
+- Verify the peer node is running, and that `cli status` on both shows the same `network`
+- Check the `--peers` and `SEED_NODES` format: `ws://host:port`, comma-separated
+- Ensure the peer's firewall (and router, at home) lets connections reach its P2P port
+- A node reached under another port than it listens on needs `P2P_EXTERNAL_PORT` (see [Running a Network Across Machines](#running-a-network-across-machines))
+- `Disconnecting peer: banned` means the other node misbehaved earlier; bans are in `banned.json` and expire after 24 hours
 
 ### Tests Failing
 

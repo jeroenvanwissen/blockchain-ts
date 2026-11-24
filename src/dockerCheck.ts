@@ -5,47 +5,16 @@
 // - native secp256k1 and a non-root user; the health check turns healthy
 // - docker stop shuts down cleanly and saves the chainstate; the chain survives a restart
 // Uses plain console output (a script, like smoke and e2e).
-import { execFile, spawn } from 'child_process';
-import { promisify } from 'util';
+import { apiUrl as containerApiUrl, build, docker, IMAGE, waitUntil } from './dockerHarness.js';
 
-const execFileAsync = promisify(execFile);
-const IMAGE = process.env.IMAGE || 'blockchain-ts:check';
 const NAME = `blockchain-ts-check-${process.pid}`;
 const VOLUME = `${NAME}-data`;
-const TIMEOUT_MS = 90_000;
 
 function step(message: string): void {
 	console.log(`[docker] ${message}`);
 }
 
-async function docker(...args: string[]): Promise<string> {
-	const { stdout } = await execFileAsync('docker', args, { maxBuffer: 64 * 1024 * 1024 });
-	return stdout.trim();
-}
-
-/** `docker build`, with its output shown. */
-function build(): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const child = spawn('docker', ['build', '-t', IMAGE, '.'], { stdio: 'inherit' });
-		child.once('error', reject);
-		child.once('exit', (code) => (code === 0 ? resolve() : reject(new Error(`docker build exited with ${code}`))));
-	});
-}
-
-async function waitUntil(check: () => Promise<boolean>, what: string): Promise<void> {
-	const deadline = Date.now() + TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (await check().catch(() => false)) return;
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-	throw new Error(`timed out waiting for ${what}`);
-}
-
-/** The host URL of the container's API (its published port changes on every start). */
-async function apiUrl(): Promise<string> {
-	const mapping = (await docker('port', NAME, '6001/tcp')).split('\n')[0]; // "127.0.0.1:49153"
-	return `http://127.0.0.1:${mapping.slice(mapping.lastIndexOf(':') + 1)}`;
-}
+const apiUrl = () => containerApiUrl(NAME);
 
 async function height(api: string): Promise<number> {
 	const res = await fetch(`${api}/status`);

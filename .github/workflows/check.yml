@@ -48,7 +48,7 @@ jobs:
       - run: npm run e2e
 
   docker:
-    name: Docker image
+    name: Docker image and network
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -60,3 +60,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run docker:check # builds the image, then checks a running container
+      - run: npm run network:check -- --no-build # three containers as three machines, same image
