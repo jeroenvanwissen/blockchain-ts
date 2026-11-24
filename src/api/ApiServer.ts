@@ -433,8 +433,8 @@ export class ApiServer {
 
 	/**
 	 * POST /wallet/send { outputs: [{ address, amount }] }: pay from the node's wallet (plus the
-	 * minimum relay fee), admit to the mempool, relay. Returns the txid and fee. Chain-side
-	 * rejections (funds, mempool rules) are 422.
+	 * minimum relay fee), admit to the mempool, save the mempool, relay. Returns the txid and fee.
+	 * Chain-side rejections (funds, mempool rules) are 422.
 	 */
 	private async _sendPayment(body: unknown) {
 		const payTo = parsePayment(body);
@@ -450,6 +450,7 @@ export class ApiServer {
 			} catch (error) {
 				throw new HttpError(422, (error as Error).message);
 			}
+			this._blockchain.saveMempool(); // the payment survives a crash before it confirms
 			this._walletAccess!.broadcast(payment.transaction);
 			const txid = payment.transaction.calculateHash();
 			log.info(`sent ${txid.slice(0, 16)} from the wallet (fee ${payment.fee})`);

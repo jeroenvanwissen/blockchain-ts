@@ -582,16 +582,18 @@ export class Blockchain {
 	}
 
 	/**
-	 * Save the pending transactions so the next start re-admits them (on shutdown). A failed
-	 * save only loses them; the wallet's coins stay spendable.
+	 * Save the pending transactions so the next start re-admits them: at shutdown, and after each
+	 * payment from the node's wallet so it survives a crash too. Returns how many were saved, or
+	 * null if the save failed (logged); a failed save only loses them, the coins stay spendable.
 	 */
-	public saveMempool(): void {
+	public saveMempool(): number | null {
 		try {
 			const transactions = this._mempool.transactions();
 			writeMempoolFile(this._mempoolPath, transactions);
-			log.info(`saved ${transactions.length} pending transaction(s)`);
+			return transactions.length;
 		} catch (error) {
 			log.warn('could not save the mempool:', (error as Error).message);
+			return null;
 		}
 	}
 

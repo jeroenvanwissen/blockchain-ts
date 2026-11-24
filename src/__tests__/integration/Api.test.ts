@@ -443,6 +443,9 @@ describe('HTTP API', () => {
 			const inputTotal = POW_BLOCK_REWARD * BigInt(payment.inputs.length);
 			expect(payment.outputs[2]).toEqual({ address: miner.address, amount: inputTotal - 3n * COIN - fee });
 
+			// Saved at once: a node that crashes now has the payment pending again after a restart
+			expect(openChain(dir, OPTIONS).getPendingTransactions().map((tx) => tx.calculateHash())).toEqual([txid]);
+
 			// The next block's coinbase claims the fee
 			await buildBlocks(chain, miner.address, 1);
 			expect(chain.getBalance(r2.address)).toBe(2n * COIN);

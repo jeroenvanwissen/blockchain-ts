@@ -89,7 +89,7 @@ export async function waitUntil(
 }
 
 /** Stop a node the way an operator would: SIGINT (Ctrl+C) or SIGTERM (systemd, Docker, kill). */
-export async function stopNode(node: NodeProcess, signal: 'SIGINT' | 'SIGTERM' = 'SIGINT'): Promise<void> {
+export async function stopNode(node: NodeProcess, signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL' = 'SIGINT'): Promise<void> {
 	if (node.child.exitCode !== null || node.child.signalCode !== null) return;
 	node.child.kill(signal);
 	const timer = setTimeout(() => node.child.kill('SIGKILL'), 5_000);

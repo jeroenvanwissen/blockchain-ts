@@ -44,8 +44,7 @@ describe('Pending transactions across restarts', () => {
 		await chain.addTransaction(keep);
 		const doomed = chain.createTransaction(miner.address, bob.address, COIN, miner);
 		await chain.addTransaction(doomed);
-		chain.saveMempool();
-		expect(logged(logs)).toContain('saved 2 pending transaction(s)');
+		expect(chain.saveMempool()).toBe(2);
 
 		// While "down", a block confirms another spend of the doomed payment's input
 		const input = doomed.inputs[0];

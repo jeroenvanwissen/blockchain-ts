@@ -157,7 +157,8 @@ async function shutdown(code = 0): Promise<void> {
 	staking.stop();
 	await miner.stop().catch(() => {});
 	blockchain.saveChainstate();
-	blockchain.saveMempool();
+	const saved = blockchain.saveMempool();
+	if (saved !== null) log.info(`saved ${saved} pending transaction(s)`);
 	await Promise.allSettled([p2pServer.close(), api.close()]);
 	process.exit(code);
 }

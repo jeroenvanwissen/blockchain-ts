@@ -183,7 +183,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset)  |
 | `blocks/chainstate.json` | Validated state at a tip (outputs, stake modifiers, undo data), saved on shutdown and every 500 blocks; startup validates only newer blocks |
-| `blocks/mempool.json`   | Transactions still pending at shutdown; startup re-admits them and drops those that are no longer valid |
+| `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed, account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
 | `peers.json`            | Known peer addresses                       |
@@ -243,7 +243,7 @@ npm run cli -- send <address1> 1 <address2> 2.25     # several recipients in one
 
 For another node, pass its data dir (for its `api.cookie`) and API URL: `npm run cli -- --data-dir ./data/node2 --api http://127.0.0.1:6002 balance`.
 
-A payment that is still pending when the node stops (Ctrl+C, SIGTERM, `docker stop`) is saved in `blocks/mempool.json` and pending again after the restart. Peers that connect later get it through the [`MEMPOOL` exchange](#p2p-message-protocol), so it confirms even if it was sent while the node had no peers. A node that crashes or is killed loses its pending payments unless a peer already has them; the coins stay in the wallet and can be sent again.
+The node saves its pending transactions in `blocks/mempool.json` right after each payment from its wallet and again when it stops (Ctrl+C, SIGTERM, `docker stop`), so a payment that hasn't confirmed yet is pending again after a restart, even after a crash. Peers that connect later get it through the [`MEMPOOL` exchange](#p2p-message-protocol), so it confirms even if it was sent while the node had no peers. Transactions the node only relayed for others are saved at shutdown; after a crash, peers that still have them pass them on again.
 
 ### Wallet Addresses
 
