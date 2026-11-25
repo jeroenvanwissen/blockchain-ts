@@ -7,8 +7,8 @@ import type { UTXO } from './UtxoSet.js';
  * is derived from the blocks, so the node neither keeps it in memory nor rebuilds it at every
  * start: the block tree (header fields, chain work, status), and for the active chain the UTXO
  * set, each block's undo data and stake modifier, the txid index and every address's history.
- * Connecting or disconnecting a block changes it in one transaction, so it always describes one
- * tip completely. The blk*.dat files stay the source of truth: the database can be rebuilt from
+ * Connecting or disconnecting a block changes it in one transaction, or in a batch's transaction
+ * when the node writes a run of blocks (TASK-0054), so it always describes one tip completely. The blk*.dat files stay the source of truth: the database can be rebuilt from
  * them (--reindex), and it is when it was built under other rules or by another version.
  */
 export const CHAIN_DB_VERSION = 1;
@@ -138,6 +138,7 @@ const TABLES = ['meta', 'blocks', 'undo', 'utxos', 'txs', 'activity'];
 export class ChainDb {
 	private readonly _db: DatabaseSync;
 	private readonly _sql: Record<string, StatementSync> = {};
+	private _inBatch = false;
 
 	/** Open (or create) the database at `file`; ':memory:' for a throwaway one. */
 	constructor(file: string) {
@@ -159,16 +160,49 @@ export class ChainDb {
 		return statement;
 	}
 
-	/** Run `work` in one transaction: all of it is written, or none. */
+	/**
+	 * Run `work` in one transaction: all of it is written, or none. Inside a batch (`begin`) it is
+	 * part of the batch's transaction: written at `commit` with the rest, undone by `rollback`.
+	 */
 	transaction<T>(work: () => T): T {
+		if (this._inBatch) return work();
 		this._db.exec('BEGIN');
 		try {
 			const result = work();
 			this._db.exec('COMMIT');
 			return result;
 		} catch (error) {
-			this._db.exec('ROLLBACK');
+			this._rollback();
 			throw error;
+		}
+	}
+
+	/**
+	 * Start a batch (TASK-0054): the writes until `commit` are one transaction, so a run of
+	 * blocks costs one commit instead of one per block. Whoever opens a batch rolls it back when
+	 * one of its writes fails.
+	 */
+	begin(): void {
+		this._db.exec('BEGIN');
+		this._inBatch = true;
+	}
+
+	commit(): void {
+		this._db.exec('COMMIT');
+		this._inBatch = false;
+	}
+
+	/** Undo the batch's writes since `begin`. */
+	rollback(): void {
+		this._rollback();
+		this._inBatch = false;
+	}
+
+	private _rollback(): void {
+		try {
+			this._db.exec('ROLLBACK');
+		} catch {
+			// no transaction open: SQLite rolls back by itself after some errors (a full disk, I/O)
 		}
 	}
 

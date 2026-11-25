@@ -34,6 +34,7 @@ export const PEER_DATA_PATH = path.join(DATA_DIR, 'peers.json');
 export const MAX_BLOCK_FILE_SIZE = 128 * 1024 * 1024; // 128 MB per blk file
 // The chain database (TASK-0053): the active chain's state and the indexes, updated per block
 export const CHAIN_DB_FILENAME = 'chain.db'; // in the blocks directory
+export const CHAIN_DB_BATCH_BLOCKS = 1000; // blocks written per chain-database transaction in a run of blocks (TASK-0054)
 export const MEMPOOL_FILENAME = 'mempool.json'; // in the blocks directory: pending transactions saved at shutdown
 
 // P2P configuration

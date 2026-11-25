@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
-import { Blockchain } from '../blockchain/Blockchain.js';
+import { Blockchain, StorageError } from '../blockchain/Blockchain.js';
 import { Transaction } from '../blockchain/Transaction.js';
 import { Block } from '../blockchain/Block.js';
 import fs from 'fs';
@@ -411,6 +411,10 @@ export class P2PServer {
 
 	/** A peer's block was rejected: misbehavior unless an honest peer could cause it. */
 	private _blockRejected(socket: WebSocket | undefined, error: Error): void {
+		if (error instanceof StorageError) {
+			log.warn('Could not store a block from a peer:', error.message); // our disk, not the peer's fault
+			return;
+		}
 		if (BENIGN_BLOCK_ERRORS.some((benign) => error.message.includes(benign))) {
 			log.debug('Block from peer not accepted:', error.message);
 			return;
@@ -845,25 +849,24 @@ export class P2PServer {
 			this._misbehaving(socket, 20, 'malformed BLOCKS');
 			return;
 		}
-		let accepted = 0;
-		let lastHash: string | undefined;
+		const blocks: Block[] = [];
+		let malformed: string | undefined;
 		for (const raw of payload.blocks) {
-			let block: Block;
 			try {
-				block = Block.fromJSON(raw);
+				blocks.push(Block.fromJSON(raw));
 			} catch (error) {
-				this._misbehaving(socket, 50, (error as Error).message);
-				return;
+				malformed = (error as Error).message;
+				break; // the blocks before it are still added
 			}
-			lastHash = block.hash;
-			if (this.blockchain.hasBlock(block.hash)) continue;
-			try {
-				await this.blockchain.addMinedBlock(block);
-				accepted++;
-			} catch (error) {
-				this._blockRejected(socket, error as Error);
-				return; // stop at the first bad block; don't ask this peer for more
-			}
+		}
+		// One lock and one database transaction for the batch (TASK-0054)
+		let accepted = 0;
+		let rejected: Error | undefined;
+		try {
+			if (blocks.length > 0) ({ added: accepted, rejected } = await this.blockchain.addBlocks(blocks));
+		} catch (error) {
+			this._blockRejected(socket, error as Error); // a storage failure: ours, not the peer's
+			return;
 		}
 		if (accepted > 0) {
 			const tip = this.blockchain.getLatestBlock();
@@ -871,6 +874,15 @@ export class P2PServer {
 				`Synced ${accepted} block(s) from peer: height ${tip.index}, tip ${tip.hash.slice(0, 16)}`,
 			);
 		}
+		if (malformed !== undefined) {
+			this._misbehaving(socket, 50, malformed);
+			return;
+		}
+		if (rejected) {
+			this._blockRejected(socket, rejected);
+			return; // stop at the first bad block; don't ask this peer for more
+		}
+		const lastHash = blocks.at(-1)?.hash;
 		if (payload.more === true && lastHash) {
 			this._requestBlocks(socket, lastHash);
 			return;

@@ -1,15 +1,17 @@
 // Scale measurement (TASK-0052): `npm run scale [-- --blocks <n>] [--batch <n>]`. Builds a chain
 // in-process in a temp dir, one signed payment per block, on a simulated clock (30 s per block)
 // with difficulty validation off, and reports per batch how long accepting a block takes
-// (`addMinedBlock`), the heap and the size of index.dat; then the chain database's size and how long
-// a start takes from it and with --reindex. Run it before and after a change to storage or chain
-// state to see how costs grow with the chain. Uses plain console output (a script, like smoke).
+// (`addMinedBlock`), the heap and the size of index.dat; then the chain database's size, how long
+// a start takes from it and with --reindex, and the time per block to sync the chain into a new
+// node in batches as a peer sends them (`addBlocks`, TASK-0054). Run it before and after a change
+// to storage or chain state to see how costs grow with the chain. Uses plain console output (a
+// script, like smoke).
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Blockchain, type BlockchainOptions } from './blockchain/Blockchain.js';
 import { Wallet } from './blockchain/Wallet.js';
-import { BLOCK_TIME, COIN, COIN_MATURITY, GENESIS_TIMESTAMP } from './config.js';
+import { BLOCK_TIME, COIN, COIN_MATURITY, GENESIS_TIMESTAMP, SYNC_BATCH_SIZE } from './config.js';
 import { setLogLevel } from './logger.js';
 
 function option(name: string, fallback: number): number {
@@ -70,6 +72,22 @@ async function build(dir: string, options: BlockchainOptions & { blocksDir: stri
 	console.log(`[scale] chain.db ${kb(path.join(options.blocksDir, 'chain.db'))} KB`);
 }
 
+/** A new node syncing `source`'s chain: batches of SYNC_BATCH_SIZE blocks, as a peer serves them. */
+async function sync(source: Blockchain, options: BlockchainOptions): Promise<void> {
+	const target = new Blockchain(options);
+	let accepting = 0;
+	for (;;) {
+		const batch = source.getBlocksAfter(target.getBlockLocator(), SYNC_BATCH_SIZE);
+		if (batch.length === 0) break;
+		const start = performance.now();
+		await target.addBlocks(batch);
+		accepting += performance.now() - start;
+	}
+	if (target.getLatestBlock().hash !== source.getLatestBlock().hash) throw new Error('the synced node has another tip');
+	console.log(`[scale] sync into a new node: ${(accepting / target.getHeight()).toFixed(2)} ms/block (${(accepting / 1000).toFixed(1)} s)`);
+	target.close();
+}
+
 async function main(): Promise<void> {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blockchain-ts-scale-'));
 	const options = { validateDifficulty: false, powCutoffBlock: Number.MAX_SAFE_INTEGER, blocksDir: path.join(dir, 'blocks') };
@@ -81,6 +99,8 @@ async function main(): Promise<void> {
 		fromState.close();
 		const [reindexed, reindexMs] = timed(() => new Blockchain({ ...options, reindex: true }));
 		console.log(`[scale] start with --reindex: ${reindexMs} ms (height ${reindexed.getHeight()})`);
+		await sync(reindexed, { ...options, blocksDir: path.join(dir, 'synced') });
+		reindexed.close();
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

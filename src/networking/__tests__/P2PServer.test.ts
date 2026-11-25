@@ -608,6 +608,7 @@ describe('P2PServer', () => {
 		it('should ignore malformed BLOCKS, BLOCK and TRANSACTION payloads', async () => {
 			connectReady(mockSocket);
 			const addSpy = jest.spyOn(blockchain, 'addMinedBlock');
+			const addBatch = jest.spyOn(blockchain, 'addBlocks');
 			for (const message of [
 				{ type: MessageType.BLOCKS, data: 'nope' },
 				{ type: MessageType.BLOCKS, data: { blocks: [{ junk: true }], more: true } },
@@ -620,6 +621,7 @@ describe('P2PServer', () => {
 			}
 			await new Promise((resolve) => setImmediate(resolve));
 			expect(addSpy).not.toHaveBeenCalled();
+			expect(addBatch).not.toHaveBeenCalled();
 		});
 	});
 	describe('relay', () => {

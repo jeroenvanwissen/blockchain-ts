@@ -169,6 +169,37 @@ describe('ChainDb', () => {
 		expect(db.findTransaction(hash(2))).toEqual({ height: 1, position: 0 });
 	});
 
+	it('should keep the writes of a batch until commit, and drop them all on rollback', () => {
+		twoBlocks();
+		db.addBlock(record(2));
+		const block2: ConnectChange = {
+			hash: hash(1002),
+			height: 2,
+			modifier: hash(5002),
+			spent: [],
+			created: [utxo(4, 0, B, 1n, 2)],
+			txids: [hash(4)],
+			flows: [{ txid: hash(4), indexInBlock: 0, address: B, received: 1n, sent: 0n }],
+		};
+		const other = new ChainDb(file()); // another connection sees only what is committed
+
+		db.begin();
+		db.connect(block2);
+		expect(db.tip()?.height).toBe(2);
+		expect(other.tip()?.height).toBe(1);
+		db.rollback();
+		expect(db.tip()?.height).toBe(1);
+		expect(db.history(B)).toHaveLength(1);
+		expect(db.findTransaction(hash(4))).toBeUndefined();
+
+		db.begin();
+		db.connect(block2);
+		db.commit();
+		expect(other.tip()?.height).toBe(2);
+		expect(other.history(B)).toHaveLength(2);
+		other.close();
+	});
+
 	it('should keep amounts beyond 2^53 exact', () => {
 		db.reset(RULES);
 		db.addBlock(record(0));

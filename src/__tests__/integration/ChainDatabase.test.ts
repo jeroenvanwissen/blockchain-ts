@@ -1,13 +1,17 @@
 // The chain database at startup (TASK-0053; it replaces the saved chainstate of TASK-0029): a
 // node starts from the state the database holds for its tip and validates only the blocks stored
-// after it. Whatever the path, the live state must equal a full replay.
+// after it. Runs of blocks write it in batches (TASK-0054). Whatever the path, the live state
+// must equal a full replay.
 import * as fs from 'fs';
 import * as path from 'path';
+import { Block } from '../../blockchain/Block.js';
 import { Blockchain } from '../../blockchain/Blockchain.js';
 import { BlockStore } from '../../blockchain/BlockStore.js';
-import { ChainDb } from '../../blockchain/ChainDb.js';
+import { ChainDb, type ConnectChange } from '../../blockchain/ChainDb.js';
+import { Transaction } from '../../blockchain/Transaction.js';
 import { outpointKey } from '../../blockchain/UtxoSet.js';
 import type { Wallet } from '../../blockchain/Wallet.js';
+import * as config from '../../config.js';
 import { BLOCK_TIME, COIN, COIN_MATURITY } from '../../config.js';
 import {
 	advanceTime,
@@ -21,11 +25,29 @@ import {
 	POS_TEST_CUTOFF,
 	powBlockOn,
 	removeTempDir,
+	solve,
 	stakeBlocks,
 	useTestClock,
 } from './helpers.js';
 
 const SPACING = BLOCK_TIME * 1000;
+
+/** `block` with a coinbase claiming one base unit too many: well-formed, invalid. */
+function overpaying(block: Block): Block {
+	const [coinbase, ...rest] = block.transactions;
+	const claim = Transaction.coinbase(coinbase.outputs[0].address, coinbase.outputs[0].amount + 1n, block.index, coinbase.timestamp);
+	return solve(new Block(block.timestamp, [claim, ...rest], block.previousHash, 0, block.bits, block.index));
+}
+
+/** Make the `count`th call of ChainDb.connect from now fail as a full disk would. */
+function failConnect(count: number): jest.SpyInstance {
+	const connect = ChainDb.prototype.connect; // eslint-disable-line @typescript-eslint/unbound-method
+	let calls = 0;
+	return jest.spyOn(ChainDb.prototype, 'connect').mockImplementation(function (this: ChainDb, change: ConnectChange) {
+		if (++calls === count) throw new Error('disk full');
+		connect.call(this, change);
+	});
+}
 
 /** Live state, in memory and in the database, equals a fresh full replay of the active chain. */
 function expectConsistent(chain: Blockchain): void {
@@ -67,10 +89,12 @@ describe('Chain database', () => {
 	/** Reopen the stored chain, counting the blocks validated on the way. */
 	function reopen(options = {}): { chain: Blockchain; validated: number } {
 		const connects = jest.spyOn(Blockchain.prototype as unknown as { _connectBlock: () => unknown }, '_connectBlock');
-		const chain = openChain(dir, options);
-		const validated = connects.mock.calls.length;
-		connects.mockRestore();
-		return { chain, validated };
+		try {
+			const chain = openChain(dir, options);
+			return { chain, validated: connects.mock.calls.length };
+		} finally {
+			connects.mockRestore();
+		}
 	}
 
 	/** A chain with spends (so outputs, undo data and stake modifiers all matter). */
@@ -228,6 +252,103 @@ describe('Chain database', () => {
 
 		expect(fs.existsSync(path.join(blocksDir(), 'chainstate.json'))).toBe(false);
 		expect(logged(info)).toContain('removed chainstate.json: the chain database replaces it');
+	});
+
+	it('should add a sync batch in one transaction, and keep the blocks before a rejected one', async () => {
+		const blocks = (await chainWithPayments()).getChain().slice(1);
+		const batch = [...blocks.slice(0, 5), overpaying(blocks[5]), ...blocks.slice(6)];
+		const target = openChain(path.join(dir, 'target'));
+		const commits = jest.spyOn(ChainDb.prototype, 'commit');
+
+		const { added, rejected } = await target.addBlocks(batch);
+
+		expect(commits).toHaveBeenCalledTimes(1);
+		expect(added).toBe(5);
+		expect(rejected?.message).toContain('invalid coinbase reward amount');
+		expect(target.getLatestBlock().hash).toBe(blocks[4].hash);
+		expectConsistent(target);
+		target.close();
+		expectConsistent(openChain(path.join(dir, 'target')));
+	});
+
+	it('should put memory and database back to the last commit when a write or the commit of a batch fails', async () => {
+		const blocks = (await chainWithPayments()).getChain().slice(1);
+		const target = openChain(path.join(dir, 'target'));
+		await target.addBlocks(blocks.slice(0, 3));
+		const failures: [string, () => jest.SpyInstance][] = [
+			['could not store block 6: disk full', () => failConnect(3)],
+			[
+				'could not write the chain database: disk I/O error',
+				() =>
+					jest.spyOn(ChainDb.prototype, 'commit').mockImplementationOnce(() => {
+						throw new Error('disk I/O error');
+					}),
+			],
+		];
+
+		for (const [message, fail] of failures) {
+			const failure = fail();
+			await expect(target.addBlocks(blocks.slice(3))).rejects.toThrow(message);
+			failure.mockRestore();
+
+			expect(target.getLatestBlock().hash).toBe(blocks[2].hash);
+			expect(target.hasBlock(blocks[3].hash)).toBe(false);
+			expectConsistent(target);
+		}
+
+		// The same blocks again (the block files hold them twice now), and after a restart
+		expect(await target.addBlocks(blocks.slice(3))).toEqual({ added: blocks.length - 3, rejected: undefined });
+		expectConsistent(target);
+		target.close();
+		expectConsistent(openChain(path.join(dir, 'target')));
+	});
+
+	it('should reorganize in one transaction', async () => {
+		const chain = await chainWithPayments();
+		const prefix = chain.getChain().slice(0, -3);
+		advanceTime(SPACING * 10);
+		const branch = extendBranch(prefix, openWallet(dir, 'other').address, 4).slice(prefix.length);
+		const commits = jest.spyOn(ChainDb.prototype, 'commit');
+		const disconnects = jest.spyOn(ChainDb.prototype, 'disconnect');
+		const calls: { outcome: string; commits: number; disconnects: number }[] = [];
+
+		for (const block of branch) {
+			commits.mockClear();
+			disconnects.mockClear();
+			const outcome = await chain.addMinedBlock(block);
+			calls.push({ outcome, commits: commits.mock.calls.length, disconnects: disconnects.mock.calls.length });
+		}
+
+		expect(calls.map((call) => call.commits)).toEqual([1, 1, 1, 1]);
+		// At the third block or the fourth (the tie-break decides between equal work)
+		expect(calls.filter((call) => call.outcome === 'reorganized')).toEqual([{ outcome: 'reorganized', commits: 1, disconnects: 3 }]);
+		expect(chain.getLatestBlock().hash).toBe(branch[3].hash);
+		expectConsistent(chain);
+	});
+
+	it('should commit a rebuild every CHAIN_DB_BATCH_BLOCKS blocks, and start after a failed one from its last commit', async () => {
+		const chain = await chainWithPayments();
+		const blocks = chain.getChain().length - 1;
+		chain.close();
+		const settings: { CHAIN_DB_BATCH_BLOCKS: number } = config;
+		jest.replaceProperty(settings, 'CHAIN_DB_BATCH_BLOCKS', 5);
+		const commits = jest.spyOn(ChainDb.prototype, 'commit');
+
+		reopen({ reindex: true }).chain.close();
+		expect(commits).toHaveBeenCalledTimes(Math.floor((2 * blocks) / 5) + 1); // each block is recorded, then connected
+
+		const failure = failConnect(10); // the first is genesis: block 9
+		expect(() => reopen({ reindex: true })).toThrow('could not store block 9: disk full');
+		failure.mockRestore();
+
+		info.mockClear();
+		const { chain: resumed, validated } = reopen();
+		const height = Number(/chain database at height (\d+)/.exec(logged(info))?.[1]);
+		expect(height).toBeLessThan(9);
+		expect(height).toBeGreaterThanOrEqual(9 - 5); // at most one batch is lost
+		expect(validated).toBe(blocks - height);
+		expect(resumed.getHeight()).toBe(blocks);
+		expectConsistent(resumed);
 	});
 
 	it('should leave memory and database as they were when writing a block fails', async () => {

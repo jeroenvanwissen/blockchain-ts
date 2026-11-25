@@ -7,6 +7,7 @@ import * as path from 'path';
 import WebSocket from 'ws';
 import { Block } from '../../blockchain/Block.js';
 import type { Blockchain } from '../../blockchain/Blockchain.js';
+import { ChainDb } from '../../blockchain/ChainDb.js';
 import { Transaction } from '../../blockchain/Transaction.js';
 import {
 	MAX_FUTURE_BLOCK_TIME,
@@ -195,6 +196,26 @@ describe('Peer limits and misbehavior', () => {
 
 		expect(scoreOf(40_003)).toBe(20); // only the malformed transaction
 		expect(chain.hasBlock(future.hash)).toBe(false);
+	});
+
+	it('should not count a block it could not store against the peer: the fault is its own disk', async () => {
+		const miner = openWallet(dir, 'miner').address;
+		const peer = await rawPeer(40_004);
+		const block = blockOnTip(chain, miner, chain.getLatestBlock().timestamp + 30_000);
+		jest.spyOn(ChainDb.prototype, 'connect').mockImplementation(() => {
+			throw new Error('disk full');
+		});
+		const warnings = () => jest.mocked(console.error).mock.calls.filter((call) => String(call[0]).includes('Could not store a block from a peer'));
+
+		peer.send(JSON.stringify({ type: MessageType.BLOCK, data: block }));
+		peer.send(JSON.stringify({ type: MessageType.BLOCKS, data: { blocks: [block], more: false } }));
+		await waitUntil(() => warnings().length === 2);
+		peer.send(JSON.stringify({ type: MessageType.TRANSACTION, data: { not: 'a tx' } })); // malformed: counts
+		await waitUntil(() => scoreOf(40_004) === 20);
+
+		expect(scoreOf(40_004)).toBe(20); // only the malformed transaction
+		expect(warnings()[0].join(' ')).toContain('could not store block 1: disk full');
+		expect(chain.hasBlock(block.hash)).toBe(false);
 	});
 
 	it(`should refuse inbound connections beyond ${MAX_INBOUND_PEERS}`, async () => {

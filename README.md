@@ -186,7 +186,7 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 | ----------------------- | ------------------------------------------ |
 | `blocks/blk*.dat`       | Chunked block data files (append-only)     |
 | `blocks/index.dat`      | Block index (hash/height → file + offset): one record appended per stored block; rebuilt from the `blk*.dat` files if it's missing or damaged |
-| `blocks/chain.db`       | Chain database (SQLite, with `chain.db-wal` and `chain.db-shm` next to it): the block tree, and for the active chain the unspent outputs, undo data, stake modifiers, the transaction index and every address's history. Written as each block connects, so a start reads no blocks and validates only blocks stored after it; the node keeps block headers and the unspent outputs in memory and reads blocks from the block files when it needs them. Rebuilt from the block files with `--reindex`, or when it was built under other consensus rules or by another version |
+| `blocks/chain.db`       | Chain database (SQLite, with `chain.db-wal` and `chain.db-shm` next to it): the block tree, and for the active chain the unspent outputs, undo data, stake modifiers, the transaction index and every address's history. Written as each block connects (a sync batch or a rebuild in a few large transactions instead of one per block), so a start reads no blocks and validates only blocks stored after it; the node keeps block headers and the unspent outputs in memory and reads blocks from the block files when it needs them. Rebuilt from the block files with `--reindex`, or when it was built under other consensus rules or by another version |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
@@ -341,7 +341,7 @@ npm run check           # Build, test suite and lint
 npm run smoke           # Real nodes: mine, sync, relay, restart (~10 s)
 npm run e2e             # 3 regtest nodes: pay, PoW→PoS, partition + reorg, restart (~2 min)
 npm run docker:check    # Build the image and check a running container (needs Docker)
-npm run scale           # Cost per block, memory and startup on a 16,000-block chain (~1 min)
+npm run scale           # Cost per block, memory, startup and sync on a 16,000-block chain (~1.5 min)
 ```
 
 ### Running in Docker
@@ -589,7 +589,7 @@ If only the API port (P2P port + 1000) is taken, the node keeps running without 
 
 ### Suspect chain state
 
-Start once with `--reindex`: the node rebuilds `blocks/chain.db` from the block files, validating every stored block from genesis. It does the same by itself when the database is missing or unreadable. On a long chain this takes a while (about 0.7 ms per block).
+Start once with `--reindex`: the node rebuilds `blocks/chain.db` from the block files, validating every stored block from genesis. It does the same by itself when the database is missing or unreadable. On a long chain this takes a while (about 0.4 ms per block).
 
 ### Node Can't Connect to Peers
 
