@@ -1,9 +1,9 @@
 // Scale measurement (TASK-0052): `npm run scale [-- --blocks <n>] [--batch <n>]`. Builds a chain
 // in-process in a temp dir, one signed payment per block, on a simulated clock (30 s per block)
 // with difficulty validation off, and reports per batch how long accepting a block takes
-// (`addMinedBlock`), the heap and the size of index.dat; then the chain database's size, how long
-// a start takes from it and with --reindex, and the time per block to sync the chain into a new
-// node in batches as a peer sends them (`addBlocks`, TASK-0054). Run it before and after a change
+// (`addMinedBlock`), the heap and the chain database's size; then how long a start takes from it
+// and with --reindex, and the time per block to sync the chain into a new node in batches as a
+// peer sends them (`addBlocks`, TASK-0054). Run it before and after a change
 // to storage or chain state to see how costs grow with the chain. Uses plain console output (a
 // script, like smoke).
 import * as fs from 'fs';
@@ -35,6 +35,11 @@ const heapMb = () => {
 	return (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0);
 };
 const kb = (file: string) => (fs.statSync(file).size / 1024).toFixed(0);
+const dbKb = (blocksDir: string) => {
+	const file = path.join(blocksDir, 'chain.db');
+	const wal = `${file}-wal`;
+	return ((fs.statSync(file).size + (fs.existsSync(wal) ? fs.statSync(wal).size : 0)) / 1024).toFixed(0);
+};
 
 function timed<T>(action: () => T): [T, string] {
 	const start = performance.now();
@@ -63,7 +68,7 @@ async function build(dir: string, options: BlockchainOptions & { blocksDir: stri
 			accepting += performance.now() - start;
 			if (height === end - 1) {
 				const perBlock = (accepting / (end - first)).toFixed(2);
-				console.log(`[scale] blocks ${first + 1}-${end}: accept ${perBlock} ms/block, heap ${heapMb()} MB, index.dat ${kb(path.join(options.blocksDir, 'index.dat'))} KB`);
+				console.log(`[scale] blocks ${first + 1}-${end}: accept ${perBlock} ms/block, heap ${heapMb()} MB, chain.db ${dbKb(options.blocksDir)} KB`);
 			}
 		}
 	}

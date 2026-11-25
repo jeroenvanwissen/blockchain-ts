@@ -108,7 +108,7 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0052](TASK-0052-append-only-block-index.md) | Append-only block index: storing a block costs the same at any height | done | P1 | small | none | scale measurement |
 | [TASK-0053](TASK-0053-blocks-on-disk.md) | Blocks and undo data on disk, not in memory: memory and chainstate don't grow with the chain | done | P1 | large | TASK-0052 | scale measurement |
 | [TASK-0054](TASK-0054-batched-writes.md) | Batched chain-database writes: rebuilding and syncing pay for a transaction per batch, not per block | done | P1 | medium | TASK-0053 | TASK-0053 outcome |
-| [TASK-0055](TASK-0055-block-positions-in-database.md) | Block positions in the chain database: one block index instead of two | pending | P2 | medium | TASK-0053 | TASK-0053 outcome |
+| [TASK-0055](TASK-0055-block-positions-in-database.md) | Block positions in the chain database: one block index instead of two | done | P2 | medium | TASK-0053 | TASK-0053 outcome |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 

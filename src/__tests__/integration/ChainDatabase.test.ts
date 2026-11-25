@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Block } from '../../blockchain/Block.js';
-import { Blockchain } from '../../blockchain/Blockchain.js';
+import { Blockchain, StorageError } from '../../blockchain/Blockchain.js';
 import { BlockStore } from '../../blockchain/BlockStore.js';
 import { ChainDb, type ConnectChange } from '../../blockchain/ChainDb.js';
 import { Transaction } from '../../blockchain/Transaction.js';
@@ -86,6 +86,19 @@ describe('Chain database', () => {
 		removeTempDir(dir);
 	});
 
+	/** Write blocks to the block files behind the node's back. */
+	function appendBlocks(blocks: Block[]): void {
+		const store = new BlockStore(blocksDir());
+		for (const block of blocks) store.append(block);
+		store.close();
+	}
+
+	/** From now on, the hashes of the blocks read from the block files, in order. */
+	function parsedBlocks(): () => string[] {
+		const parse = jest.spyOn(BlockStore.prototype as unknown as { _deserializeBlock: () => Block }, '_deserializeBlock');
+		return () => parse.mock.results.map((result) => (result.value as Block).hash);
+	}
+
 	/** Reopen the stored chain, counting the blocks validated on the way. */
 	function reopen(options = {}): { chain: Blockchain; validated: number } {
 		const connects = jest.spyOn(Blockchain.prototype as unknown as { _connectBlock: () => unknown }, '_connectBlock');
@@ -123,15 +136,24 @@ describe('Chain database', () => {
 	it('should start without reading the stored blocks: only genesis (to check it) and the tip', async () => {
 		const chain = await chainWithPayments();
 		chain.close();
-		const reads = jest.spyOn(BlockStore.prototype, 'getBlock');
-		const loads = jest.spyOn(BlockStore.prototype, 'loadAllBlocks');
+		const parsed = parsedBlocks();
 
 		const { chain: reopened } = reopen();
 
-		const read = reads.mock.calls.map(([hash]) => hash);
-		expect(loads).not.toHaveBeenCalled();
-		expect(read).toEqual([reopened.getHeader(0)!.hash, reopened.getLatestBlock().hash]);
+		expect(parsed()).toEqual([reopened.getHeader(0)!.hash, reopened.getLatestBlock().hash]);
 		expect(reopened.getHeight()).toBe(chain.getHeight());
+	});
+
+	it('should read each stored block once in a rebuild', async () => {
+		const chain = await chainWithPayments();
+		const stored = chain.getChain().map((block) => block.hash);
+		chain.close();
+		const parsed = parsedBlocks();
+
+		const { validated } = reopen({ reindex: true });
+
+		expect(validated).toBe(stored.length - 1);
+		expect(parsed()).toEqual(stored);
 	});
 
 	it('should validate and connect a block stored after the database\'s tip (a stop between the two writes)', async () => {
@@ -140,7 +162,7 @@ describe('Chain database', () => {
 		const next = chain.createBlockTemplate(miner.address, Date.now());
 		next.solve();
 		chain.close();
-		new BlockStore(blocksDir()).appendBlock(next); // in the block files, not in the database
+		appendBlocks([next]); // in the block files, not in the database
 
 		const { chain: reopened, validated } = reopen();
 
@@ -155,8 +177,7 @@ describe('Chain database', () => {
 		chain.close();
 		advanceTime(SPACING * 10);
 		const branch = extendBranch(prefix, openWallet(dir, 'other').address, 4).slice(prefix.length);
-		const store = new BlockStore(blocksDir());
-		for (const block of branch) store.appendBlock(block);
+		appendBlocks(branch);
 
 		const { chain: reopened, validated } = reopen();
 
@@ -242,16 +263,91 @@ describe('Chain database', () => {
 		expectConsistent(again.chain);
 	});
 
-	it('should remove the chainstate.json of earlier versions', async () => {
+	it('should rebuild a database from before block positions, and remove the files it replaces', async () => {
 		const chain = await chainWithPayments();
+		const length = chain.getHeight() + 1;
 		chain.close();
-		fs.rmSync(dbFile());
-		fs.writeFileSync(path.join(blocksDir(), 'chainstate.json'), '{}');
+		const old = new ChainDb(dbFile()); // as version 1 left it
+		old['_db'].exec(
+			"ALTER TABLE blocks DROP COLUMN blk_file; ALTER TABLE blocks DROP COLUMN blk_offset; ALTER TABLE blocks DROP COLUMN blk_length; UPDATE meta SET value = '1' WHERE key = 'version'",
+		);
+		old.close();
+		const replaced = ['chainstate.json', 'index.dat'];
+		for (const name of replaced) fs.writeFileSync(path.join(blocksDir(), name), 'old');
 
-		reopen();
+		const { chain: reopened, validated } = reopen();
 
-		expect(fs.existsSync(path.join(blocksDir(), 'chainstate.json'))).toBe(false);
-		expect(logged(info)).toContain('removed chainstate.json: the chain database replaces it');
+		expect(logged(warn)).toContain('rebuilding the chain database: it is from another version (1)');
+		expect(validated).toBe(length - 1);
+		for (const name of replaced) {
+			expect(fs.existsSync(path.join(blocksDir(), name))).toBe(false);
+			expect(logged(info)).toContain(`removed ${name}: the chain database replaces it`);
+		}
+		expectConsistent(reopened);
+		reopened.close();
+		expect(reopen().validated).toBe(0);
+	});
+
+	it('should forget a side block whose data is gone from the block files, and rebuild when an active block\'s is', async () => {
+		const chain = await chainWithPayments();
+		const blocks = chain.getChain();
+		advanceTime(SPACING * 10);
+		const side = extendBranch(blocks.slice(0, -2), openWallet(dir, 'other').address, 1).at(-1)!; // less work than the tip
+		expect(await chain.addMinedBlock(side)).toBe('side');
+		const blk = path.join(blocksDir(), 'blk00000.dat');
+		const [sideAt, tipAt] = [side.hash, blocks.at(-1)!.hash].map((hash) => chain['_index'].get(hash)!.offset);
+		chain.close();
+		fs.truncateSync(blk, sideAt); // the side block was stored last
+
+		const first = reopen();
+
+		expect(first.validated).toBe(0);
+		expect(first.chain.hasBlock(side.hash)).toBe(false);
+		expect(first.chain['_db'].hasBlock(side.hash)).toBe(false);
+		expect(logged(warn)).toBe('');
+		first.chain.close();
+
+		fs.truncateSync(blk, tipAt);
+		const second = reopen();
+
+		expect(logged(warn)).toContain(`rebuilding the chain database: active block ${blocks.length - 1} is missing from the block files`);
+		expect(second.chain.getHeight()).toBe(blocks.length - 2);
+		expectConsistent(second.chain);
+	});
+
+	it('should rebuild when the block files don\'t hold the tip where the database says', async () => {
+		const chain = await chainWithPayments();
+		const height = chain.getHeight();
+		const tip = chain['_index'].get(chain.getLatestBlock().hash)!;
+		chain.close();
+		const blk = path.join(blocksDir(), 'blk00000.dat');
+		const data = fs.readFileSync(blk);
+		data.fill(0xff, tip.offset + 4, tip.offset + 4 + tip.length); // damaged in place
+		fs.writeFileSync(blk, data);
+
+		const { chain: reopened } = reopen();
+
+		expect(logged(warn)).toContain(`rebuilding the chain database: could not read block ${height}`);
+		expect(logged(warn)).toContain(`skipping an unreadable block in blk00000.dat at byte ${tip.offset}`);
+		expect(reopened.getHeight()).toBe(height - 1);
+		expectConsistent(reopened);
+	});
+
+	it('should take a damaged stored block for a storage failure, not an invalid block', async () => {
+		const chain = await chainWithPayments();
+		const block = chain.getChain().find((b) => b.transactions.length > 1)!; // with a signed payment
+		const { offset, length } = chain['_index'].get(block.hash)!;
+		const blk = path.join(blocksDir(), 'blk00000.dat');
+		const data = fs.readFileSync(blk);
+		const at = data.indexOf(block.transactions[1].inputs[0].signature, offset, 'latin1');
+		expect(at).toBeGreaterThan(offset);
+		expect(at).toBeLessThan(offset + 4 + length);
+		data[at] = data[at] === 0x30 ? 0x31 : 0x30; // one hex digit of the signature: still a readable block
+		fs.writeFileSync(blk, data);
+
+		expect(() => chain.getBlockAt(block.index)).toThrow(StorageError);
+		expect(() => chain.getBlockAt(block.index)).toThrow(`the block files don't hold block ${block.index}`);
+		expect(chain.getBlockAt(block.index - 1)?.hash).toBe(chain.getHeader(block.index - 1)!.hash);
 	});
 
 	it('should add a sync batch in one transaction, and keep the blocks before a rejected one', async () => {

@@ -31,7 +31,7 @@ describe('Persistence (real filesystem)', () => {
 	it('should write genesis to disk and load it again', () => {
 		const first = openChain(dir);
 		expect(fs.existsSync(path.join(dir, 'blocks', 'blk00000.dat'))).toBe(true);
-		expect(fs.existsSync(path.join(dir, 'blocks', 'index.dat'))).toBe(true);
+		expect(fs.existsSync(path.join(dir, 'blocks', 'chain.db'))).toBe(true);
 
 		const second = openChain(dir);
 		expect(second.getChain().map((b) => b.hash)).toEqual(first.getChain().map((b) => b.hash));

@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import protobuf from 'protobufjs';
-import * as zlib from 'zlib';
 import { Block } from './Block.js';
 import { Transaction } from './Transaction.js';
 import { BLOCKCHAIN_SCHEMA } from './protoSchemas.js';
@@ -10,47 +9,26 @@ import { logger } from '../logger.js';
 
 const log = logger('BlockStore');
 
-interface IndexEntry {
-	hash: string;
-	height: number;
-	fileNumber: number;
-	byteOffset: number;
-	dataLength: number;
+/**
+ * Where a block is in the block files: in blk<file>.dat, its 4-byte length prefix (uint32 LE) at
+ * byte `offset`, then `length` bytes of block data (protobuf). The chain database records it for
+ * every known block (TASK-0055).
+ */
+export interface BlockPosition {
+	file: number;
+	offset: number;
+	length: number;
 }
 
-// index.dat (TASK-0052): a header, then one fixed-size record per stored block, appended as the
-// block is stored, so storing a block costs the same at any height. A record is the block hash
-// (32 bytes), height, file number, byte offset and data length (uint32 LE each), then a CRC-32
-// of those 48 bytes. The blk*.dat files are the source of truth: the index can always be
-// rebuilt from them.
-const INDEX_MAGIC = Buffer.from('BTSIDX\x00\x01', 'latin1');
-const RECORD_SIZE = 52;
+export interface StoredBlock {
+	block: Block;
+	position: BlockPosition;
+}
+
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const BLK_FILE_PATTERN = /^blk(\d{5})\.dat$/;
-
-function encodeRecord(entry: IndexEntry): Buffer {
-	if (!HASH_PATTERN.test(entry.hash)) throw new Error(`cannot index block hash ${entry.hash}`);
-	const record = Buffer.alloc(RECORD_SIZE);
-	record.write(entry.hash, 0, 32, 'hex');
-	record.writeUInt32LE(entry.height, 32);
-	record.writeUInt32LE(entry.fileNumber, 36);
-	record.writeUInt32LE(entry.byteOffset, 40);
-	record.writeUInt32LE(entry.dataLength, 44);
-	record.writeUInt32LE(zlib.crc32(record.subarray(0, 48)), 48);
-	return record;
-}
-
-/** The entry in a record; null if its checksum doesn't match. */
-function decodeRecord(record: Buffer): IndexEntry | null {
-	if (zlib.crc32(record.subarray(0, 48)) !== record.readUInt32LE(48)) return null;
-	return {
-		hash: record.toString('hex', 0, 32),
-		height: record.readUInt32LE(32),
-		fileNumber: record.readUInt32LE(36),
-		byteOffset: record.readUInt32LE(40),
-		dataLength: record.readUInt32LE(44),
-	};
-}
+const SCAN_CHUNK = 8 * 1024 * 1024; // bytes read at a time when scanning a block file
+const MAX_READERS = 8; // block files kept open for reading
 
 let _blockProtoRoot: protobuf.Root | null = null;
 function getBlockProto(): protobuf.Type {
@@ -60,113 +38,176 @@ function getBlockProto(): protobuf.Type {
 	return _blockProtoRoot.lookupType('SerializedBlock');
 }
 
+/**
+ * The block files (`blk00000.dat`, ...): every stored block, appended as a length-prefixed
+ * protobuf message. They are the source of truth; the chain database, which records where each
+ * block is, can always be rebuilt from them (`scan`). The store keeps no per-block state in
+ * memory (TASK-0055), only each file's size and a few open file descriptors (`close`).
+ */
 export class BlockStore {
-	private _blocksDir: string;
-	private _indexPath: string;
-	private _entries: IndexEntry[] = [];
-	private _hashMap: Map<string, number> = new Map();
-	private _heightMap: Map<number, number> = new Map();
-	private _currentFileNumber: number = 0;
-	private _currentFileSize: number = 0; // the actual size of the current blk file
-	private _indexExists = false;
+	private readonly _dir: string;
+	private readonly _sizes = new Map<number, number>(); // every block file's size, by file number
+	private readonly _readers = new Map<number, number>(); // open for reading, least recently used first
+	private _writer: { file: number; fd: number } | null = null;
+	private _current = 0; // the file new blocks are appended to: the last one
 
-	constructor(blocksDir: string) {
-		this._blocksDir = blocksDir;
-		this._indexPath = path.join(blocksDir, 'index.dat');
-		this._loadIndex();
-	}
-
-	appendBlock(block: Block): void {
-		const blockBytes = this._serializeBlock(block);
-		const lengthPrefix = Buffer.alloc(4);
-		lengthPrefix.writeUInt32LE(blockBytes.length, 0);
-		const totalSize = 4 + blockBytes.length;
-
-		// Rotate to a new file if current would exceed limit
-		if (this._currentFileSize > 0 && this._currentFileSize + totalSize > MAX_BLOCK_FILE_SIZE) {
-			this._currentFileNumber++;
-			this._currentFileSize = 0;
-		}
-
-		this._ensureDir();
-
-		const filePath = this._blkFilePath(this._currentFileNumber);
-		const byteOffset = this._currentFileSize;
-
-		fs.appendFileSync(filePath, Buffer.concat([lengthPrefix, blockBytes]));
-		this._currentFileSize += totalSize;
-
-		this._appendEntry({
-			hash: block.hash,
-			height: block.index,
-			fileNumber: this._currentFileNumber,
-			byteOffset,
-			dataLength: blockBytes.length,
-		});
-	}
-
-	getBlock(hash: string): Block | null {
-		const idx = this._hashMap.get(hash);
-		if (idx === undefined) return null;
-		return this._readBlockAt(this._entries[idx]);
-	}
-
-	/** Most recently stored block at this height (side branches can share heights). */
-	getBlockByHeight(height: number): Block | null {
-		const idx = this._heightMap.get(height);
-		if (idx === undefined) return null;
-		return this._readBlockAt(this._entries[idx]);
-	}
-
-	loadAllBlocks(): Block[] {
-		if (this._entries.length === 0) return [];
-
-		const blocks: Block[] = [];
-		for (const entry of this._entries) {
-			blocks.push(this._readBlockAt(entry));
-		}
-		return blocks;
-	}
-
-	getBlockCount(): number {
-		return this._entries.length;
-	}
-
-	/** Hashes of the stored blocks, in the order they were stored (parents before children). */
-	hashes(): string[] {
-		return this._entries.map((entry) => entry.hash);
-	}
-
-	has(hash: string): boolean {
-		return this._hashMap.has(hash);
-	}
-
-	/** Rebuild index.dat from the blk*.dat files (a damaged or missing index, an older format). */
-	rebuildIndex(): void {
-		const entries: IndexEntry[] = [];
-		for (const fileNumber of this._blkFileNumbers()) {
-			for (const entry of this._scanFile(fileNumber, 0)) entries.push(entry); // a file can hold too many to spread
-		}
-		this._setEntries(entries);
-		this._ensureDir();
-		const temp = `${this._indexPath}.tmp`;
-		fs.writeFileSync(temp, Buffer.concat([INDEX_MAGIC, ...entries.map(encodeRecord)]));
-		fs.renameSync(temp, this._indexPath);
-		this._indexExists = true;
-		this._setCurrentFile();
-	}
-
-	private _ensureDir(): void {
-		if (!fs.existsSync(this._blocksDir)) {
-			fs.mkdirSync(this._blocksDir, { recursive: true });
+	constructor(dir: string) {
+		this._dir = dir;
+		for (const file of this._fileNumbers()) {
+			this._sizes.set(file, fs.statSync(this._path(file)).size);
+			this._current = file;
 		}
 	}
 
-	private _blkFilePath(fileNumber: number): string {
-		return path.join(
-			this._blocksDir,
-			`blk${fileNumber.toString().padStart(5, '0')}.dat`,
-		);
+	/**
+	 * Append a block to the last block file, or to a new one when it would grow past
+	 * MAX_BLOCK_FILE_SIZE, and return where it is. A failed write is cut off again, so the next
+	 * block follows the last complete one.
+	 */
+	append(block: Block): BlockPosition {
+		const data = this._serializeBlock(block);
+		const frame = Buffer.allocUnsafe(4 + data.length);
+		frame.writeUInt32LE(data.length, 0);
+		frame.set(data, 4);
+		let offset = this._sizes.get(this._current) ?? 0;
+		if (offset > 0 && offset + frame.length > MAX_BLOCK_FILE_SIZE) {
+			this._current++;
+			offset = 0;
+		}
+		const fd = this._writerFor(this._current);
+		try {
+			for (let written = 0; written < frame.length; ) written += fs.writeSync(fd, frame, written);
+		} catch (error) {
+			try {
+				fs.ftruncateSync(fd, offset);
+			} catch {
+				// the next start cuts the incomplete block off (scan)
+			}
+			throw error;
+		}
+		this._sizes.set(this._current, offset + frame.length);
+		return { file: this._current, offset, length: data.length };
+	}
+
+	/** The block at `position`. Throws if the files don't hold a readable block there. */
+	read(position: BlockPosition): Block {
+		const data = Buffer.allocUnsafe(position.length);
+		const read = fs.readSync(this._readerFor(position.file), data, 0, data.length, position.offset + 4);
+		if (read !== data.length) throw new Error(`${this._name(position.file)} ends inside the block at byte ${position.offset}`);
+		return this._deserializeBlock(data);
+	}
+
+	/** Whether the block files are long enough to hold a block at `position`. */
+	contains(position: BlockPosition): boolean {
+		return position.offset >= 0 && position.offset + 4 + position.length <= (this._sizes.get(position.file) ?? -1);
+	}
+
+	/**
+	 * The stored blocks after the one at `after` (all of them without it), in the order they were
+	 * stored, with their positions. An unreadable block is skipped. An incomplete block at the end
+	 * of a file (a stop during a write) is cut off, so blocks appended later follow the last
+	 * complete one: scan from the last known block before appending after a start.
+	 */
+	*scan(after?: BlockPosition): Generator<StoredBlock> {
+		for (const file of [...this._sizes.keys()].sort((a, b) => a - b)) {
+			if (after && file < after.file) continue;
+			yield* this._scanFile(file, after && file === after.file ? after.offset + 4 + after.length : 0);
+		}
+	}
+
+	/** Close the open block files. */
+	close(): void {
+		if (this._writer) fs.closeSync(this._writer.fd);
+		this._writer = null;
+		for (const fd of this._readers.values()) fs.closeSync(fd);
+		this._readers.clear();
+	}
+
+	private _writerFor(file: number): number {
+		if (this._writer?.file === file) return this._writer.fd;
+		if (this._writer) fs.closeSync(this._writer.fd);
+		this._writer = null;
+		fs.mkdirSync(this._dir, { recursive: true });
+		this._writer = { file, fd: fs.openSync(this._path(file), 'a') };
+		return this._writer.fd;
+	}
+
+	private _readerFor(file: number): number {
+		let fd = this._readers.get(file);
+		if (fd === undefined) {
+			fd = fs.openSync(this._path(file), 'r');
+			if (this._readers.size >= MAX_READERS) {
+				const [oldest, oldestFd] = this._readers.entries().next().value!;
+				fs.closeSync(oldestFd);
+				this._readers.delete(oldest);
+			}
+		} else {
+			this._readers.delete(file); // to the end: most recently used
+		}
+		this._readers.set(file, fd);
+		return fd;
+	}
+
+	private _path(file: number): string {
+		return path.join(this._dir, this._name(file));
+	}
+
+	private _name(file: number): string {
+		return `blk${file.toString().padStart(5, '0')}.dat`;
+	}
+
+	private _fileNumbers(): number[] {
+		if (!fs.existsSync(this._dir)) return [];
+		return fs
+			.readdirSync(this._dir)
+			.map((name) => BLK_FILE_PATTERN.exec(name))
+			.filter((match) => match !== null)
+			.map((match) => parseInt(match[1], 10))
+			.sort((a, b) => a - b);
+	}
+
+	/** The blocks in one file from byte `from` on; an incomplete block at its end is cut off. */
+	private *_scanFile(file: number, from: number): Generator<StoredBlock> {
+		const size = this._sizes.get(file) ?? 0;
+		if (from >= size) return;
+		const fd = fs.openSync(this._path(file), 'r');
+		let chunk = Buffer.alloc(0);
+		let chunkStart = from;
+		// Bytes [start, end) of the file, read SCAN_CHUNK bytes (or one block) at a time
+		const bytes = (start: number, end: number): Buffer => {
+			if (start < chunkStart || end > chunkStart + chunk.length) {
+				chunk = Buffer.allocUnsafe(Math.min(Math.max(SCAN_CHUNK, end - start), size - start));
+				if (fs.readSync(fd, chunk, 0, chunk.length, start) !== chunk.length) throw new Error(`${this._name(file)} changed during a scan`);
+				chunkStart = start;
+			}
+			return chunk.subarray(start - chunkStart, end - chunkStart);
+		};
+
+		let offset = from;
+		try {
+			while (offset + 4 <= size) {
+				const length = bytes(offset, offset + 4).readUInt32LE(0);
+				if (length === 0 || offset + 4 + length > size) break; // incomplete (or zeroes)
+				let block: Block | null = null;
+				try {
+					block = this._deserializeBlock(bytes(offset + 4, offset + 4 + length));
+					if (!HASH_PATTERN.test(block.hash)) throw new Error('malformed hash');
+				} catch (error) {
+					log.warn(`skipping an unreadable block in ${this._name(file)} at byte ${offset}: ${(error as Error).message}`);
+					block = null;
+				}
+				const position = { file, offset, length };
+				offset += 4 + length;
+				if (block) yield { block, position };
+			}
+		} finally {
+			fs.closeSync(fd);
+		}
+		if (offset < size) {
+			fs.truncateSync(this._path(file), offset);
+			this._sizes.set(file, offset);
+			log.warn(`dropped ${size - offset} byte(s) of an incomplete block at the end of ${this._name(file)}`);
+		}
 	}
 
 	private _serializeBlock(block: Block): Buffer {
@@ -252,154 +293,5 @@ export class BlockStore {
 		block.hash = data.hash;
 		block.signature = data.signature ?? '';
 		return block;
-	}
-
-	private _readBlockAt(entry: IndexEntry): Block {
-		const filePath = this._blkFilePath(entry.fileNumber);
-		const fd = fs.openSync(filePath, 'r');
-		try {
-			const buffer = Buffer.alloc(entry.dataLength);
-			fs.readSync(fd, buffer, 0, entry.dataLength, entry.byteOffset + 4);
-			return this._deserializeBlock(buffer);
-		} finally {
-			fs.closeSync(fd);
-		}
-	}
-
-	/**
-	 * Load index.dat and bring it in line with the blk*.dat files: a missing, damaged or older
-	 * index is rebuilt from them; blocks stored after the last indexed one (a stop between the
-	 * two writes of appendBlock) are indexed; a torn record or block at the end is dropped.
-	 */
-	private _loadIndex(): void {
-		const files = this._blkFileNumbers();
-		if (!fs.existsSync(this._indexPath)) {
-			if (files.length === 0) return; // a new store
-			log.warn('the block index is missing; rebuilding it from the block files');
-			this.rebuildIndex();
-			return;
-		}
-		const data = fs.readFileSync(this._indexPath);
-		if (data.length < INDEX_MAGIC.length || !data.subarray(0, INDEX_MAGIC.length).equals(INDEX_MAGIC)) {
-			log.info('converting the block index to the append-only format');
-			this.rebuildIndex();
-			return;
-		}
-
-		const sizes = new Map(files.map((fileNumber) => [fileNumber, fs.statSync(this._blkFilePath(fileNumber)).size]));
-		const count = Math.floor((data.length - INDEX_MAGIC.length) / RECORD_SIZE);
-		const entries: IndexEntry[] = [];
-		for (let i = 0; i < count; i++) {
-			const start = INDEX_MAGIC.length + i * RECORD_SIZE;
-			const entry = decodeRecord(data.subarray(start, start + RECORD_SIZE));
-			if (!entry || entry.byteOffset + 4 + entry.dataLength > (sizes.get(entry.fileNumber) ?? -1)) {
-				log.warn(`the block index is damaged at record ${i + 1}; rebuilding it from the block files`);
-				this.rebuildIndex();
-				return;
-			}
-			entries.push(entry);
-		}
-		const complete = INDEX_MAGIC.length + count * RECORD_SIZE;
-		if (data.length > complete) {
-			fs.truncateSync(this._indexPath, complete);
-			log.warn('dropped an incomplete record at the end of the block index');
-		}
-		this._setEntries(entries);
-		this._indexExists = true;
-
-		// The files hold blocks after the last indexed one only if a stop came between the writes
-		const last = entries[entries.length - 1];
-		let recovered = 0;
-		for (const fileNumber of files) {
-			if (last && fileNumber < last.fileNumber) continue;
-			const from = last && fileNumber === last.fileNumber ? last.byteOffset + 4 + last.dataLength : 0;
-			for (const entry of this._scanFile(fileNumber, from)) {
-				this._appendEntry(entry);
-				recovered++;
-			}
-		}
-		if (recovered > 0) log.warn(`indexed ${recovered} stored block(s) the block index was missing`);
-		this._setCurrentFile();
-	}
-
-	/** Index a stored block: one record appended to index.dat. */
-	private _appendEntry(entry: IndexEntry): void {
-		const record = encodeRecord(entry);
-		if (this._indexExists) {
-			fs.appendFileSync(this._indexPath, record);
-		} else {
-			this._ensureDir();
-			fs.writeFileSync(this._indexPath, Buffer.concat([INDEX_MAGIC, record]));
-			this._indexExists = true;
-		}
-		this._entries.push(entry);
-		this._hashMap.set(entry.hash, this._entries.length - 1);
-		this._heightMap.set(entry.height, this._entries.length - 1);
-	}
-
-	private _setEntries(entries: IndexEntry[]): void {
-		this._entries = entries;
-		this._hashMap.clear();
-		this._heightMap.clear();
-		entries.forEach((entry, i) => {
-			this._hashMap.set(entry.hash, i);
-			this._heightMap.set(entry.height, i);
-		});
-	}
-
-	/** New blocks go to the last blk file, at its actual end. */
-	private _setCurrentFile(): void {
-		const files = this._blkFileNumbers();
-		this._currentFileNumber = files.length > 0 ? files[files.length - 1] : 0;
-		this._currentFileSize = files.length > 0 ? fs.statSync(this._blkFilePath(this._currentFileNumber)).size : 0;
-	}
-
-	private _blkFileNumbers(): number[] {
-		if (!fs.existsSync(this._blocksDir)) return [];
-		return fs
-			.readdirSync(this._blocksDir)
-			.map((file) => BLK_FILE_PATTERN.exec(file))
-			.filter((match) => match !== null)
-			.map((match) => parseInt(match[1], 10))
-			.sort((a, b) => a - b);
-	}
-
-	/**
-	 * Index entries for the blocks in a blk file from byte `from` on. A torn block at the end
-	 * (length prefix or data cut short, or zeroes) is cut off the file, so later blocks are
-	 * appended where a scan can find them; an unreadable block that is complete is skipped.
-	 */
-	private _scanFile(fileNumber: number, from: number): IndexEntry[] {
-		const filePath = this._blkFilePath(fileNumber);
-		const size = fs.statSync(filePath).size;
-		if (from >= size) return [];
-		const data = Buffer.alloc(size - from);
-		const fd = fs.openSync(filePath, 'r');
-		try {
-			fs.readSync(fd, data, 0, data.length, from);
-		} finally {
-			fs.closeSync(fd);
-		}
-
-		const entries: IndexEntry[] = [];
-		let offset = 0;
-		while (offset + 4 <= data.length) {
-			const dataLength = data.readUInt32LE(offset);
-			if (dataLength === 0 || offset + 4 + dataLength > data.length) break;
-			const byteOffset = from + offset;
-			try {
-				const block = this._deserializeBlock(data.subarray(offset + 4, offset + 4 + dataLength));
-				if (!HASH_PATTERN.test(block.hash)) throw new Error('malformed hash');
-				entries.push({ hash: block.hash, height: block.index, fileNumber, byteOffset, dataLength });
-			} catch (error) {
-				log.warn(`skipping an unreadable block in ${path.basename(filePath)} at byte ${byteOffset}: ${(error as Error).message}`);
-			}
-			offset += 4 + dataLength;
-		}
-		if (offset < data.length) {
-			fs.truncateSync(filePath, from + offset);
-			log.warn(`dropped ${data.length - offset} byte(s) of an incomplete block at the end of ${path.basename(filePath)}`);
-		}
-		return entries;
 	}
 }

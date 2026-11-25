@@ -88,7 +88,7 @@ src/
 ├── blockchain/
 │   ├── Block.ts              # Block header (merkle root, bits), hashing, JSON wire form
 │   ├── Blockchain.ts         # Block tree, fork choice, reorgs, validation (_connectBlock), mempool
-│   ├── BlockStore.ts         # Append-only block files and block index
+│   ├── BlockStore.ts         # Append-only block files, read by position
 │   ├── Transaction.ts        # Transaction format, txid/witness hash, signing, verification
 │   ├── UtxoSet.ts            # Unspent outputs by outpoint, per-address index
 │   ├── Wallet.ts             # HD keys, addresses, encryption, persistence (keys only)
@@ -127,7 +127,7 @@ src/
 | ------------------ | --------------------- | ---------------------------------------------------- |
 | **Block**          | `Block.ts`            | Block structure, hash calculation, PoW/PoS detection |
 | **Blockchain**     | `Blockchain.ts`       | Chain management, UTXO set, consensus, staking       |
-| **BlockStore**     | `BlockStore.ts`       | Append-only block files and block index              |
+| **BlockStore**     | `BlockStore.ts`       | Append-only block files, read by position            |
 | **Transaction**    | `Transaction.ts`      | Inputs/outputs, signing, ECDSA verification          |
 | **Wallet**         | `Wallet.ts`           | HD keys and addresses, encryption, protobuf storage  |
 | **Miner**          | `Miner.ts`            | In-node PoW mining in a worker thread (`--mine`)     |
@@ -184,9 +184,8 @@ Runtime data stored in a platform-specific directory (configurable via `--data-d
 
 | File                    | Content                                    |
 | ----------------------- | ------------------------------------------ |
-| `blocks/blk*.dat`       | Chunked block data files (append-only)     |
-| `blocks/index.dat`      | Block index (hash/height → file + offset): one record appended per stored block; rebuilt from the `blk*.dat` files if it's missing or damaged |
-| `blocks/chain.db`       | Chain database (SQLite, with `chain.db-wal` and `chain.db-shm` next to it): the block tree, and for the active chain the unspent outputs, undo data, stake modifiers, the transaction index and every address's history. Written as each block connects (a sync batch or a rebuild in a few large transactions instead of one per block), so a start reads no blocks and validates only blocks stored after it; the node keeps block headers and the unspent outputs in memory and reads blocks from the block files when it needs them. Rebuilt from the block files with `--reindex`, or when it was built under other consensus rules or by another version |
+| `blocks/blk*.dat`       | Chunked block data files (append-only): every stored block, active or not. An incomplete block a crash left at the end is cut off at the next start |
+| `blocks/chain.db`       | Chain database (SQLite, with `chain.db-wal` and `chain.db-shm` next to it): the block tree with where each block is in the block files, and for the active chain the unspent outputs, undo data, stake modifiers, the transaction index and every address's history. Written as each block connects (a sync batch or a rebuild in a few large transactions instead of one per block), so a start reads no blocks and validates only blocks stored after it; the node keeps block headers and the unspent outputs in memory and reads blocks from the block files when it needs them. Rebuilt from the block files with `--reindex`, or when it was built under other consensus rules or by another version |
 | `blocks/mempool.json`   | Pending transactions, saved after each payment from the wallet and at shutdown; startup re-admits them and drops those that are no longer valid |
 | `wallet.dat`            | Wallet seed (the entropy of its seed phrase), account public key and address count (protobuf, 0600; the seed encrypted once you run `cli encrypt-wallet`) |
 | `api.cookie`            | Token for the API's wallet routes, rewritten at every start (0600) |
@@ -589,7 +588,7 @@ If only the API port (P2P port + 1000) is taken, the node keeps running without 
 
 ### Suspect chain state
 
-Start once with `--reindex`: the node rebuilds `blocks/chain.db` from the block files, validating every stored block from genesis. It does the same by itself when the database is missing or unreadable. On a long chain this takes a while (about 0.4 ms per block).
+Start once with `--reindex`: the node rebuilds `blocks/chain.db` from the block files, validating every stored block from genesis. It does the same by itself when the database is missing or unreadable. On a long chain this takes a while (about 0.35 ms per block).
 
 ### Node Can't Connect to Peers
 

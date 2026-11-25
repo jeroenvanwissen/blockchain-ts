@@ -125,7 +125,9 @@ describe('Block validation (single path)', () => {
 
 			// Write it to disk behind the validator's back: startup load rejects it for the same
 			// reason and falls back to the best valid chain
-			new BlockStore(path.join(dir, 'blocks')).appendBlock(bad);
+			const store = new BlockStore(path.join(dir, 'blocks'));
+			store.append(bad);
+			store.close();
 			const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
 			const reopened = openChain(dir);
 			expect(errors).toHaveBeenCalledWith(

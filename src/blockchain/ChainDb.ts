@@ -1,17 +1,20 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { AddressActivity, AddressFlow } from './AddressIndex.js';
+import type { BlockPosition } from './BlockStore.js';
 import type { UTXO } from './UtxoSet.js';
 
 /**
  * The chain database (TASK-0053): `blocks/chain.db`, SQLite through node:sqlite. It holds what
  * is derived from the blocks, so the node neither keeps it in memory nor rebuilds it at every
- * start: the block tree (header fields, chain work, status), and for the active chain the UTXO
- * set, each block's undo data and stake modifier, the txid index and every address's history.
- * Connecting or disconnecting a block changes it in one transaction, or in a batch's transaction
- * when the node writes a run of blocks (TASK-0054), so it always describes one tip completely. The blk*.dat files stay the source of truth: the database can be rebuilt from
- * them (--reindex), and it is when it was built under other rules or by another version.
+ * start: the block tree (header fields, chain work, status, where each block is in the block
+ * files), and for the active chain the UTXO set, each block's undo data and stake modifier, the
+ * txid index and every address's history. Connecting or disconnecting a block changes it in one
+ * transaction, or in a batch's transaction when the node writes a run of blocks (TASK-0054), so
+ * it always describes one tip completely. The blk*.dat files stay the source of truth: the
+ * database can be rebuilt from them (--reindex), and it is when it was built under other rules
+ * or by another version.
  */
-export const CHAIN_DB_VERSION = 1;
+export const CHAIN_DB_VERSION = 2; // 2: block positions (TASK-0055)
 
 /** The network parameters the database was built under. */
 export interface ChainRules {
@@ -40,6 +43,7 @@ export interface BlockRecord {
 	size: number; // serialized bytes
 	status: BlockStatus;
 	modifier: string | null; // stake modifier after this block, while it is active
+	position: BlockPosition; // in the block files
 }
 
 /** What connecting a block changes, all written in one transaction. */
@@ -103,7 +107,10 @@ CREATE TABLE IF NOT EXISTS blocks (
 	tx_count INTEGER NOT NULL,
 	size INTEGER NOT NULL,
 	status INTEGER NOT NULL,
-	modifier BLOB
+	modifier BLOB,
+	blk_file INTEGER NOT NULL,
+	blk_offset INTEGER NOT NULL,
+	blk_length INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS blocks_active ON blocks (height) WHERE status = 1;
 CREATE TABLE IF NOT EXISTS undo (hash BLOB PRIMARY KEY, spent TEXT NOT NULL) WITHOUT ROWID;
@@ -224,10 +231,12 @@ export class ChainDb {
 		return { version: Number(version), rules: JSON.parse(rules) as ChainRules };
 	}
 
-	/** Empty every table and record the version and rules a rebuild uses. */
+	/** Make every table new and empty (another version's may have other columns), and record the version and rules a rebuild uses. */
 	reset(rules: ChainRules): void {
 		this.transaction(() => {
-			for (const table of TABLES) this._db.exec(`DELETE FROM ${table}`);
+			for (const table of TABLES) this._db.exec(`DROP TABLE IF EXISTS ${table}`);
+			for (const sql of Object.keys(this._sql)) delete this._sql[sql];
+			this._db.exec(SCHEMA);
 			this._setMeta('version', String(CHAIN_DB_VERSION));
 			this._setMeta('rules', JSON.stringify(rules));
 		});
@@ -235,11 +244,15 @@ export class ChainDb {
 
 	// --- the block tree ---
 
-	/** Record a known block (status Stored); a block recorded before is left as it is. */
+	/**
+	 * Record a known block (status Stored). A block recorded before keeps its record, with the
+	 * position given now (it was stored again).
+	 */
 	addBlock(record: BlockRecord): void {
 		this._statement(
-			`INSERT INTO blocks (hash, height, prev, timestamp, bits, pos, work, tie, producer, tx_count, size, status, modifier)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO NOTHING`,
+			`INSERT INTO blocks (hash, height, prev, timestamp, bits, pos, work, tie, producer, tx_count, size, status, modifier, blk_file, blk_offset, blk_length)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (hash) DO UPDATE SET blk_file = excluded.blk_file, blk_offset = excluded.blk_offset, blk_length = excluded.blk_length`,
 		).run(
 			bin(record.hash),
 			record.height,
@@ -254,7 +267,15 @@ export class ChainDb {
 			record.size,
 			record.status,
 			record.modifier === null ? null : bin(record.modifier),
+			record.position.file,
+			record.position.offset,
+			record.position.length,
 		);
+	}
+
+	/** Remove the record of a block that isn't active (its data is gone from the block files). */
+	forget(hash: string): void {
+		this._statement('DELETE FROM blocks WHERE hash = ? AND status != 1').run(bin(hash));
 	}
 
 	markInvalid(hash: string): void {
@@ -268,7 +289,7 @@ export class ChainDb {
 	/** Every known block, parents before children (by height). */
 	loadBlocks(): BlockRecord[] {
 		const rows = this._statement(
-			'SELECT hash, height, prev, timestamp, bits, pos, work, tie, producer, tx_count, size, status, modifier FROM blocks ORDER BY height',
+			'SELECT hash, height, prev, timestamp, bits, pos, work, tie, producer, tx_count, size, status, modifier, blk_file, blk_offset, blk_length FROM blocks ORDER BY height',
 		).all() as {
 			hash: Uint8Array;
 			height: number;
@@ -283,6 +304,9 @@ export class ChainDb {
 			size: number;
 			status: number;
 			modifier: Uint8Array | null;
+			blk_file: number;
+			blk_offset: number;
+			blk_length: number;
 		}[];
 		return rows.map((row) => ({
 			hash: hex(row.hash),
@@ -298,6 +322,7 @@ export class ChainDb {
 			size: row.size,
 			status: row.status,
 			modifier: row.modifier === null ? null : hex(row.modifier),
+			position: { file: row.blk_file, offset: row.blk_offset, length: row.blk_length },
 		}));
 	}
 

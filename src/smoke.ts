@@ -72,7 +72,7 @@ async function main(): Promise<void> {
 		const address = walletAddress(nodeA);
 		await waitFor(nodeA, /mined block 1 \(/, 'mining block 1');
 		assertFile(path.join(dataA, 'wallet.dat'));
-		assertFile(path.join(dataA, 'blocks', 'index.dat'));
+		assertFile(path.join(dataA, 'blocks', 'chain.db'));
 		assertFile(path.join(dataA, 'blocks', 'blk00000.dat'));
 		if (fs.existsSync(path.join(cwd, 'data'))) throw new Error('node wrote data into its cwd');
 

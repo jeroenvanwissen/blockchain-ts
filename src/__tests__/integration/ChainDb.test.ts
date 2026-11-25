@@ -26,6 +26,7 @@ function record(height: number, overrides: Partial<BlockRecord> = {}): BlockReco
 		size: 250,
 		status: BlockStatus.Stored,
 		modifier: null,
+		position: { file: 0, offset: height * 1000, length: 900 + height },
 		...overrides,
 	};
 }
@@ -100,16 +101,27 @@ describe('ChainDb', () => {
 		expect(db.describe()).toEqual({ version: CHAIN_DB_VERSION, rules: RULES });
 	});
 
-	it('should keep every field of a block record, and a record added twice once', () => {
+	it('should keep every field of a block record, and of a record added twice only the new position', () => {
 		const pos = record(7, { isProofOfStake: true, tieBreak: hash(77), producer: B, txCount: 3, size: 900, work: (1n << 255n) + 12345n });
 		db.addBlock(pos);
-		db.addBlock({ ...pos, size: 1 }); // ignored: the first record stays
+		db.markInvalid(pos.hash);
+		const moved = { file: 3, offset: 2 ** 31 + 5, length: 1234 };
+		db.addBlock({ ...pos, size: 1, position: moved }); // stored again: only the position changes
 		db.addBlock(record(6));
-		expect(db.loadBlocks()).toEqual([record(6), pos]);
+		expect(db.loadBlocks()).toEqual([record(6), { ...pos, status: BlockStatus.Invalid, position: moved }]);
 		expect(db.hasBlock(pos.hash)).toBe(true);
 		expect(db.hasBlock(hash(1))).toBe(false);
-		db.markInvalid(pos.hash);
-		expect(db.loadBlocks()[1].status).toBe(BlockStatus.Invalid);
+	});
+
+	it('should forget a block that is not active, and never an active one', () => {
+		twoBlocks();
+		db.addBlock(record(2));
+
+		db.forget(hash(1002));
+		db.forget(hash(1001));
+
+		expect(db.loadBlocks().map((r) => r.height)).toEqual([0, 1]);
+		expect(db.tip()).toEqual({ hash: hash(1001), height: 1 });
 	});
 
 	it('should connect blocks: the UTXO set, undo data, modifiers, txids and address histories', () => {
@@ -232,5 +244,17 @@ describe('ChainDb', () => {
 		expect(db.history(A)).toEqual([]);
 		expect(db.describe()?.rules.powCutoffBlock).toBe(20);
 		expect(fs.existsSync(file())).toBe(true);
+	});
+
+	it('should make the tables new on reset, so a database from a version with other columns can be rebuilt', () => {
+		twoBlocks();
+		db['_db'].exec('ALTER TABLE blocks DROP COLUMN blk_length'); // as before TASK-0055
+		db.close();
+		db = new ChainDb(file());
+
+		db.reset(RULES);
+		db.addBlock(record(0));
+
+		expect(db.loadBlocks()).toEqual([record(0)]);
 	});
 });
