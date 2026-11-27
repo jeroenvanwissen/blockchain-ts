@@ -12,7 +12,7 @@
 | ------------------------------------------------------------ | ------------------------------------------- |
 | [AGENTS.md](AGENTS.md)                                       | Instructions for coding agents              |
 | [tasks/BACKLOG.md](tasks/BACKLOG.md)                         | Prioritized backlog (`TASK-####`)           |
-| [tasks/assessment-2026-11-23.md](tasks/assessment-2026-11-23.md) | Latest project assessment with evidence |
+| [tasks/reassessment-2026-11-27.md](tasks/reassessment-2026-11-27.md) | Latest project assessment with evidence |
 | [src/](src/)                                                 | TypeScript source code                      |
 
 ---
@@ -21,7 +21,7 @@
 
 **Works end to end on a local network of nodes.** Nodes mine PoW blocks (`--mine`), stake PoS blocks after block 1200 (`--stake`), verify signatures, validate every block against the UTXO set, sync and relay over a handshake-based protocol, and resolve forks by chain work. `npm run e2e` runs three real nodes on the regression-test network (`--regtest`: 20 PoW blocks, no minimum stake age) through payment, PoW→PoS, a partition with a reorg, and a restart. With default settings the PoW phase lasts about 10 hours, longer than the 8-hour stake age (`STAKE_MIN_AGE`), so staking takes over from mining without a pause.
 
-Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), can be [encrypted](#wallet-encryption), and is backed up as a [24-word seed phrase](#seed-phrase-backup). Every task in the [backlog](tasks/BACKLOG.md) is done. The [assessment](tasks/assessment-2026-11-23.md) records the findings it started from, and each task file records what changed.
+Send coins from a node's wallet with the [CLI](#sending-coins) or the [HTTP API](#http-api), with fees going to block producers. The wallet hands out [as many addresses](#wallet-addresses) as you need from one seed, lists its [transaction history](#wallet-history), can be [encrypted](#wallet-encryption), and is backed up as a [24-word seed phrase](#seed-phrase-backup). The [latest assessment](tasks/reassessment-2026-11-27.md) found that peers, disks and operators that misbehave can still split nodes, fill their disks or lose a wallet; the [backlog](tasks/BACKLOG.md) (Milestone 10) tracks the fixes, and each task file records what changed. Until those are done, run nodes only among peers you trust.
 
 ---
 
@@ -632,7 +632,7 @@ npm run lint                      # Check for code issues
 
 ## Project Tasks
 
-See [tasks/BACKLOG.md](tasks/BACKLOG.md) for the prioritized backlog, grouped into milestones that each end in something runnable. Evidence for each task is in the [assessment](tasks/assessment-2026-11-23.md).
+See [tasks/BACKLOG.md](tasks/BACKLOG.md) for the prioritized backlog, grouped into milestones that each end in something runnable. Evidence for each task is in the assessments in [tasks/](tasks/), the latest being [reassessment-2026-11-27.md](tasks/reassessment-2026-11-27.md).
 
 ---
 

@@ -1,7 +1,7 @@
 # Backlog
 
 Status values: `pending`, `in-progress`, `done`, `blocked`. Priority: P0 now, P1 next, P2 planned, P3 later.
-Task IDs are permanent. Don't renumber when priorities change. Findings F-001 to F-020 refer to [assessment-2026-11-23.md](assessment-2026-11-23.md), F-021 to F-030 to [reassessment-2026-11-23.md](reassessment-2026-11-23.md), F-031 and later to [reassessment-2026-11-23-2.md](reassessment-2026-11-23-2.md).
+Task IDs are permanent. Don't renumber when priorities change. Findings F-001 to F-020 refer to [assessment-2026-11-23.md](assessment-2026-11-23.md), F-021 to F-030 to [reassessment-2026-11-23.md](reassessment-2026-11-23.md), F-031 to F-035 to [reassessment-2026-11-23-2.md](reassessment-2026-11-23-2.md), F-036 and later to [reassessment-2026-11-27.md](reassessment-2026-11-27.md).
 
 The goal of the ordering is a node that actually works end to end: it starts, mines, restarts, enforces consensus, moves to PoS, and syncs with peers. Each milestone ends in something you can run.
 
@@ -109,6 +109,27 @@ The goal of the ordering is a node that actually works end to end: it starts, mi
 | [TASK-0053](TASK-0053-blocks-on-disk.md) | Blocks and undo data on disk, not in memory: memory and chainstate don't grow with the chain | done | P1 | large | TASK-0052 | scale measurement |
 | [TASK-0054](TASK-0054-batched-writes.md) | Batched chain-database writes: rebuilding and syncing pay for a transaction per batch, not per block | done | P1 | medium | TASK-0053 | TASK-0053 outcome |
 | [TASK-0055](TASK-0055-block-positions-in-database.md) | Block positions in the chain database: one block index instead of two | done | P2 | medium | TASK-0053 | TASK-0053 outcome |
+
+## Milestone 10: adversarial peers, disks and operators (reassessment 3, 2026-11-27)
+
+| ID | Task | Status | Priority | Size | Depends on | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| [TASK-0056](TASK-0056-pos-rule-tests.md) | Tests for every PoS block rule | pending | P1 | small | none | F-056 |
+| [TASK-0057](TASK-0057-invalid-only-for-committed-content.md) | A block is marked invalid only for content its hash commits to, never for the clock | pending | P1 | medium | TASK-0056 | F-036, F-041 |
+| [TASK-0058](TASK-0058-side-blocks-cost-their-producer.md) | Side blocks cost their producer: checked before they are stored or relayed | pending | P1 | large | TASK-0057 | F-037 |
+| [TASK-0059](TASK-0059-peer-send-backpressure.md) | Backpressure on peer sends; block replies read only what they send | pending | P1 | small | none | F-038 |
+| [TASK-0060](TASK-0060-never-replace-unreadable-wallet.md) | Never replace an unreadable wallet file | pending | P1 | small | none | F-039, F-054, F-055 |
+| [TASK-0061](TASK-0061-sync-within-request-limit.md) | Sync a long chain without tripping the request limit | pending | P1 | small | none | F-043 |
+| [TASK-0062](TASK-0062-checkpoints-or-reorg-limit.md) | Checkpoints or a maximum reorganization depth | pending | P2 | medium | owner decision | F-040 |
+| [TASK-0063](TASK-0063-pos-time-rules.md) | PoS time rules: the future limit and later-slot siblings | pending | P2 | small | owner decision, TASK-0057 | F-042 |
+| [TASK-0064](TASK-0064-eclipse-resistance.md) | Eclipse resistance: inbound limits per IP, nonce impersonation, address groups | pending | P2 | medium | TASK-0059 | F-044 |
+| [TASK-0065](TASK-0065-api-cost-bounds.md) | Cost bounds on the public API | pending | P2 | medium | none | F-045 |
+| [TASK-0066](TASK-0066-data-dir-lock.md) | One node per data dir; regtest in its own directory | pending | P2 | small | none | F-047 |
+| [TASK-0067](TASK-0067-storage-recovery.md) | Storage recovery: damaged database, rollback after a mid-batch commit, damaged block files, peer files | pending | P2 | medium | none | F-048, F-049, F-054 |
+| [TASK-0068](TASK-0068-bounded-memory.md) | Memory bounded by a cache, not by the UTXO set or the chain | pending | P2 | large | none | F-050 |
+| [TASK-0069](TASK-0069-wallet-api-fixes.md) | Wallet and API fixes: unlock timeouts, proxied requests, peer IPs, CLI input and remote API | pending | P2 | small | none | F-046, F-055 |
+| [TASK-0070](TASK-0070-relay-and-peer-costs.md) | Relay and peer-handling costs: transaction seen-cache, scoring, banned peers, orphans, mempool eviction | pending | P3 | medium | TASK-0057 | F-052, F-053 |
+| [TASK-0071](TASK-0071-pending-across-reorg.md) | Keep pending transactions whose inputs a reorganization unconfirms | pending | P3 | medium | none | F-051 |
 
 ## History: migrated from `.agent/TASKS.md` (2026-11-23)
 
